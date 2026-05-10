@@ -99,7 +99,7 @@ export class DartParser {
             if (trimmed === '' || trimmed.startsWith('//')) { continue; }
             // Hardcoded Text Detection
             const textMatch = line.match(/Text\s*\(\s*(['"])(.*?)\1/);
-            if (textMatch && !line.includes('.tr') && !line.includes('S.of') && !line.includes('Intl.message')) {
+            if (textMatch && !line.includes('.tr') && !line.includes('S.of') && !line.includes('Intl.message') && !trimmed.startsWith('import ') && !trimmed.startsWith('export ')) {
                 result.warnings.push({
                     type: 'hardcoded_text',
                     message: `Hardcoded text: ${textMatch[0]}`,
@@ -108,7 +108,7 @@ export class DartParser {
             }
             // Hardcoded Color Detection
             const colorMatch = line.match(/Color\s*\(\s*0x[A-Fa-f0-9]{8}\s*\)/) || line.match(/Colors\.[a-zA-Z0-9_]+/);
-            if (colorMatch && !filePath.toLowerCase().includes('theme') && !filePath.toLowerCase().includes('color')) {
+            if (colorMatch && !filePath.toLowerCase().includes('theme') && !filePath.toLowerCase().includes('color') && !trimmed.startsWith('import ') && !trimmed.startsWith('export ')) {
                 result.warnings.push({
                     type: 'hardcoded_color',
                     message: `Hardcoded color: ${colorMatch[0]}`,
