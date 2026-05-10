@@ -4,6 +4,7 @@
     "description": "Code Search, Widget Tree Viewer, Dependency Graph, and pubspec.yaml Analysis for Flutter projects",
     "version": "0.1.0",
     "publisher": "flutter-explorer",
+    "icon": "resources/icon.png",
     "engines": {
         "vscode": "^1.85.0"
     },
@@ -28,7 +29,7 @@
                 {
                     "id": "flutter-explorer",
                     "title": "Flutter Explorer",
-                    "icon": "resources/flutter-explorer-icon.svg"
+                    "icon": "resources/icon.png"
                 }
             ]
         },

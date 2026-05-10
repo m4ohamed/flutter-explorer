@@ -1,8 +1,9 @@
 # Flutter Explorer 🚀
 
-[![VS Code](https://img.shields.io/badge/VS%20Code-Extension-blue.svg)](https://marketplace.visualstudio.com/)
-[![Flutter](https://img.shields.io/badge/Flutter-Framework-02569B.svg)](https://flutter.dev/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+<p align="center">
+  <img src="resources/icon.png" width="128" height="128" alt="Flutter Explorer Icon">
+</p>
+
 
 **Flutter Explorer** is a high-performance, intelligent VS Code extension designed to streamline the development of large-scale Flutter applications. It provides deep project insights, advanced search capabilities, and automated code quality analysis directly within your editor.
 
