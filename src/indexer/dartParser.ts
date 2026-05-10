@@ -97,24 +97,6 @@ export class DartParser {
             const trimmed = line.trim();
             const lineNum = i + 1;
             if (trimmed === '' || trimmed.startsWith('//')) { continue; }
-            // Hardcoded Text Detection
-            const textMatch = line.match(/Text\s*\(\s*(['"])(.*?)\1/);
-            if (textMatch && !line.includes('.tr') && !line.includes('S.of') && !line.includes('Intl.message') && !trimmed.startsWith('import ') && !trimmed.startsWith('export ')) {
-                result.warnings.push({
-                    type: 'hardcoded_text',
-                    message: `Hardcoded text: ${textMatch[0]}`,
-                    line: lineNum,
-                });
-            }
-            // Hardcoded Color Detection
-            const colorMatch = line.match(/Color\s*\(\s*0x[A-Fa-f0-9]{8}\s*\)/) || line.match(/Colors\.[a-zA-Z0-9_]+/);
-            if (colorMatch && !filePath.toLowerCase().includes('theme') && !filePath.toLowerCase().includes('color') && !trimmed.startsWith('import ') && !trimmed.startsWith('export ')) {
-                result.warnings.push({
-                    type: 'hardcoded_color',
-                    message: `Hardcoded color: ${colorMatch[0]}`,
-                    line: lineNum,
-                });
-            }
             // Imports
             const imp = trimmed.match(/^import\s+['"]([^'"]+)['"]\s*(?:as\s+(\w+))?\s*(?:show\s+([\w,\s]+))?\s*(?:hide\s+([\w,\s]+))?\s*;/);
             if (imp) {
@@ -129,6 +111,25 @@ export class DartParser {
             // Exports
             const exp = trimmed.match(/^export\s+['"]([^'"]+)['"]\s*;/);
             if (exp) { result.exports.push(exp[1]); continue; }
+
+            // Hardcoded Text Detection
+            const textMatch = line.match(/Text\s*\(\s*(['"])(.*?)\1/);
+            if (textMatch && !line.includes('.tr') && !line.includes('S.of') && !line.includes('Intl.message')) {
+                result.warnings.push({
+                    type: 'hardcoded_text',
+                    message: `Hardcoded text: ${textMatch[0]}`,
+                    line: lineNum,
+                });
+            }
+            // Hardcoded Color Detection
+            const colorMatch = line.match(/Color\s*\(\s*0x[A-Fa-f0-9]{8}\s*\)/) || line.match(/Colors\.[a-zA-Z0-9_]+/);
+            if (colorMatch && !filePath.toLowerCase().includes('theme') && !filePath.toLowerCase().includes('color')) {
+                result.warnings.push({
+                    type: 'hardcoded_color',
+                    message: `Hardcoded color: ${colorMatch[0]}`,
+                    line: lineNum,
+                });
+            }
             // Enums
             const enm = trimmed.match(/^enum\s+(\w+)\s*\{/);
             if (enm) {
