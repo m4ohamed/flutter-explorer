@@ -1,0 +1,95 @@
+{
+    "name": "flutter-explorer",
+    "displayName": "Flutter Explorer",
+    "description": "Code Search, Widget Tree Viewer, Dependency Graph, and pubspec.yaml Analysis for Flutter projects",
+    "version": "0.1.0",
+    "publisher": "flutter-explorer",
+    "engines": {
+        "vscode": "^1.85.0"
+    },
+    "categories": [
+        "Other",
+        "Programming Languages"
+    ],
+    "keywords": [
+        "flutter",
+        "dart",
+        "widget",
+        "explorer",
+        "dependency"
+    ],
+    "activationEvents": [
+        "workspaceContains:**/pubspec.yaml"
+    ],
+    "main": "./out/extension.js",
+    "contributes": {
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "flutter-explorer",
+                    "title": "Flutter Explorer",
+                    "icon": "resources/flutter-explorer-icon.svg"
+                }
+            ]
+        },
+        "views": {
+            "flutter-explorer": [
+                {
+                    "id": "flutterExplorer.sidebar",
+                    "name": "Flutter Explorer",
+                    "type": "webview"
+                }
+            ]
+        },
+        "commands": [
+            {
+                "command": "flutterExplorer.reindex",
+                "title": "Flutter Explorer: Rebuild Full Index",
+                "icon": "$(refresh)"
+            },
+            {
+                "command": "flutterExplorer.refresh",
+                "title": "Flutter Explorer: Refresh Current View",
+                "icon": "$(sync)"
+            },
+            {
+                "command": "flutterExplorer.openFile",
+                "title": "Flutter Explorer: Open File at Line"
+            }
+        ],
+        "configuration": {
+            "title": "Flutter Explorer",
+            "properties": {
+                "flutterExplorer.autoIndex": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Automatically index files on change"
+                },
+                "flutterExplorer.watchAndroidApp": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Watch android/app/ directory for changes"
+                },
+                "flutterExplorer.debounceMs": {
+                    "type": "number",
+                    "default": 300,
+                    "description": "Debounce delay (ms) for file change events"
+                }
+            }
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "node esbuild.js --production",
+        "watch": "node esbuild.js --watch",
+        "lint": "eslint src --ext ts",
+        "build": "node esbuild.js"
+    },
+    "devDependencies": {
+        "@types/vscode": "^1.85.0",
+        "@types/node": "^20.11.0",
+        "esbuild": "^0.20.0",
+        "typescript": "^5.3.0",
+        "@vscode/vsce": "^2.22.0"
+    }
+}

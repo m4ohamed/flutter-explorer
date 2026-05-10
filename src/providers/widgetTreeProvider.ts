@@ -1,0 +1,82 @@
+/**
+ * Widget Tree Provider - Parses current file for widget tree visualization
+ */
+import * as vscode from 'vscode';
+import { IndexManager } from '../indexer/indexManager';
+import { WidgetInfo } from '../indexer/dartParser';
+export interface WidgetTreeNode {
+    name: string;
+    line: number;
+    children: WidgetTreeNode[];
+    depth: number;
+}
+export class WidgetTreeProvider {
+    constructor(private indexManager: IndexManager) { }
+    /** Get widget tree for current active editor */
+    getTreeForActiveEditor(): WidgetTreeNode[] | null {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor || !editor.document.fileName.endsWith('.dart')) {
+            return null;
+        }
+        const content = editor.document.getText();
+        const filePath = editor.document.fileName;
+        const parsed = this.indexManager.parseWidgetTreeForContent(filePath, content);
+        if (parsed.widgets.length === 0) { return null; }
+        return this.flattenTree(parsed.widgets, 0);
+    }
+    /** Get widget tree for a specific file content */
+    getTreeForContent(filePath: string, content: string): WidgetTreeNode[] {
+        const parsed = this.indexManager.parseWidgetTreeForContent(filePath, content);
+        return this.flattenTree(parsed.widgets, 0);
+    }
+    /** Convert WidgetInfo tree to flat renderable nodes */
+    private flattenTree(widgets: WidgetInfo[], depth: number): WidgetTreeNode[] {
+        const nodes: WidgetTreeNode[] = [];
+        for (const w of widgets) {
+            nodes.push({
+                name: w.name,
+                line: w.line,
+                children: this.flattenTree(w.children, depth + 1),
+                depth,
+            });
+        }
+        return nodes;
+    }
+    /** Serialize tree for webview */
+    getTreeDataForWebview(): WebviewTreeData {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor || !editor.document.fileName.endsWith('.dart')) {
+            return { fileName: null, tree: [], classNames: [] };
+        }
+        const content = editor.document.getText();
+        const filePath = editor.document.fileName;
+        const parsed = this.indexManager.parseWidgetTreeForContent(filePath, content);
+        const fileName = filePath.split(/[/\\]/).pop() || '';
+        return {
+            fileName,
+            tree: this.serializeWidgets(parsed.widgets),
+            classNames: parsed.classes.map(c => ({
+                name: c.name,
+                type: c.type,
+                line: c.line,
+            })),
+        };
+    }
+    private serializeWidgets(widgets: WidgetInfo[]): SerializedWidget[] {
+        return widgets.map(w => ({
+            name: w.name,
+            line: w.line,
+            children: this.serializeWidgets(w.children),
+        }));
+    }
+}
+export interface WebviewTreeData {
+    fileName: string | null;
+    tree: SerializedWidget[];
+    classNames: { name: string; type: string; line: number }[];
+}
+export interface SerializedWidget {
+    name: string;
+    line: number;
+    children: SerializedWidget[];
+}
