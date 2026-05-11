@@ -618,13 +618,15 @@ export class DartParser {
         for (const ext of result.extensions) {
             const usage: ExtensionUsage = {
                 extensionName: ext.name,
-                usedInFiles: [result.filePath],
+                usedInFiles: [],
                 confidence: 'medium'
             };
             const pattern = new RegExp(`\\b${ext.name}\\b`, 'g');
             for (let i = 0; i < lines.length; i++) {
                 if (pattern.test(lines[i]) && !lines[i].includes(`extension ${ext.name}`)) {
-                    // Internal usage found
+                    if (!usage.usedInFiles.includes(result.filePath)) {
+                        usage.usedInFiles.push(result.filePath);
+                    }
                 }
             }
             result.extensionUsages.push(usage);
@@ -633,13 +635,15 @@ export class DartParser {
         for (const td of result.typedefs) {
             const usage: TypedefUsage = {
                 typedefName: td.name,
-                usedInFiles: [result.filePath],
+                usedInFiles: [],
                 confidence: 'medium'
             };
             const pattern = new RegExp(`\\b${td.name}\\b`, 'g');
             for (let i = 0; i < lines.length; i++) {
                 if (pattern.test(lines[i]) && !lines[i].includes(`typedef ${td.name}`)) {
-                    // Internal usage found
+                    if (!usage.usedInFiles.includes(result.filePath)) {
+                        usage.usedInFiles.push(result.filePath);
+                    }
                 }
             }
             result.typedefUsages.push(usage);
@@ -648,13 +652,15 @@ export class DartParser {
         for (const v of result.variables) {
             const usage: VariableUsage = {
                 variableName: v.name,
-                usedInFiles: [result.filePath],
+                usedInFiles: [],
                 confidence: 'medium'
             };
             const pattern = new RegExp(`\\b${v.name}\\b`, 'g');
             for (let i = 0; i < lines.length; i++) {
                 if (pattern.test(lines[i]) && !lines[i].match(new RegExp(`\\b(final|const|var|late)?\\s*\\b${v.name}\\s*=`))) {
-                    // Internal usage found
+                    if (!usage.usedInFiles.includes(result.filePath)) {
+                        usage.usedInFiles.push(result.filePath);
+                    }
                 }
             }
             result.variableUsages.push(usage);
@@ -664,14 +670,16 @@ export class DartParser {
             const usage: ConstructorUsage = {
                 constructorName: c.name,
                 className: c.className,
-                usedInFiles: [result.filePath],
+                usedInFiles: [],
                 confidence: 'medium'
             };
             const fullName = c.name === c.className ? c.className : `${c.className}.${c.name}`;
             const pattern = new RegExp(`\\b${fullName.replace('.', '\\.')}\\b`, 'g');
             for (let i = 0; i < lines.length; i++) {
                 if (pattern.test(lines[i]) && !lines[i].includes(`${fullName}(`)) {
-                    // Internal usage found
+                    if (!usage.usedInFiles.includes(result.filePath)) {
+                        usage.usedInFiles.push(result.filePath);
+                    }
                 }
             }
             result.constructorUsages.push(usage);
@@ -681,13 +689,15 @@ export class DartParser {
             const usage: PropertyUsage = {
                 propertyName: p.name,
                 className: p.className,
-                usedInFiles: [result.filePath],
+                usedInFiles: [],
                 confidence: 'medium'
             };
             const pattern = new RegExp(`\\b${p.name}\\b`, 'g');
             for (let i = 0; i < lines.length; i++) {
                 if (pattern.test(lines[i]) && !lines[i].includes(`${p.name};`) && !lines[i].includes(`get ${p.name}`)) {
-                    // Internal usage found
+                    if (!usage.usedInFiles.includes(result.filePath)) {
+                        usage.usedInFiles.push(result.filePath);
+                    }
                 }
             }
             result.propertyUsages.push(usage);
@@ -702,13 +712,15 @@ export class DartParser {
         for (const e of result.enums) {
             const usage: EnumUsage = {
                 enumName: e.name,
-                usedInFiles: [result.filePath],
+                usedInFiles: [],
                 confidence: 'medium'
             };
             const pattern = new RegExp(`\\b${e.name}\\b`, 'g');
             for (let i = 0; i < lines.length; i++) {
                 if (pattern.test(lines[i]) && !lines[i].includes(`enum ${e.name}`)) {
-                    // Internal usage found
+                    if (!usage.usedInFiles.includes(result.filePath)) {
+                        usage.usedInFiles.push(result.filePath);
+                    }
                 }
             }
             result.enumUsages.push(usage);
@@ -717,13 +729,15 @@ export class DartParser {
         for (const m of result.mixins) {
             const usage: MixinUsage = {
                 mixinName: m.name,
-                usedInFiles: [result.filePath],
+                usedInFiles: [],
                 confidence: 'medium'
             };
             const pattern = new RegExp(`\\b${m.name}\\b`, 'g');
             for (let i = 0; i < lines.length; i++) {
                 if (pattern.test(lines[i]) && !lines[i].includes(`mixin ${m.name}`)) {
-                    // Internal usage found
+                    if (!usage.usedInFiles.includes(result.filePath)) {
+                        usage.usedInFiles.push(result.filePath);
+                    }
                 }
             }
             result.mixinUsages.push(usage);
