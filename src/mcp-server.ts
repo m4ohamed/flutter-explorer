@@ -39,6 +39,45 @@ function readIndex() {
   return null;
 }
 
+// Helper to recursively get directory structure
+function getDirectoryStructure(dirPath: string, relativePath: string = ""): any[] {
+  const results: any[] = [];
+  try {
+    if (!fs.existsSync(dirPath)) return [];
+    
+    const items = fs.readdirSync(dirPath);
+    for (const item of items) {
+      // Skip hidden files and common ignore folders
+      if (item.startsWith('.') || item === 'node_modules' || item === 'build' || 
+          item === 'ios' || item === 'android' || item === 'windows' || 
+          item === 'macos' || item === 'linux') continue;
+
+      const fullPath = path.join(dirPath, item);
+      const relItemPath = path.join(relativePath, item);
+      const stats = fs.statSync(fullPath);
+
+      if (stats.isDirectory()) {
+        results.push({
+          name: item,
+          type: "directory",
+          path: relItemPath,
+          children: getDirectoryStructure(fullPath, relItemPath)
+        });
+      } else {
+        results.push({
+          name: item,
+          type: "file",
+          path: relItemPath,
+          size: stats.size
+        });
+      }
+    }
+  } catch (error) {
+    console.error(`Error reading directory ${dirPath}:`, error);
+  }
+  return results;
+}
+
 // --- Tools ---
 
 // 1. Search Tool
@@ -312,6 +351,44 @@ server.registerTool(
   }
 );
 
+// New Tool: Project Structure
+server.registerTool(
+  "flutter_get_project_structure",
+  {
+    description: "Get the structure of the project (folders and files), specifically focusing on the lib/ directory.",
+    inputSchema: z.object({
+      targetPath: z.string().optional().describe("Specific subdirectory to explore (defaults to 'lib')"),
+    }),
+  },
+  async ({ targetPath = "lib" }) => {
+    const fullPath = path.join(currentProjectPath, targetPath);
+    if (!fs.existsSync(fullPath)) {
+      return { content: [{ type: "text", text: `Path not found: ${targetPath}` }] };
+    }
+    
+    const structure = getDirectoryStructure(fullPath, targetPath);
+    
+    // Return as a formatted string for better readability by AI
+    const formatStructure = (items: any[], indent: string = ""): string => {
+      let output = "";
+      for (const item of items) {
+        if (item.type === "directory") {
+          output += `${indent}📁 ${item.name}/\n`;
+          output += formatStructure(item.children, indent + "  ");
+        } else {
+          output += `${indent}📄 ${item.name}\n`;
+        }
+      }
+      return output;
+    };
+
+    const formatted = formatStructure(structure);
+    return {
+      content: [{ type: "text", text: formatted || "Directory is empty." }],
+    };
+  }
+);
+
 // 3. File Info Tool
 server.registerTool(
   "flutter_get_file_info",
@@ -373,6 +450,20 @@ server.registerTool(
       }
     }
     return { content: [{ type: "text", text: JSON.stringify(warnings, null, 2) }] };
+  }
+);
+
+// 5b. Get Diagnostics Tool
+server.registerTool(
+  "flutter_get_diagnostics",
+  {
+    description: "Get all VS Code diagnostics (errors and warnings) for the project",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    const index = readIndex();
+    if (!index || !index.diagnostics) return { content: [{ type: "text", text: "No diagnostics found in index." }] };
+    return { content: [{ type: "text", text: JSON.stringify(index.diagnostics, null, 2) }] };
   }
 );
 

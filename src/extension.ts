@@ -5,7 +5,7 @@
  * analysis for Flutter/Dart projects.
  */
 import * as vscode from 'vscode';
-import { IndexManager } from './indexer/indexManager';
+import { IndexManager, DiagnosticInfo } from './indexer/indexManager';
 import { FileWatcher } from './indexer/fileWatcher';
 import { SearchProvider } from './providers/searchProvider';
 import { WidgetTreeProvider } from './providers/widgetTreeProvider';
@@ -111,6 +111,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }
         }),
     );
+    // ─── Diagnostics Listener ──────────────────────────────
+    const updateDiagnostics = () => {
+        const diagnostics: DiagnosticInfo[] = [];
+        const allDiagnostics = vscode.languages.getDiagnostics();
+        
+        for (const [uri, diags] of allDiagnostics) {
+            // Only care about project files (lib/)
+            const relPath = indexManager.relativePath(uri.fsPath);
+            if (!relPath.startsWith('lib/') && !relPath.startsWith('test/')) continue;
+
+            for (const d of diags) {
+                diagnostics.push({
+                    filePath: relPath,
+                    line: d.range.start.line + 1,
+                    column: d.range.start.character + 1,
+                    message: d.message,
+                    severity: d.severity === 0 ? 'error' : d.severity === 1 ? 'warning' : d.severity === 2 ? 'info' : 'hint',
+                    source: d.source || 'dart'
+                });
+            }
+        }
+        indexManager.updateDiagnostics(diagnostics);
+    };
+
+    context.subscriptions.push(vscode.languages.onDidChangeDiagnostics(updateDiagnostics));
+    
+    // Initial diagnostics collection
+    updateDiagnostics();
+
     // ─── Configuration Change Listener ─────────────────────
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration((e) => {

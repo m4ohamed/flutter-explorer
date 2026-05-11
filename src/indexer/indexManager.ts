@@ -17,9 +17,19 @@ export interface TranslationInfo {
   line: number;
 }
 
+export interface DiagnosticInfo {
+  filePath: string;
+  line: number;
+  column: number;
+  message: string;
+  severity: 'error' | 'warning' | 'info' | 'hint';
+  source: string;
+}
+
 export class IndexManager {
   private index: Map<string, DartFileInfo> = new Map();
   private arbIndex: Map<string, TranslationInfo[]> = new Map();
+  private diagnostics: DiagnosticInfo[] = [];
   private packages: PackageInfo[] = [];
   private parser: DartParser = new DartParser();
   private workspaceRoot: string;
@@ -162,6 +172,17 @@ export class IndexManager {
     }
   }
 
+  /** Update project diagnostics */
+  public updateDiagnostics(diagnostics: DiagnosticInfo[]): void {
+    this.diagnostics = diagnostics;
+    this.saveCache();
+  }
+
+  /** Get current diagnostics */
+  public getDiagnostics(): DiagnosticInfo[] {
+    return this.diagnostics;
+  }
+
   /** Remove a file from the index */
   removeFile(uri: vscode.Uri): void {
     const relPath = this.relativePath(uri.fsPath);
@@ -180,11 +201,13 @@ export class IndexManager {
         const data: { 
           dart: Record<string, DartFileInfo>, 
           arb: Record<string, TranslationInfo[]>,
-          packages?: PackageInfo[]
+          packages?: PackageInfo[],
+          diagnostics?: DiagnosticInfo[]
         } = JSON.parse(raw);
         this.index.clear();
         this.arbIndex.clear();
         this.packages = data.packages || [];
+        this.diagnostics = data.diagnostics || [];
 
         // Handle old cache format gracefully
         if (!data.dart && !data.arb) {
@@ -218,7 +241,8 @@ export class IndexManager {
       const data = { 
         dart: {} as Record<string, DartFileInfo>, 
         arb: {} as Record<string, TranslationInfo[]>,
-        packages: this.packages
+        packages: this.packages,
+        diagnostics: this.diagnostics
       };
       for (const [key, val] of this.index.entries()) { data.dart[key] = val; }
       for (const [key, val] of this.arbIndex.entries()) { data.arb[key] = val; }
@@ -538,7 +562,7 @@ export class IndexManager {
     return results;
   }
 
-  private relativePath(absPath: string): string {
+  public relativePath(absPath: string): string {
     return path.relative(this.workspaceRoot, absPath).replace(/\\/g, '/');
   }
 
