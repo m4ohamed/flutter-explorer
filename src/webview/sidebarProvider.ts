@@ -147,6 +147,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           <button class="filter-btn" data-filter="widget">Widgets</button>
           <button class="filter-btn" data-filter="enum">Enums</button>
           <button class="filter-btn" data-filter="mixin">Mixins</button>
+          <button class="filter-btn" data-filter="call">Calls</button>
           <button class="filter-btn" data-filter="translation">Translations</button>
         </div>
       </div>

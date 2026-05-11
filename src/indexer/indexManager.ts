@@ -185,20 +185,21 @@ export class IndexManager {
   }
 
   /** Get index statistics */
-  getStats(): { files: number; classes: number; functions: number; widgets: number; enums: number; mixins: number; translations: number } {
-    let classes = 0, functions = 0, widgets = 0, enums = 0, mixins = 0;
+  getStats(): { files: number; classes: number; functions: number; widgets: number; enums: number; mixins: number; calls: number; translations: number } {
+    let classes = 0, functions = 0, widgets = 0, enums = 0, mixins = 0, calls = 0;
     for (const info of this.index.values()) {
       classes += info.classes.length;
       functions += info.functions.length;
       widgets += info.widgets.length;
       enums += info.enums.length;
       mixins += info.mixins.length;
+      calls += (info.functionCalls?.length || 0);
     }
     let translations = 0;
     for (const arb of this.arbIndex.values()) {
       translations += arb.length;
     }
-    return { files: this.index.size + this.arbIndex.size, classes, functions, widgets, enums, mixins, translations };
+    return { files: this.index.size + this.arbIndex.size, classes, functions, widgets, enums, mixins, calls, translations };
   }
 
   /** Get all indexed data */
@@ -212,7 +213,7 @@ export class IndexManager {
   }
 
   /** Search across all indexed files */
-  search(query: string, filter?: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation'): SearchResult[] {
+  search(query: string, filter?: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call'): SearchResult[] {
     const results: SearchResult[] = [];
     const q = query.toLowerCase();
 
@@ -257,6 +258,26 @@ export class IndexManager {
           for (const m of info.mixins) {
             if (m.name.toLowerCase().includes(q)) {
               results.push({ name: m.name, type: 'mixin', subType: m.on || '', file: info.filePath, line: m.line, isPrivate: m.isPrivate });
+            }
+          }
+        }
+      }
+    }
+
+    // Search Function Calls
+    if (!filter || filter === 'call') {
+      for (const info of this.index.values()) {
+        if (info.functionCalls) {
+          for (const call of info.functionCalls) {
+            if (call.name.toLowerCase().includes(q)) {
+              results.push({
+                name: call.name,
+                type: 'call',
+                subType: `Called in ${call.context}`,
+                file: info.filePath,
+                line: call.line,
+                isPrivate: false
+              });
             }
           }
         }
@@ -415,7 +436,7 @@ export class IndexManager {
 
 export interface SearchResult {
   name: string;
-  type: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation';
+  type: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call';
   subType: string;
   file: string;
   line: number;

@@ -6,7 +6,7 @@ import * as path from 'path';
 import { IndexManager, SearchResult } from '../indexer/indexManager';
 export class SearchProvider {
     constructor(private indexManager: IndexManager, private workspaceRoot: string) { }
-    search(query: string, filter?: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation'): SearchResult[] {
+    search(query: string, filter?: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call'): SearchResult[] {
         if ((!query || query.trim().length === 0) && !filter) { return []; }
         return this.indexManager.search(query.trim(), filter);
     }
@@ -25,7 +25,7 @@ export class SearchProvider {
     }
     /** Get serializable results for webview */
     getSearchResultsForWebview(query: string, filter?: string): WebviewSearchResult[] {
-        const validFilter = filter as 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | undefined;
+        const validFilter = filter as 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call' | undefined;
         const results = this.search(query, validFilter === undefined ? undefined : validFilter);
         return results.map(r => ({
             name: r.name,
@@ -46,6 +46,7 @@ export class SearchProvider {
             case 'enum': return '📋';
             case 'mixin': return '🔗';
             case 'translation': return '🌐';
+            case 'call': return '📞';
             default: return '📄';
         }
     }

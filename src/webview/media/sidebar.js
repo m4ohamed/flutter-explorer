@@ -442,6 +442,9 @@
       '<span class="stat-item" data-filter="class">🔷 <span class="stat-value">' + stats.classes + '</span> classes</span>' +
       '<span class="stat-item" data-filter="function">⚡ <span class="stat-value">' + stats.functions + '</span> functions</span>' +
       '<span class="stat-item" data-filter="widget">🧩 <span class="stat-value">' + stats.widgets + '</span> widgets</span>' +
+      '<span class="stat-item" data-filter="enum">🟣 <span class="stat-value">' + (stats.enums || 0) + '</span> enums</span>' +
+      '<span class="stat-item" data-filter="mixin">🟠 <span class="stat-value">' + (stats.mixins || 0) + '</span> mixins</span>' +
+      '<span class="stat-item" data-filter="call">📞 <span class="stat-value">' + (stats.calls || 0) + '</span> calls</span>' +
       '<span class="stat-item" data-filter="translation">🌐 <span class="stat-value">' + (stats.translations || 0) + '</span> translations</span>';
 
     statsBar.querySelectorAll('.stat-item').forEach(function (item) {

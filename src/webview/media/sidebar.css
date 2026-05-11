@@ -249,6 +249,10 @@ body {
     background: #4d4d1a;
     color: #c9c991;
 }
+.badge-call {
+    background: #1a4d4d;
+    color: #91c9c9;
+}
 
 .result-usage-badge {
     padding: 1px 6px;

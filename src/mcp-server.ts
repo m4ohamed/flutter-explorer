@@ -4,6 +4,7 @@ import { z } from "zod";
 import * as fs from "fs";
 import * as path from "path";
 import { DirectSearch } from './mcp-direct-search.js';
+import { ArbEditor } from './mcp-arb-editor.js';
 
 /**
  * Flutter Explorer MCP Server
@@ -79,8 +80,8 @@ server.registerTool(
             }
           }
             
-          if ((mode === "calls" || mode === "both") && info.calls) {
-            for (const call of info.calls) {
+          if ((mode === "calls" || mode === "both") && info.functionCalls) {
+            for (const call of info.functionCalls) {
               if (call.name.toLowerCase().includes(q)) {
                 results.push({ 
                   name: call.name, 
@@ -91,6 +92,28 @@ server.registerTool(
                   line: call.line,
                   context: call.context,
                 });
+              }
+            }
+          }
+        }
+
+        // Search Enums
+        if (!filter || filter === "enum") {
+          if (mode === "definitions" || mode === "both") {
+            for (const e of info.enums || []) {
+              if (e.name.toLowerCase().includes(q)) {
+                results.push({ name: e.name, type: "enum_definition", file, line: e.line, values: e.values });
+              }
+            }
+          }
+        }
+
+        // Search Mixins
+        if (!filter || filter === "mixin") {
+          if (mode === "definitions" || mode === "both") {
+            for (const m of info.mixins || []) {
+              if (m.name.toLowerCase().includes(q)) {
+                results.push({ name: m.name, type: "mixin_definition", file, line: m.line, on: m.on });
               }
             }
           }
@@ -136,12 +159,14 @@ server.registerTool(
     const index = readIndex();
     if (!index) return { content: [{ type: "text", text: "Index not found." }] };
 
-    let files = 0, classes = 0, functions = 0, widgets = 0;
+    let files = 0, classes = 0, functions = 0, widgets = 0, enums = 0, mixins = 0;
     for (const file in index.dart || {}) {
       files++;
       classes += index.dart[file].classes.length;
       functions += index.dart[file].functions.length;
       widgets += index.dart[file].widgets.length;
+      enums += (index.dart[file].enums || []).length;
+      mixins += (index.dart[file].mixins || []).length;
     }
     let translations = 0;
     for (const file in index.arb || {}) {
@@ -149,7 +174,7 @@ server.registerTool(
     }
 
     return {
-      content: [{ type: "text", text: `Files: ${files}, Classes: ${classes}, Functions: ${functions}, Widgets: ${widgets}, Translations: ${translations}` }],
+      content: [{ type: "text", text: `Files: ${files}, Classes: ${classes}, Functions: ${functions}, Widgets: ${widgets}, Enums: ${enums}, Mixins: ${mixins}, Translations: ${translations}` }],
     };
   }
 );
@@ -337,6 +362,65 @@ server.registerTool(
   },
   async () => {
     return { content: [{ type: "text", text: `Current project path: ${currentProjectPath}` }] };
+  }
+);
+
+// 10. Translation Tools
+server.registerTool(
+  "flutter_update_translation",
+  {
+    description: "Add or update a translation key in all ARB files",
+    inputSchema: z.object({
+      key: z.string().describe("Translation key (e.g., 'welcome_message')"),
+      arValue: z.string().describe("Arabic translation value"),
+      enValue: z.string().describe("English translation value"),
+      description: z.string().optional().describe("Optional description for translators"),
+    }),
+  },
+  async ({ key, arValue, enValue, description }) => {
+    try {
+      const arbEditor = new ArbEditor(currentProjectPath);
+      const result = arbEditor.updateTranslation(key, arValue, enValue, description);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error updating translation: ${error}` }] };
+    }
+  }
+);
+
+server.registerTool(
+  "flutter_list_translations",
+  {
+    description: "List all translation keys and check for missing keys across ARB files",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    try {
+      const arbEditor = new ArbEditor(currentProjectPath);
+      const result = arbEditor.getAllTranslations();
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error listing translations: ${error}` }] };
+    }
+  }
+);
+
+server.registerTool(
+  "flutter_delete_translation",
+  {
+    description: "Delete a translation key from all ARB files",
+    inputSchema: z.object({
+      key: z.string().describe("Translation key to delete"),
+    }),
+  },
+  async ({ key }) => {
+    try {
+      const arbEditor = new ArbEditor(currentProjectPath);
+      const result = arbEditor.deleteTranslation(key);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error deleting translation: ${error}` }] };
+    }
   }
 );
 

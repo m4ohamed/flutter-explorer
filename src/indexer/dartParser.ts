@@ -79,7 +79,7 @@ export interface DartFileInfo {
     filePath: string;
     classes: ClassInfo[];
     functions: FunctionInfo[];
-    calls: FunctionCall[];
+    functionCalls: FunctionCall[];
     imports: ImportInfo[];
     exports: string[];
     widgets: WidgetInfo[];
@@ -110,7 +110,7 @@ export class DartParser {
     parse(filePath: string, content: string): DartFileInfo {
         const lines = content.split('\n');
         const result: DartFileInfo = {
-            filePath, classes: [], functions: [], calls: [],
+            filePath, classes: [], functions: [], functionCalls: [],
             imports: [], exports: [], widgets: [], enums: [], mixins: [], warnings: [], lastModified: Date.now(),
             classUsages: [], functionUsages: [],
         };
@@ -403,7 +403,7 @@ export class DartParser {
                 const context = lines.slice(contextStart, contextEnd + 1).join('\n').trim();
                 const isStatic = line.includes(`${funcName}(`) && !line.includes(`.${funcName}(`);
                 const isChained = line.includes(`.${funcName}(`);
-                result.calls.push({
+                result.functionCalls.push({
                     name: funcName,
                     line: lineNum,
                     callerClass: currentClass,

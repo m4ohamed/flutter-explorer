@@ -3,7 +3,7 @@ import * as path from 'path';
 
 export interface SearchResult {
   name: string;
-  type: 'class_definition' | 'function_definition' | 'function_call';
+  type: 'class_definition' | 'function_definition' | 'function_call' | 'enum_definition' | 'mixin_definition';
   file: string;
   line: number;
   context?: string;
@@ -110,6 +110,42 @@ export class DirectSearch {
                   context: context.substring(0, 200),
                 });
               }
+            }
+          }
+        }
+      }
+
+      // Search for enum definitions
+      if (!filter || filter === 'enum') {
+        if (searchMode === 'definitions' || searchMode === 'both') {
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const enumMatch = line.match(/^enum\s+(\w+)/);
+            if (enumMatch && enumMatch[1].toLowerCase().includes(q)) {
+              results.push({
+                name: enumMatch[1],
+                type: 'enum_definition',
+                file,
+                line: i + 1,
+              });
+            }
+          }
+        }
+      }
+
+      // Search for mixin definitions
+      if (!filter || filter === 'mixin') {
+        if (searchMode === 'definitions' || searchMode === 'both') {
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const mixinMatch = line.match(/^mixin\s+(\w+)/);
+            if (mixinMatch && mixinMatch[1].toLowerCase().includes(q)) {
+              results.push({
+                name: mixinMatch[1],
+                type: 'mixin_definition',
+                file,
+                line: i + 1,
+              });
             }
           }
         }
