@@ -132,6 +132,38 @@ export interface FunctionUsage {
     calledInFiles: string[];
     confidence: 'high' | 'medium' | 'low';
 }
+export interface ExtensionUsage {
+    extensionName: string;
+    usedInFiles: string[];
+    confidence: 'high' | 'medium' | 'low';
+}
+export interface TypedefUsage {
+    typedefName: string;
+    usedInFiles: string[];
+    confidence: 'high' | 'medium' | 'low';
+}
+export interface VariableUsage {
+    variableName: string;
+    usedInFiles: string[];
+    confidence: 'high' | 'medium' | 'low';
+}
+export interface ConstructorUsage {
+    constructorName: string;
+    className: string;
+    usedInFiles: string[];
+    confidence: 'high' | 'medium' | 'low';
+}
+export interface PropertyUsage {
+    propertyName: string;
+    className: string | null;
+    usedInFiles: string[];
+    confidence: 'high' | 'medium' | 'low';
+}
+export interface AnnotationUsage {
+    annotationName: string;
+    usedInFiles: string[];
+    confidence: 'high' | 'medium' | 'low';
+}
 export interface DartFileInfo {
     filePath: string;
     classes: ClassInfo[];
@@ -147,6 +179,12 @@ export interface DartFileInfo {
     contentHash?: string;
     classUsages: ClassUsage[];
     functionUsages: FunctionUsage[];
+    extensionUsages: ExtensionUsage[];
+    typedefUsages: TypedefUsage[];
+    variableUsages: VariableUsage[];
+    constructorUsages: ConstructorUsage[];
+    propertyUsages: PropertyUsage[];
+    annotationUsages: AnnotationUsage[];
     // New elements
     extensions: ExtensionInfo[];
     typedefs: TypedefInfo[];
@@ -177,6 +215,7 @@ export class DartParser {
             filePath, classes: [], functions: [], functionCalls: [],
             imports: [], exports: [], widgets: [], enums: [], mixins: [], warnings: [], lastModified: Date.now(),
             classUsages: [], functionUsages: [],
+            extensionUsages: [], typedefUsages: [], variableUsages: [], constructorUsages: [], propertyUsages: [], annotationUsages: [],
             extensions: [], typedefs: [], variables: [], constructors: [], properties: [], annotations: [],
         };
         let currentClass: string | null = null;
@@ -530,6 +569,32 @@ export class DartParser {
                 }
             }
             result.functionUsages.push(usage);
+        }
+        // Extensions
+        for (const ext of result.extensions) {
+            result.extensionUsages.push({ extensionName: ext.name, usedInFiles: [result.filePath], confidence: 'medium' });
+        }
+        // Typedefs
+        for (const td of result.typedefs) {
+            result.typedefUsages.push({ typedefName: td.name, usedInFiles: [result.filePath], confidence: 'medium' });
+        }
+        // Variables
+        for (const v of result.variables) {
+            result.variableUsages.push({ variableName: v.name, usedInFiles: [result.filePath], confidence: 'medium' });
+        }
+        // Constructors
+        for (const c of result.constructors) {
+            result.constructorUsages.push({ constructorName: c.name, className: c.className, usedInFiles: [result.filePath], confidence: 'medium' });
+        }
+        // Properties
+        for (const p of result.properties) {
+            result.propertyUsages.push({ propertyName: p.name, className: p.className, usedInFiles: [result.filePath], confidence: 'medium' });
+        }
+        // Annotations
+        for (const a of result.annotations) {
+            if (!result.annotationUsages.find(au => au.annotationName === a.name)) {
+                result.annotationUsages.push({ annotationName: a.name, usedInFiles: [result.filePath], confidence: 'medium' });
+            }
         }
     }
     private getUsageContext(lines: string[], lineIndex: number): { type: 'class' | 'function' | 'none', name: string } {

@@ -137,18 +137,23 @@ export class IndexManager {
           const resolved = this.resolveImportPath(filePath, imp.path);
           const importedFile = this.index.get(resolved);
           if (importedFile) {
-            // Update imported file's classUsages with this file
-            for (const clsUsage of importedFile.classUsages || []) {
-              if (!clsUsage.usedInFiles.includes(filePath)) {
-                clsUsage.usedInFiles.push(filePath);
+            // Update imported file's usages with this file
+            const addFile = (usages: any[], filePath: string) => {
+              for (const u of usages || []) {
+                if (!u.usedInFiles.includes(filePath)) {
+                  u.usedInFiles.push(filePath);
+                }
               }
-            }
-            // Update imported file's functionUsages with this file
-            for (const funcUsage of importedFile.functionUsages || []) {
-              if (!funcUsage.calledInFiles.includes(filePath)) {
-                funcUsage.calledInFiles.push(filePath);
-              }
-            }
+            };
+            
+            addFile(importedFile.classUsages, filePath);
+            addFile(importedFile.functionUsages, filePath);
+            addFile(importedFile.extensionUsages, filePath);
+            addFile(importedFile.typedefUsages, filePath);
+            addFile(importedFile.variableUsages, filePath);
+            addFile(importedFile.constructorUsages, filePath);
+            addFile(importedFile.propertyUsages, filePath);
+            addFile(importedFile.annotationUsages, filePath);
           }
         }
       }

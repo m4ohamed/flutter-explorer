@@ -126,7 +126,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         updateStatusBar(indexManager);
         fileWatcher.start();
         context.subscriptions.push(fileWatcher);
-        
+
         // Build reverse dependencies in background
         indexManager.buildReverseDependencies().catch(err => {
             console.error('Error building reverse dependencies:', err);
@@ -144,7 +144,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 updateStatusBar(indexManager);
             },
         );
-        
+
         fileWatcher.start();
         context.subscriptions.push(fileWatcher);
     }

@@ -380,9 +380,9 @@ server.registerTool(
   {
     description: "Get reverse dependencies for a class or function (what depends on this element)",
     inputSchema: z.object({
-      name: z.string().describe("Class or function name"),
-      type: z.enum(["class", "function"]).describe("Type of element"),
-      parentClass: z.string().optional().describe("Parent class name (required for functions inside classes)"),
+      name: z.string().describe("Element name"),
+      type: z.enum(["class", "function", "extension", "typedef", "variable", "constructor", "property", "annotation"]).describe("Type of element"),
+      parentClass: z.string().optional().describe("Parent class name (required for properties/functions inside classes)"),
     }),
   },
   async ({ name, type, parentClass }) => {
@@ -391,34 +391,60 @@ server.registerTool(
       
     const results: any[] = [];
       
-    if (type === "class") {
-      for (const [filePath, info] of Object.entries(index.dart as Record<string, any>)) {
-        if (info.classUsages) {
-          const usage = info.classUsages.find((u: any) => u.className === name);
-          if (usage) {
-            results.push({
-              filePath,
-              usedByClasses: usage.usedByClasses,
-              usedByFunctions: usage.usedByFunctions,
-              usedInFiles: usage.usedInFiles,
-              confidence: usage.confidence,
-            });
-          }
-        }
+    for (const [filePath, info] of Object.entries(index.dart as Record<string, any>)) {
+      let usages: any[] = [];
+      let matchField = "";
+
+      switch (type) {
+        case "class":
+          usages = info.classUsages || [];
+          matchField = "className";
+          break;
+        case "function":
+          usages = info.functionUsages || [];
+          matchField = "functionName";
+          break;
+        case "extension":
+          usages = info.extensionUsages || [];
+          matchField = "extensionName";
+          break;
+        case "typedef":
+          usages = info.typedefUsages || [];
+          matchField = "typedefName";
+          break;
+        case "variable":
+          usages = info.variableUsages || [];
+          matchField = "variableName";
+          break;
+        case "constructor":
+          usages = info.constructorUsages || [];
+          matchField = "constructorName";
+          break;
+        case "property":
+          usages = info.propertyUsages || [];
+          matchField = "propertyName";
+          break;
+        case "annotation":
+          usages = info.annotationUsages || [];
+          matchField = "annotationName";
+          break;
       }
-    } else if (type === "function") {
-      for (const [filePath, info] of Object.entries(index.dart as Record<string, any>)) {
-        if (info.functionUsages) {
-          const usage = info.functionUsages.find((u: any) => u.functionName === name && u.parentClass === (parentClass || null));
-          if (usage) {
-            results.push({
-              filePath,
-              calledByFunctions: usage.calledByFunctions,
-              calledInFiles: usage.calledInFiles,
-              confidence: usage.confidence,
-            });
-          }
+
+      const usage = usages.find((u: any) => {
+        if (type === "function" || type === "property") {
+          return u[matchField] === name && u.className === (parentClass || null);
         }
+        if (type === "constructor") {
+          return u[matchField] === name && u.className === (parentClass || "");
+        }
+        return u[matchField] === name;
+      });
+
+      if (usage) {
+        results.push({
+          filePath,
+          ...usage
+        });
       }
     }
       
