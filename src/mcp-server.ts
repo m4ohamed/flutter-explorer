@@ -5,6 +5,10 @@ import * as fs from "fs";
 import * as path from "path";
 import { DirectSearch } from './mcp-direct-search.js';
 import { ArbEditor } from './mcp-arb-editor.js';
+import { CodeAnalyzer } from './mcp-code-analyzer.js';
+import { DartParser, DartFileInfo, ClassInfo, FunctionInfo } from './indexer/dartParser.js';
+
+
 
 /**
  * Flutter Explorer MCP Server
@@ -41,7 +45,8 @@ function readIndex() {
 server.registerTool(
   "flutter_search",
   {
-    description: "Search for classes, functions, or widgets in the Flutter project",
+    description: "Search for classes, functions, widgets, and other Dart elements. Use flutter_get_code_block to get full function/class bodies.",
+
     inputSchema: z.object({
       query: z.string().describe("The search term (class name, function name, etc.)"),
       filter: z.enum(["class", "function", "widget", "enum", "mixin", "extension", "ext", "typedef", "type", "variable", "vars", "constructor", "property", "annotation", "file", "call", "translation"]).optional().describe("Filter by type (aliases: ext, type, vars)"),
@@ -613,6 +618,355 @@ server.registerTool(
     return { content: [{ type: "text", text: JSON.stringify(packages, null, 2) }] };
   }
 );
+
+
+// 11. Code Block Extractor Tool
+server.registerTool(
+  "flutter_get_code_block",
+  {
+    description: "Get the full body of a class, function, or method including comments",
+    inputSchema: z.object({
+      elementType: z.enum(["class", "function", "method"]).describe("Type of element to extract"),
+      name: z.string().describe("Name of the class, function, or method"),
+      filePath: z.string().optional().describe("Relative path to the file (optional, will search all files if not provided)"),
+      parentClass: z.string().optional().describe("Parent class name (required for methods)"),
+    }),
+  },
+  async ({ elementType, name, filePath, parentClass }) => {
+    const index = readIndex();
+    if (!index || !index.dart) {
+      return { content: [{ type: "text", text: "Index not found." }] };
+    }
+
+    const parser = new DartParser();
+    let targetFile = filePath;
+    let targetContent = '';
+
+    // If filePath not provided, search for the element
+    if (!targetFile) {
+      for (const file in index.dart) {
+        const info = index.dart[file] as DartFileInfo;
+        let found = false;
+
+        if (elementType === 'class') {
+          found = info.classes.some((c: ClassInfo) => c.name === name);
+        } else if (elementType === 'function') {
+          found = info.functions.some((f: FunctionInfo) => f.name === name && !f.parentClass);
+        } else if (elementType === 'method') {
+          found = info.functions.some((f: FunctionInfo) => f.name === name && f.parentClass === parentClass);
+        }
+
+        if (found) {
+          targetFile = file;
+          break;
+        }
+      }
+    }
+
+    if (!targetFile) {
+      return { content: [{ type: "text", text: `Element not found: ${elementType} ${name}` }] };
+    }
+
+    // Read the file content
+    const fullPath = path.join(currentProjectPath, targetFile);
+    try {
+      targetContent = fs.readFileSync(fullPath, 'utf-8');
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error reading file: ${error}` }] };
+    }
+
+    // Extract the code block
+    const result = parser.extractCodeBlock(targetContent, elementType, name, parentClass);
+
+    if (!result) {
+      return { content: [{ type: "text", text: `Could not extract code block for ${elementType} ${name}` }] };
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          elementType,
+          name,
+          filePath: targetFile,
+          startLine: result.startLine,
+          endLine: result.endLine,
+          comments: result.comments,
+          body: result.body
+        }, null, 2)
+      }],
+    };
+  }
+);
+
+// 12. Logic Flow Summarizer Tool
+server.registerTool(
+  "flutter_analyze_logic_flow",
+  {
+    description: "Analyze a function's logic and return a summarized flow of steps",
+    inputSchema: z.object({
+      functionName: z.string().describe("Name of the function to analyze"),
+      filePath: z.string().optional().describe("Relative path to the file (optional, will search if not provided)"),
+      parentClass: z.string().optional().describe("Parent class name (required for methods)"),
+    }),
+  },
+  async ({ functionName, filePath, parentClass }) => {
+    const index = readIndex();
+    if (!index || !index.dart) {
+      return { content: [{ type: "text", text: "Index not found." }] };
+    }
+
+    const parser = new DartParser();
+    const analyzer = new CodeAnalyzer(currentProjectPath);
+    let targetFile = filePath;
+    let targetContent = '';
+
+    // If filePath not provided, search for the function
+    if (!targetFile) {
+      for (const file in index.dart) {
+        const info = index.dart[file] as DartFileInfo;
+        const found = info.functions.some((f: FunctionInfo) => 
+          f.name === functionName && 
+          (parentClass ? f.parentClass === parentClass : !f.parentClass)
+        );
+
+
+        if (found) {
+          targetFile = file;
+          break;
+        }
+      }
+    }
+
+    if (!targetFile) {
+      return { content: [{ type: "text", text: `Function not found: ${functionName}` }] };
+    }
+
+    // Read the file content
+    const fullPath = path.join(currentProjectPath, targetFile);
+    try {
+      targetContent = fs.readFileSync(fullPath, 'utf-8');
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error reading file: ${error}` }] };
+    }
+
+    // Extract the function body
+    const elementType = parentClass ? 'method' : 'function';
+    const result = parser.extractCodeBlock(targetContent, elementType, functionName, parentClass);
+
+    if (!result) {
+      return { content: [{ type: "text", text: `Could not extract function body for ${functionName}` }] };
+    }
+
+    // Analyze the logic flow
+    const logicSteps = analyzer.analyzeLogicFlow(result.body);
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          functionName,
+          filePath: targetFile,
+          startLine: result.startLine,
+          endLine: result.endLine,
+          logicSteps,
+          summary: logicSteps.length > 0 
+            ? `Function has ${logicSteps.length} logical steps: ` + logicSteps.map(s => s.description).join(', ')
+            : 'No clear logical steps detected'
+        }, null, 2)
+      }],
+    };
+  }
+);
+
+// 13. Contextual Dependency Map Tool
+server.registerTool(
+  "flutter_get_dependencies",
+  {
+    description: "Get the dependencies (repositories, services, etc.) that a class depends on from its constructor",
+    inputSchema: z.object({
+      className: z.string().describe("Name of the class"),
+      filePath: z.string().optional().describe("Relative path to the file (optional, will search if not provided)"),
+    }),
+  },
+  async ({ className, filePath }) => {
+    const index = readIndex();
+    if (!index || !index.dart) {
+      return { content: [{ type: "text", text: "Index not found." }] };
+    }
+
+    const parser = new DartParser();
+    const analyzer = new CodeAnalyzer(currentProjectPath);
+    let targetFile = filePath;
+    let targetContent = '';
+
+    // If filePath not provided, search for the class
+    if (!targetFile) {
+      for (const file in index.dart) {
+        const info = index.dart[file] as DartFileInfo;
+        if (info.classes.some((c: ClassInfo) => c.name === className)) {
+          targetFile = file;
+          break;
+        }
+      }
+    }
+
+
+    if (!targetFile) {
+      return { content: [{ type: "text", text: `Class not found: ${className}` }] };
+    }
+
+    // Read the file content
+    const fullPath = path.join(currentProjectPath, targetFile);
+    try {
+      targetContent = fs.readFileSync(fullPath, 'utf-8');
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error reading file: ${error}` }] };
+    }
+
+    // Extract the class body
+    const result = parser.extractCodeBlock(targetContent, 'class', className);
+
+    if (!result) {
+      return { content: [{ type: "text", text: `Could not extract class body for ${className}` }] };
+    }
+
+    // Extract constructor dependencies
+    const dependencies = analyzer.extractConstructorDependencies(result.body);
+
+    // Also extract imports that might indicate dependencies
+    const importDependencies: string[] = [];
+    const lines = targetContent.split('\n');
+    for (const line of lines) {
+      const importMatch = line.match(/import\s+['"]([^'"]+)['"]/);
+      if (importMatch) {
+        const importPath = importMatch[1];
+        if (importPath.includes('repository') || importPath.includes('service') || importPath.includes('provider')) {
+          importDependencies.push(importPath);
+        }
+      }
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          className,
+          filePath: targetFile,
+          constructorDependencies: dependencies,
+          importDependencies,
+          totalDependencies: dependencies.length + importDependencies.length
+        }, null, 2)
+      }],
+    };
+  }
+);
+
+// 14. Smart Fragment Reader Tool
+server.registerTool(
+  "flutter_read_fragment",
+  {
+    description: "Read a code fragment by element name (class, function, method) with surrounding comments",
+    inputSchema: z.object({
+      name: z.string().describe("Name of the element to read"),
+      elementType: z.enum(["class", "function", "method"]).optional().describe("Type of element (auto-detected if not provided)"),
+      filePath: z.string().optional().describe("Relative path to the file (optional, will search if not provided)"),
+      parentClass: z.string().optional().describe("Parent class name (required for methods)"),
+      includeContext: z.boolean().optional().describe("Include surrounding context lines (default: false)"),
+      contextLines: z.number().optional().describe("Number of context lines before/after (default: 3)"),
+    }),
+  },
+  async ({ name, elementType, filePath, parentClass, includeContext = false, contextLines = 3 }) => {
+    const index = readIndex();
+    if (!index || !index.dart) {
+      return { content: [{ type: "text", text: "Index not found." }] };
+    }
+
+    const parser = new DartParser();
+    let targetFile = filePath;
+    let targetContent = '';
+    let detectedType = elementType;
+
+    // If filePath not provided, search for the element
+    if (!targetFile) {
+      for (const file in index.dart) {
+        const info = index.dart[file] as DartFileInfo;
+        
+        if (!detectedType) {
+          // Auto-detect type
+          if (info.classes.some((c: ClassInfo) => c.name === name)) {
+            detectedType = 'class';
+          } else if (info.functions.some((f: FunctionInfo) => f.name === name && !f.parentClass)) {
+            detectedType = 'function';
+          } else if (info.functions.some((f: FunctionInfo) => f.name === name && f.parentClass)) {
+            detectedType = 'method';
+          }
+        }
+
+        let found = false;
+        if (detectedType === 'class') {
+          found = info.classes.some((c: ClassInfo) => c.name === name);
+        } else if (detectedType === 'function') {
+          found = info.functions.some((f: FunctionInfo) => f.name === name && !f.parentClass);
+        } else if (detectedType === 'method') {
+          found = info.functions.some((f: FunctionInfo) => f.name === name && f.parentClass === parentClass);
+        }
+
+
+        if (found) {
+          targetFile = file;
+          break;
+        }
+      }
+    }
+
+    if (!targetFile) {
+      return { content: [{ type: "text", text: `Element not found: ${name}` }] };
+    }
+
+    // Read the file content
+    const fullPath = path.join(currentProjectPath, targetFile);
+    try {
+      targetContent = fs.readFileSync(fullPath, 'utf-8');
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error reading file: ${error}` }] };
+    }
+
+    // Extract the code block
+    const result = parser.extractCodeBlock(targetContent, detectedType || 'function', name, parentClass);
+
+    if (!result) {
+      return { content: [{ type: "text", text: `Could not extract code block for ${name}` }] };
+    }
+
+    let finalBody = result.body;
+
+    // Add context if requested
+    if (includeContext) {
+      const lines = targetContent.split('\n');
+      const contextStart = Math.max(0, result.startLine - 1 - contextLines);
+      const contextEnd = Math.min(lines.length, result.endLine + contextLines);
+      finalBody = lines.slice(contextStart, contextEnd).join('\n');
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          name,
+          elementType: detectedType,
+          filePath: targetFile,
+          startLine: result.startLine,
+          endLine: result.endLine,
+          comments: result.comments,
+          body: finalBody,
+          hasContext: includeContext
+        }, null, 2)
+      }],
+    };
+  }
+);
+
 
 // Start the server
 async function main() {

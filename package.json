@@ -5,6 +5,14 @@
     "version": "0.1.0",
     "publisher": "flutter-explorer",
     "icon": "resources/icon.png",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/m4ohamed/flutter-explorer.git"
+    },
+    "homepage": "https://github.com/m4ohamed/flutter-explorer#readme",
+    "bugs": {
+        "url": "https://github.com/m4ohamed/flutter-explorer/issues"
+    },
     "engines": {
         "vscode": "^1.85.0"
     },
@@ -29,7 +37,7 @@
                 {
                     "id": "flutter-explorer",
                     "title": "Flutter Explorer",
-                    "icon": "resources/icon.svg"
+                    "icon": "resources/icon.png"
                 }
             ]
         },
@@ -39,7 +47,7 @@
                     "id": "flutterExplorer.sidebar",
                     "name": "Flutter Explorer",
                     "type": "webview",
-                    "icon": "resources/icon.svg"
+                    "icon": "resources/icon.png"
                 }
             ]
         },

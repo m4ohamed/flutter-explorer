@@ -805,4 +805,89 @@ export class DartParser {
             }
         }
     }
+
+    /**
+     * Extract the full body of a class, function, or method from the source code
+     */
+    extractCodeBlock(content: string, elementType: 'class' | 'function' | 'method', name: string, parentClass?: string): { body: string; startLine: number; endLine: number; comments: string[] } | null {
+        const lines = content.split('\n');
+        let startLine = -1;
+        let endLine = -1;
+        let braceDepth = 0;
+        let found = false;
+        let comments: string[] = [];
+
+        // Search for the element definition
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const trimmed = line.trim();
+
+            // Collect comments before the definition
+            if (trimmed.startsWith('//') && !found) {
+                comments.push(trimmed);
+                continue;
+            }
+
+            // Match class definition
+            if (elementType === 'class' && trimmed.match(new RegExp(`^class\\s+${name}\\s*`))) {
+                startLine = i;
+                found = true;
+            }
+            // Match function/method definition
+            else if ((elementType === 'function' || elementType === 'method') && trimmed.match(new RegExp(`\\b${name}\\s*\\(`))) {
+                // Check if it's a method inside the correct parent class
+                if (parentClass) {
+                    // Search backwards for the class definition
+                    let inCorrectClass = false;
+                    for (let j = i; j >= 0; j--) {
+                        if (lines[j].match(new RegExp(`^class\\s+${parentClass}\\s*`))) {
+                            inCorrectClass = true;
+                            break;
+                        }
+                        if (lines[j].match(/^class\s+\w+/)) {
+                            break; // Found a different class
+                        }
+                    }
+                    if (!inCorrectClass) continue;
+                }
+                startLine = i;
+                found = true;
+            }
+
+            if (found) {
+                // If it's a single line arrow function/method
+                if (trimmed.includes('=>') && trimmed.endsWith(';')) {
+                    endLine = i;
+                    break;
+                }
+
+                // Track braces to find the end
+                for (let j = i; j < lines.length; j++) {
+                    for (const ch of lines[j]) {
+                        if (ch === '{') braceDepth++;
+                        else if (ch === '}') {
+                            braceDepth--;
+                            if (braceDepth === 0) {
+                                endLine = j;
+                                break;
+                            }
+                        }
+                    }
+                    if (endLine !== -1) break;
+                }
+                break;
+            } else {
+                // Reset comments if we haven't found the element yet and it's not a comment line
+                if (!trimmed.startsWith('//')) {
+                    comments = [];
+                }
+            }
+        }
+
+        if (startLine === -1 || endLine === -1) return null;
+
+        const body = lines.slice(startLine, endLine + 1).join('\n');
+        return { body, startLine: startLine + 1, endLine: endLine + 1, comments };
+    }
 }
+
