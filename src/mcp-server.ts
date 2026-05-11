@@ -44,7 +44,7 @@ server.registerTool(
     description: "Search for classes, functions, or widgets in the Flutter project",
     inputSchema: z.object({
       query: z.string().describe("The search term (class name, function name, etc.)"),
-      filter: z.enum(["class", "function", "widget", "enum", "mixin"]).optional().describe("Filter by type"),
+      filter: z.enum(["class", "function", "widget", "enum", "mixin", "extension", "typedef", "variable", "constructor", "property", "annotation"]).optional().describe("Filter by type"),
       searchMode: z.enum(["definitions", "calls", "both"]).optional().describe("Search in definitions, calls, or both (default: both)"),
       useDirectSearch: z.boolean().optional().describe("Force direct file search even if index exists (default: false)"),
     }),
@@ -118,6 +118,73 @@ server.registerTool(
             }
           }
         }
+
+        // Search Extensions
+        if (!filter || filter === "extension") {
+          if (mode === "definitions" || mode === "both") {
+            for (const e of info.extensions || []) {
+              if (e.name.toLowerCase().includes(q)) {
+                results.push({ name: e.name, type: "extension_definition", file, line: e.line, on: e.onType });
+              }
+            }
+          }
+        }
+
+        // Search Typedefs
+        if (!filter || filter === "typedef") {
+          if (mode === "definitions" || mode === "both") {
+            for (const t of info.typedefs || []) {
+              if (t.name.toLowerCase().includes(q)) {
+                results.push({ name: t.name, type: "typedef_definition", file, line: t.line, signature: t.signature });
+              }
+            }
+          }
+        }
+
+        // Search Top-level Variables
+        if (!filter || filter === "variable") {
+          if (mode === "definitions" || mode === "both") {
+            for (const v of info.variables || []) {
+              if (v.name.toLowerCase().includes(q)) {
+                results.push({ name: v.name, type: "variable_definition", file, line: v.line, varType: v.type, isConst: v.isConst, isFinal: v.isFinal });
+              }
+            }
+          }
+        }
+
+        // Search Constructors
+        if (!filter || filter === "constructor") {
+          if (mode === "definitions" || mode === "both") {
+            for (const c of info.constructors || []) {
+              const fullName = `${c.className}.${c.name}`;
+              if (fullName.toLowerCase().includes(q)) {
+                results.push({ name: fullName, type: "constructor_definition", file, line: c.line, params: c.params, isFactory: c.isFactory, isConst: c.isConst });
+              }
+            }
+          }
+        }
+
+        // Search Properties (Fields, Getters, Setters)
+        if (!filter || filter === "property") {
+          if (mode === "definitions" || mode === "both") {
+            for (const p of info.properties || []) {
+              if (p.name.toLowerCase().includes(q)) {
+                results.push({ name: p.name, type: "property_definition", file, line: p.line, propType: p.type, className: p.className, isStatic: p.isStatic, isGetter: p.isGetter, isSetter: p.isSetter });
+              }
+            }
+          }
+        }
+
+        // Search Annotations
+        if (!filter || filter === "annotation") {
+          if (mode === "definitions" || mode === "both") {
+            for (const a of info.annotations || []) {
+              if (a.name.toLowerCase().includes(q)) {
+                results.push({ name: `@${a.name}`, type: "annotation_definition", file, line: a.line, target: a.target, targetName: a.targetName });
+              }
+            }
+          }
+        }
       }
     }
   
@@ -160,21 +227,47 @@ server.registerTool(
     if (!index) return { content: [{ type: "text", text: "Index not found." }] };
 
     let files = 0, classes = 0, functions = 0, widgets = 0, enums = 0, mixins = 0;
+    let extensions = 0, typedefs = 0, variables = 0, constructors = 0, properties = 0, annotations = 0;
+
     for (const file in index.dart || {}) {
+      const info = index.dart[file];
       files++;
-      classes += index.dart[file].classes.length;
-      functions += index.dart[file].functions.length;
-      widgets += index.dart[file].widgets.length;
-      enums += (index.dart[file].enums || []).length;
-      mixins += (index.dart[file].mixins || []).length;
+      classes += info.classes.length;
+      functions += info.functions.length;
+      widgets += info.widgets.length;
+      enums += (info.enums || []).length;
+      mixins += (info.mixins || []).length;
+
+      extensions += (info.extensions || []).length;
+      typedefs += (info.typedefs || []).length;
+      variables += (info.variables || []).length;
+      constructors += (info.constructors || []).length;
+      properties += (info.properties || []).length;
+      annotations += (info.annotations || []).length;
     }
     let translations = 0;
     for (const file in index.arb || {}) {
       translations += index.arb[file].length;
     }
 
+    const stats = [
+      `Files: ${files}`,
+      `Classes: ${classes}`,
+      `Functions: ${functions}`,
+      `Widgets: ${widgets}`,
+      `Enums: ${enums}`,
+      `Mixins: ${mixins}`,
+      `Extensions: ${extensions}`,
+      `Typedefs: ${typedefs}`,
+      `Variables: ${variables}`,
+      `Constructors: ${constructors}`,
+      `Properties: ${properties}`,
+      `Annotations: ${annotations}`,
+      `Translations: ${translations}`
+    ].join(", ");
+
     return {
-      content: [{ type: "text", text: `Files: ${files}, Classes: ${classes}, Functions: ${functions}, Widgets: ${widgets}, Enums: ${enums}, Mixins: ${mixins}, Translations: ${translations}` }],
+      content: [{ type: "text", text: stats }],
     };
   }
 );
@@ -421,6 +514,34 @@ server.registerTool(
     } catch (error) {
       return { content: [{ type: "text", text: `Error deleting translation: ${error}` }] };
     }
+  }
+);
+
+server.registerTool(
+  "flutter_list_packages",
+  {
+    description: "List all project dependencies from pubspec.lock",
+    inputSchema: z.object({
+      filter: z.enum(["direct", "dev", "transitive", "all"]).optional().describe("Filter by dependency type"),
+      source: z.enum(["hosted", "git", "path", "all"]).optional().describe("Filter by source"),
+    }),
+  },
+  async ({ filter = "all", source = "all" }) => {
+    const index = readIndex();
+    if (!index || !index.packages) {
+      return { content: [{ type: "text", text: "No packages found in index. Try rebuilding the index." }] };
+    }
+
+    let packages = index.packages;
+
+    if (filter !== "all") {
+      packages = packages.filter((p: any) => p.dependencyType === filter);
+    }
+    if (source !== "all") {
+      packages = packages.filter((p: any) => p.source === source);
+    }
+
+    return { content: [{ type: "text", text: JSON.stringify(packages, null, 2) }] };
   }
 );
 

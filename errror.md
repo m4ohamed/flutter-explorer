@@ -17,6 +17,10 @@
     3. Sorts keys alphabetically.
     4. Writes back with proper formatting.
 
-### Problem: Incomplete Statistics
-- **Error**: `flutter_get_stats` only returned class and function counts.
-- **Fix**: Added logic to count `enums` and `mixins` across the entire index in `mcp-server.ts`.
+### Problem: Search Filter Type Mismatch
+- **Error**: `IndexManager.search` filter parameter was missing new types (`extension`, `typedef`, etc.), causing TypeScript errors during build.
+- **Fix**: Updated `filter` type definition in `search` method to include all supported granular Dart elements.
+
+### Problem: Missing Extension and Typedef Parsing
+- **Error**: `DartParser` had interfaces for extensions and typedefs but no actual regex logic to extract them in `parse()`.
+- **Fix**: Adding regex patterns for `extension Name on Type` and `typedef Name = ...` to the main loop in `DartParser.ts`.

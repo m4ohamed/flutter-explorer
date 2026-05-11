@@ -253,6 +253,30 @@ body {
     background: #1a4d4d;
     color: #91c9c9;
 }
+.badge-extension {
+    background: #3d1a4d;
+    color: #b388ff;
+}
+.badge-typedef {
+    background: #1a3d3d;
+    color: #88ffff;
+}
+.badge-variable {
+    background: #3d3d1a;
+    color: #ffff88;
+}
+.badge-constructor {
+    background: #4d1a1a;
+    color: #ff8888;
+}
+.badge-property {
+    background: #1a1a4d;
+    color: #8888ff;
+}
+.badge-annotation {
+    background: #2a2a2a;
+    color: #aaaaaa;
+}
 
 .result-usage-badge {
     padding: 1px 6px;
@@ -536,6 +560,63 @@ body {
 
 .empty-state-text {
     font-size: 13px;
+}
+
+/* ─── Libraries List ──────────────────────────────────── */
+.libraries-list {
+    padding: 8px 0;
+}
+
+.lib-item {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--vscode-panel-border, #333);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    animation: fadeIn 0.15s ease-out;
+}
+
+.lib-item:hover {
+    background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
+.lib-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.lib-name {
+    font-weight: 600;
+    color: var(--vscode-foreground);
+    font-size: 13px;
+}
+
+.lib-version {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11px;
+    color: var(--vscode-textLink-foreground, #3794ff);
+}
+
+.lib-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.lib-url {
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground, #888);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 150px;
+}
+
+.dep-badge-hosted {
+    background: #1a4d4d;
+    color: #91c9c9;
 }
 
 /* ─── Scrollbar ───────────────────────────────────────── */

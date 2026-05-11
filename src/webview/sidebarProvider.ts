@@ -87,6 +87,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     this.postMessage({ command: 'stats', data: stats });
                     break;
                 }
+                case 'getPackages': {
+                    const packages = this.indexManager.getPackages();
+                    this.postMessage({ command: 'packages', data: packages });
+                    break;
+                }
             }
         });
     }
@@ -132,6 +137,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       <button class="tab" data-tab="tree" title="Widget Tree">🌳 Tree</button>
       <button class="tab" data-tab="graph" title="Dependencies">📊 Graph</button>
       <button class="tab" data-tab="pubspec" title="Pubspec">📦 Pubspec</button>
+      <button class="tab" data-tab="libraries" title="Libraries">📚 Libs</button>
       <button class="tab" data-tab="analysis" title="Analysis">⚠️ Analysis</button>
     </div>
     <!-- Stats Bar -->
@@ -149,6 +155,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           <button class="filter-btn" data-filter="mixin">Mixins</button>
           <button class="filter-btn" data-filter="call">Calls</button>
           <button class="filter-btn" data-filter="translation">Translations</button>
+          <button class="filter-btn" data-filter="extension">Extensions</button>
+          <button class="filter-btn" data-filter="typedef">Typedefs</button>
+          <button class="filter-btn" data-filter="variable">Variables</button>
+          <button class="filter-btn" data-filter="constructor">Ctors</button>
         </div>
       </div>
       <div class="results-list" id="searchResults"></div>
@@ -179,12 +189,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       <div class="pubspec-content" id="pubspecContent"></div>
     </div>
     <!-- Analysis Tab -->
-    <div class="tab-content" id="tab-analysis">
-      <div class="tree-header">
-        <span>Project Analysis</span>
-        <button class="icon-btn" id="refreshAnalysis" title="Refresh">⟳</button>
-      </div>
       <div class="pubspec-content" id="analysisContent"></div>
+    </div>
+    <!-- Libraries Tab -->
+    <div class="tab-content" id="tab-libraries">
+      <div class="tree-header">
+        <span>External Libraries</span>
+        <button class="icon-btn" id="refreshLibraries" title="Refresh">⟳</button>
+      </div>
+      <div class="libraries-list" id="librariesList"></div>
     </div>
   </div>
   <script nonce="${nonce}">${jsContent}</script>

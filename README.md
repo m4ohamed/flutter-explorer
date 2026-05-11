@@ -8,9 +8,13 @@
 ## ✨ Key Features
 
 ### 🔍 Smart Project Indexing
-*   **Instant Search**: Blazing fast search for Classes, Functions, Widgets, Enums, and Mixins.
+*   **Granular Search**: Blazing fast search for Classes, Functions, Widgets, Enums, Mixins, **Extensions, Typedefs, Variables, Constructors, and Annotations**.
 *   **Deep Context**: Understands project structure using lightweight, regex-based parsing that keeps your RAM usage low.
 *   **Automatic Updates**: Files are watched in real-time, ensuring your index is always up-to-date.
+
+### 📚 Dependency Management
+*   **Library Indexing**: Automatically parses `pubspec.lock` to index all project dependencies, including hosted, git, and path sources.
+*   **Smart ARB Editor**: Unified management of localization files with automated key sorting and gap analysis.
 
 ### ⚠️ Advanced Code Analysis
 *   **Hardcoded Value Detection**: Automatically identifies hardcoded strings and colors, helping you maintain a clean, themeable, and localized codebase.
@@ -24,9 +28,10 @@
 
 ### 🤖 AI-Ready with MCP
 Flutter Explorer exposes its powerful indexing engine via the **Model Context Protocol (MCP)**. This allows AI agents (like Claude or ChatGPT) to:
-*   Query project statistics.
-*   Search for specific code patterns.
+*   Query project statistics (now including 12+ granular Dart elements).
+*   Search for specific code patterns with advanced filters.
 *   Retrieve analysis warnings and translation gaps programmatically.
+*   Manage project translations via `flutter_update_translation` and related tools.
 
 ---
 

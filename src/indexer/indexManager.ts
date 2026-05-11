@@ -6,6 +6,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { DartParser, DartFileInfo } from './dartParser';
+import { PackageIndexer } from './packageIndexer';
+import { PackageInfo } from '../providers/pubspecLockProvider';
 
 const CACHE_FILENAME = '.vscode/flutter-explorer-index.json';
 
@@ -18,6 +20,7 @@ export interface TranslationInfo {
 export class IndexManager {
   private index: Map<string, DartFileInfo> = new Map();
   private arbIndex: Map<string, TranslationInfo[]> = new Map();
+  private packages: PackageInfo[] = [];
   private parser: DartParser = new DartParser();
   private workspaceRoot: string;
   private onIndexChanged: vscode.EventEmitter<void> = new vscode.EventEmitter<void>();
@@ -53,13 +56,10 @@ export class IndexManager {
       } catch {
         // Skip files that can't be read
       }
-      if (progress) {
-        progress.report({
-          message: `Indexing ${path.basename(uri.fsPath)} (${i + 1}/${total})`,
-          increment: (100 / total),
-        });
-      }
     }
+
+    // Index packages
+    this.packages = PackageIndexer.indexPackages(this.workspaceRoot);
 
     this.buildReverseDependencies();
     this.saveCache();
@@ -142,9 +142,14 @@ export class IndexManager {
     try {
       if (fs.existsSync(cachePath)) {
         const raw = fs.readFileSync(cachePath, 'utf-8');
-        const data: { dart: Record<string, DartFileInfo>, arb: Record<string, TranslationInfo[]> } = JSON.parse(raw);
+        const data: { 
+          dart: Record<string, DartFileInfo>, 
+          arb: Record<string, TranslationInfo[]>,
+          packages?: PackageInfo[]
+        } = JSON.parse(raw);
         this.index.clear();
         this.arbIndex.clear();
+        this.packages = data.packages || [];
 
         // Handle old cache format gracefully
         if (!data.dart && !data.arb) {
@@ -175,7 +180,11 @@ export class IndexManager {
     try {
       const dir = path.dirname(cachePath);
       if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
-      const data = { dart: {} as Record<string, DartFileInfo>, arb: {} as Record<string, TranslationInfo[]> };
+      const data = { 
+        dart: {} as Record<string, DartFileInfo>, 
+        arb: {} as Record<string, TranslationInfo[]>,
+        packages: this.packages
+      };
       for (const [key, val] of this.index.entries()) { data.dart[key] = val; }
       for (const [key, val] of this.arbIndex.entries()) { data.arb[key] = val; }
       fs.writeFileSync(cachePath, JSON.stringify(data, null, 2), 'utf-8');
@@ -185,8 +194,25 @@ export class IndexManager {
   }
 
   /** Get index statistics */
-  getStats(): { files: number; classes: number; functions: number; widgets: number; enums: number; mixins: number; calls: number; translations: number } {
+  getStats(): {
+    files: number;
+    classes: number;
+    functions: number;
+    widgets: number;
+    enums: number;
+    mixins: number;
+    calls: number;
+    translations: number;
+    extensions: number;
+    typedefs: number;
+    variables: number;
+    constructors: number;
+    properties: number;
+    annotations: number;
+  } {
     let classes = 0, functions = 0, widgets = 0, enums = 0, mixins = 0, calls = 0;
+    let extensions = 0, typedefs = 0, variables = 0, constructors = 0, properties = 0, annotations = 0;
+
     for (const info of this.index.values()) {
       classes += info.classes.length;
       functions += info.functions.length;
@@ -194,17 +220,33 @@ export class IndexManager {
       enums += info.enums.length;
       mixins += info.mixins.length;
       calls += (info.functionCalls?.length || 0);
+
+      extensions += (info.extensions?.length || 0);
+      typedefs += (info.typedefs?.length || 0);
+      variables += (info.variables?.length || 0);
+      constructors += (info.constructors?.length || 0);
+      properties += (info.properties?.length || 0);
+      annotations += (info.annotations?.length || 0);
     }
     let translations = 0;
     for (const arb of this.arbIndex.values()) {
       translations += arb.length;
     }
-    return { files: this.index.size + this.arbIndex.size, classes, functions, widgets, enums, mixins, calls, translations };
+    return {
+      files: this.index.size + this.arbIndex.size,
+      classes, functions, widgets, enums, mixins, calls, translations,
+      extensions, typedefs, variables, constructors, properties, annotations
+    };
   }
 
   /** Get all indexed data */
   getAllFiles(): DartFileInfo[] {
     return Array.from(this.index.values());
+  }
+
+  /** Get all indexed packages */
+  public getPackages(): PackageInfo[] {
+    return this.packages;
   }
 
   /** Get info for a specific file */
@@ -213,7 +255,7 @@ export class IndexManager {
   }
 
   /** Search across all indexed files */
-  search(query: string, filter?: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call'): SearchResult[] {
+  search(query: string, filter?: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call' | 'extension' | 'typedef' | 'variable' | 'constructor' | 'property' | 'annotation'): SearchResult[] {
     const results: SearchResult[] = [];
     const q = query.toLowerCase();
 
@@ -258,6 +300,50 @@ export class IndexManager {
           for (const m of info.mixins) {
             if (m.name.toLowerCase().includes(q)) {
               results.push({ name: m.name, type: 'mixin', subType: m.on || '', file: info.filePath, line: m.line, isPrivate: m.isPrivate });
+            }
+          }
+        }
+        if (!filter || filter === 'extension') {
+          for (const e of info.extensions || []) {
+            if (e.name.toLowerCase().includes(q)) {
+              results.push({ name: e.name, type: 'extension', subType: `on ${e.onType}`, file: info.filePath, line: e.line, isPrivate: e.isPrivate });
+            }
+          }
+        }
+        if (!filter || filter === 'typedef') {
+          for (const t of info.typedefs || []) {
+            if (t.name.toLowerCase().includes(q)) {
+              results.push({ name: t.name, type: 'typedef', subType: t.signature, file: info.filePath, line: t.line, isPrivate: t.isPrivate });
+            }
+          }
+        }
+        if (!filter || filter === 'variable') {
+          for (const v of info.variables || []) {
+            if (v.name.toLowerCase().includes(q)) {
+              results.push({ name: v.name, type: 'variable', subType: `${v.type}${v.value ? ' = ' + v.value : ''}`, file: info.filePath, line: v.line, isPrivate: v.isPrivate });
+            }
+          }
+        }
+        if (!filter || filter === 'constructor') {
+          for (const c of info.constructors || []) {
+            const fullName = `${c.className}.${c.name}`;
+            if (fullName.toLowerCase().includes(q)) {
+              results.push({ name: fullName, type: 'constructor', subType: `(${c.params})`, file: info.filePath, line: c.line, isPrivate: c.name.startsWith('_') });
+            }
+          }
+        }
+        if (!filter || filter === 'property') {
+          for (const p of info.properties || []) {
+            if (p.name.toLowerCase().includes(q)) {
+              const prefix = p.className ? `${p.className}.` : '';
+              results.push({ name: `${prefix}${p.name}`, type: 'property', subType: p.type, file: info.filePath, line: p.line, isPrivate: p.isPrivate });
+            }
+          }
+        }
+        if (!filter || filter === 'annotation') {
+          for (const a of info.annotations || []) {
+            if (a.name.toLowerCase().includes(q)) {
+              results.push({ name: `@${a.name}`, type: 'annotation', subType: `on ${a.target} ${a.targetName}`, file: info.filePath, line: a.line, isPrivate: false });
             }
           }
         }
@@ -436,7 +522,7 @@ export class IndexManager {
 
 export interface SearchResult {
   name: string;
-  type: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call';
+  type: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call' | 'extension' | 'typedef' | 'variable' | 'constructor' | 'property' | 'annotation';
   subType: string;
   file: string;
   line: number;

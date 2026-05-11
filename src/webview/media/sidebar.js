@@ -24,6 +24,7 @@
       else if (targetTab === 'graph') { vscode.postMessage({ command: 'getDependencyGraph' }); }
       else if (targetTab === 'pubspec') { vscode.postMessage({ command: 'getPubspec' }); }
       else if (targetTab === 'analysis') { vscode.postMessage({ command: 'getAnalysis' }); }
+      else if (targetTab === 'libraries') { vscode.postMessage({ command: 'getPackages' }); }
     });
   });
 
@@ -85,6 +86,13 @@
     });
   }
 
+  var refreshLibraries = document.getElementById('refreshLibraries');
+  if (refreshLibraries) {
+    refreshLibraries.addEventListener('click', function () {
+      vscode.postMessage({ command: 'getPackages' });
+    });
+  }
+
   // ─── Message Handler ──────────────────────────────────
 
   window.addEventListener('message', function (event) {
@@ -107,6 +115,9 @@
         break;
       case 'stats':
         renderStats(message.data);
+        break;
+      case 'packages':
+        renderPackages(message.data);
         break;
     }
   });
@@ -434,6 +445,48 @@
     });
   }
 
+  function renderPackages(packages) {
+    var container = document.getElementById('librariesList');
+    if (!container) { return; }
+
+    if (!packages || packages.length === 0) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📚</div><div class="empty-state-text">No libraries indexed yet.<br>Rebuild index to scan pubspec.lock</div></div>';
+      return;
+    }
+
+    var html = '';
+    
+    // Sort packages: direct first, then dev, then transitive
+    var sorted = packages.sort(function(a, b) {
+        var score = { 'direct': 0, 'dev': 1, 'transitive': 2 };
+        if (score[a.dependencyType] !== score[b.dependencyType]) {
+            return score[a.dependencyType] - score[b.dependencyType];
+        }
+        return a.name.localeCompare(b.name);
+    });
+
+    for (var i = 0; i < sorted.length; i++) {
+      var p = sorted[i];
+      var badgeClass = 'badge-' + p.dependencyType;
+      var sourceBadge = p.source !== 'hosted' ? '<span class="dep-badge dep-badge-' + p.source + '">' + p.source + '</span>' : '';
+      
+      html += '<div class="lib-item">';
+      html += '<div class="lib-header">';
+      html += '<span class="lib-name">' + escapeHtml(p.name) + '</span>';
+      html += '<span class="lib-version">' + escapeHtml(p.version) + '</span>';
+      html += '</div>';
+      html += '<div class="lib-footer">';
+      html += '<span class="result-badge ' + badgeClass + '">' + p.dependencyType + '</span>';
+      html += sourceBadge;
+      if (p.description && p.description.url) {
+          html += '<span class="lib-url">' + escapeHtml(p.description.url) + '</span>';
+      }
+      html += '</div></div>';
+    }
+    
+    container.innerHTML = html;
+  }
+
   function renderStats(stats) {
     var statsBar = document.getElementById('statsBar');
     if (!statsBar) { return; }
@@ -444,6 +497,9 @@
       '<span class="stat-item" data-filter="widget">🧩 <span class="stat-value">' + stats.widgets + '</span> widgets</span>' +
       '<span class="stat-item" data-filter="enum">🟣 <span class="stat-value">' + (stats.enums || 0) + '</span> enums</span>' +
       '<span class="stat-item" data-filter="mixin">🟠 <span class="stat-value">' + (stats.mixins || 0) + '</span> mixins</span>' +
+      '<span class="stat-item" data-filter="extension">🧬 <span class="stat-value">' + (stats.extensions || 0) + '</span> ext</span>' +
+      '<span class="stat-item" data-filter="typedef">🏷️ <span class="stat-value">' + (stats.typedefs || 0) + '</span> type</span>' +
+      '<span class="stat-item" data-filter="variable">💎 <span class="stat-value">' + (stats.variables || 0) + '</span> vars</span>' +
       '<span class="stat-item" data-filter="call">📞 <span class="stat-value">' + (stats.calls || 0) + '</span> calls</span>' +
       '<span class="stat-item" data-filter="translation">🌐 <span class="stat-value">' + (stats.translations || 0) + '</span> translations</span>';
 

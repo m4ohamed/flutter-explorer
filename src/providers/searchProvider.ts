@@ -6,7 +6,7 @@ import * as path from 'path';
 import { IndexManager, SearchResult } from '../indexer/indexManager';
 export class SearchProvider {
     constructor(private indexManager: IndexManager, private workspaceRoot: string) { }
-    search(query: string, filter?: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call'): SearchResult[] {
+    search(query: string, filter?: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call' | 'extension' | 'typedef' | 'variable' | 'constructor' | 'property' | 'annotation'): SearchResult[] {
         if ((!query || query.trim().length === 0) && !filter) { return []; }
         return this.indexManager.search(query.trim(), filter);
     }
@@ -25,8 +25,8 @@ export class SearchProvider {
     }
     /** Get serializable results for webview */
     getSearchResultsForWebview(query: string, filter?: string): WebviewSearchResult[] {
-        const validFilter = filter as 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call' | undefined;
-        const results = this.search(query, validFilter === undefined ? undefined : validFilter);
+        const validFilter = filter as any;
+        const results = this.search(query, validFilter);
         return results.map(r => ({
             name: r.name,
             type: r.type,
@@ -47,6 +47,12 @@ export class SearchProvider {
             case 'mixin': return '🔗';
             case 'translation': return '🌐';
             case 'call': return '📞';
+            case 'extension': return '🧬';
+            case 'typedef': return '🏷️';
+            case 'variable': return '💎';
+            case 'constructor': return '🛠️';
+            case 'property': return '🔑';
+            case 'annotation': return '🏷️';
             default: return '📄';
         }
     }

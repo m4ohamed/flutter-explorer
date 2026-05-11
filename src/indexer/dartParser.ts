@@ -11,6 +11,8 @@ export interface ClassInfo {
     implements: string[];
     isAbstract: boolean;
     isPrivate: boolean;
+    methods: FunctionInfo[];
+    properties: PropertyInfo[];
 }
 export interface FunctionInfo {
     name: string;
@@ -57,9 +59,64 @@ export interface FunctionCall {
     line: number;
     callerClass: string | null;
     callerFunction: string | null;
+    context: string;
     isStatic: boolean;
     isChained: boolean;
-    context: string;
+}
+
+export interface ExtensionInfo {
+    name: string;
+    onType: string;
+    methods: FunctionInfo[];
+    line: number;
+    isPrivate: boolean;
+}
+
+export interface TypedefInfo {
+    name: string;
+    signature: string;
+    line: number;
+    isPrivate: boolean;
+}
+
+export interface VariableInfo {
+    name: string;
+    type: string;
+    value?: string;
+    line: number;
+    isConst: boolean;
+    isFinal: boolean;
+    isPrivate: boolean;
+    isTopLevel: boolean;
+}
+
+export interface ConstructorInfo {
+    name: string;
+    className: string;
+    isFactory: boolean;
+    isConst: boolean;
+    params: string;
+    line: number;
+}
+
+export interface PropertyInfo {
+    name: string;
+    type: string;
+    className: string | null;
+    isFinal: boolean;
+    isConst: boolean;
+    isStatic: boolean;
+    isPrivate: boolean;
+    isGetter: boolean;
+    isSetter: boolean;
+    line: number;
+}
+
+export interface AnnotationInfo {
+    name: string;
+    target: string;
+    targetName: string;
+    line: number;
 }
 export interface ClassUsage {
     className: string;
@@ -90,6 +147,13 @@ export interface DartFileInfo {
     contentHash?: string;
     classUsages: ClassUsage[];
     functionUsages: FunctionUsage[];
+    // New elements
+    extensions: ExtensionInfo[];
+    typedefs: TypedefInfo[];
+    variables: VariableInfo[];
+    constructors: ConstructorInfo[];
+    properties: PropertyInfo[];
+    annotations: AnnotationInfo[];
 }
 const WIDGET_BASE_CLASSES = new Set([
     'StatelessWidget', 'StatefulWidget', 'HookWidget',
@@ -113,6 +177,7 @@ export class DartParser {
             filePath, classes: [], functions: [], functionCalls: [],
             imports: [], exports: [], widgets: [], enums: [], mixins: [], warnings: [], lastModified: Date.now(),
             classUsages: [], functionUsages: [],
+            extensions: [], typedefs: [], variables: [], constructors: [], properties: [], annotations: [],
         };
         let currentClass: string | null = null;
         let currentFunction: string | null = null;
@@ -178,6 +243,60 @@ export class DartParser {
                 result.mixins.push({ name: mix[1], on: mix[2] || null, line: lineNum, isPrivate: mix[1].startsWith('_') });
                 continue;
             }
+            // Extensions
+            const extMatch = trimmed.match(/^extension\s+(\w+)?\s+on\s+([\w<>\[\]?,\s]+?)\s*\{/);
+            if (extMatch) {
+                const name = extMatch[1] || 'UnnamedExtension';
+                result.extensions.push({
+                    name,
+                    onType: extMatch[2].trim(),
+                    methods: [], // Methods will be added in currentClass logic if we treat extension as a class-like scope
+                    line: lineNum,
+                    isPrivate: name.startsWith('_'),
+                });
+                currentClass = name; // Treat extension as a class to capture methods/properties inside
+                classBraceStart = braceDepth;
+                continue;
+            }
+            // Typedefs
+            const typedefMatch = trimmed.match(/^typedef\s+(\w+)\s*=\s*([^;]+);/);
+            if (typedefMatch) {
+                result.typedefs.push({
+                    name: typedefMatch[1],
+                    signature: typedefMatch[2].trim(),
+                    line: lineNum,
+                    isPrivate: typedefMatch[1].startsWith('_'),
+                });
+                continue;
+            }
+            // Annotations
+            const annotationMatch = trimmed.match(/^@(\w+)/);
+            if (annotationMatch) {
+                const nextLine = lines[i + 1] || '';
+                const nextLineTrimmed = nextLine.trim();
+
+                let target = 'unknown';
+                let targetName = '';
+
+                if (nextLineTrimmed.match(/^(class|enum|mixin)\s+(\w+)/)) {
+                    target = 'class';
+                    targetName = nextLineTrimmed.match(/^(class|enum|mixin)\s+(\w+)/)?.[2] || '';
+                } else if (nextLineTrimmed.match(/^\s*(static\s+)?[\w<>\[\]?,\s]+\s+(\w+)\s*\(/)) {
+                    target = 'function';
+                    targetName = nextLineTrimmed.match(/^\s*(static\s+)?[\w<>\[\]?,\s]+\s+(\w+)\s*\(/)?.[2] || '';
+                } else if (nextLineTrimmed.match(/^\s+(final|const|late)?\s*(final|const)?\s*[\w<>\[\]?,\s]+\s+(\w+)\s*=/)) {
+                    target = 'field';
+                    targetName = nextLineTrimmed.match(/^\s+(final|const|late)?\s*(final|const)?\s*[\w<>\[\]?,\s]+\s+(\w+)\s*=/)?.[3] || '';
+                }
+
+                result.annotations.push({
+                    name: annotationMatch[1],
+                    target,
+                    targetName,
+                    line: lineNum,
+                });
+            }
+
             // Classes
             const cls = trimmed.match(/^(abstract\s+)?class\s+(\w+)(?:\s+extends\s+([\w<>,\s]+?))?(?:\s+with\s+([\w<>,\s]+?))?(?:\s+implements\s+([\w<>,\s]+?))?\s*\{/);
             if (cls) {
@@ -194,9 +313,26 @@ export class DartParser {
                     mixins: cls[4] ? cls[4].split(',').map(s => s.trim()) : [],
                     implements: cls[5] ? cls[5].split(',').map(s => s.trim()) : [],
                     isAbstract: !!cls[1], isPrivate: name.startsWith('_'),
+                    methods: [], properties: []
                 });
                 currentClass = name;
                 classBraceStart = braceDepth;
+                
+                // Extract constructors
+                for (let j = i + 1; j < lines.length; j++) {
+                    const classLine = lines[j];
+                    const ctorMatch = classLine.match(/^\s+(const\s+)?(factory\s+)?(\w+)\s*(\.\w+)?\s*\(([^)]*)\)\s*(:\s*[^{]+)?\{/);
+                    if (ctorMatch && ctorMatch[3] === name) {
+                        result.constructors.push({
+                            name: ctorMatch[4] ? ctorMatch[4].substring(1) : name,
+                            className: name,
+                            isFactory: !!ctorMatch[2],
+                            isConst: !!ctorMatch[1],
+                            params: ctorMatch[5].trim(),
+                            line: j + 1,
+                        });
+                    }
+                }
                 continue;
             }
             // Track braces
@@ -222,19 +358,62 @@ export class DartParser {
                 continue;
             }
             if (inBuildMethod) { buildLines.push(line); continue; }
-            // Methods
+            // Methods and Properties
             if (currentClass) {
-                const m = line.match(/^\s+(static\s+)?([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(([^)]*)\)\s*(async\s*)?\{/);
-                if (m && !SKIP_METHODS.has(m[3]) && m[3] !== currentClass) {
-                    result.functions.push({
-                        name: m[3], returnType: m[2].trim(), params: m[4].trim(),
-                        line: lineNum, isPrivate: m[3].startsWith('_'),
-                        isAsync: !!m[5], isStatic: !!m[1], parentClass: currentClass,
-                    });
-                    currentFunction = m[3];
+                const methodMatch = line.match(/^\s+(static\s+)?([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(([^)]*)\)\s*(async\s*)?\{/);
+                if (methodMatch && !SKIP_METHODS.has(methodMatch[3])) {
+                    const methodInfo: FunctionInfo = {
+                        name: methodMatch[3], returnType: methodMatch[2].trim(), params: methodMatch[4].trim(),
+                        line: lineNum, isPrivate: methodMatch[3].startsWith('_'),
+                        isAsync: !!methodMatch[5], isStatic: !!methodMatch[1], parentClass: currentClass,
+                    };
+                    const cls = result.classes.find(c => c.name === currentClass);
+                    if (cls) cls.methods.push(methodInfo);
+                    currentFunction = methodMatch[3];
                     functionBraceStart = braceDepth - 1;
                 }
-                continue;
+
+                const getterMatch = line.match(/^\s+(\w+)\s+get\s+(\w+)\s*(=>|{)/);
+                if (getterMatch) {
+                    result.properties.push({
+                        name: getterMatch[2], type: getterMatch[1].trim(), className: currentClass,
+                        isFinal: false, isConst: false, isStatic: false, isPrivate: getterMatch[2].startsWith('_'),
+                        isGetter: true, isSetter: false, line: lineNum,
+                    });
+                }
+
+                const setterMatch = line.match(/^\s+(\w+)\s+set\s+(\w+)\s*\(([^)]*)\)/);
+                if (setterMatch) {
+                    result.properties.push({
+                        name: setterMatch[2], type: setterMatch[3].trim(), className: currentClass,
+                        isFinal: false, isConst: false, isStatic: false, isPrivate: setterMatch[2].startsWith('_'),
+                        isGetter: false, isSetter: true, line: lineNum,
+                    });
+                }
+
+                const fieldMatch = line.match(/^\s+(final|const|late)?\s*(final|const)?\s*(static\s+)?([\w<>\[\]?,\s]+?)\s+(\w+)\s*(=\s*[^;]+)?;/);
+                if (fieldMatch && !fieldMatch[5].includes('(')) {
+                    result.properties.push({
+                        name: fieldMatch[5], type: fieldMatch[4].trim(), className: currentClass,
+                        isFinal: fieldMatch[1] === 'final' || fieldMatch[2] === 'final',
+                        isConst: fieldMatch[1] === 'const' || fieldMatch[2] === 'const',
+                        isStatic: !!fieldMatch[3], isPrivate: fieldMatch[5].startsWith('_'),
+                        isGetter: false, isSetter: false, line: lineNum,
+                    });
+                }
+            }
+            // Top-level variables
+            if (!currentClass) {
+                const varMatch = trimmed.match(/^(final|const|late)?\s*(final|const)?\s*([\w<>\[\]?,\s]+?)\s+(\w+)\s*(=\s*[^;]+)?;/);
+                if (varMatch && !RESERVED.has(varMatch[4])) {
+                    result.variables.push({
+                        name: varMatch[4], type: varMatch[3].trim(),
+                        value: varMatch[5] ? varMatch[5].replace('=', '').trim() : undefined,
+                        line: lineNum, isConst: varMatch[1] === 'const' || varMatch[2] === 'const',
+                        isFinal: varMatch[1] === 'final' || varMatch[2] === 'final',
+                        isPrivate: varMatch[4].startsWith('_'), isTopLevel: true,
+                    });
+                }
             }
             // Top-level functions
             if (!currentClass) {

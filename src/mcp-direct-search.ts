@@ -3,7 +3,7 @@ import * as path from 'path';
 
 export interface SearchResult {
   name: string;
-  type: 'class_definition' | 'function_definition' | 'function_call' | 'enum_definition' | 'mixin_definition';
+  type: 'class_definition' | 'function_definition' | 'function_call' | 'enum_definition' | 'mixin_definition' | 'extension_definition' | 'typedef_definition' | 'variable_definition' | 'constructor_definition' | 'property_definition' | 'annotation_definition';
   file: string;
   line: number;
   context?: string;
@@ -11,6 +11,7 @@ export interface SearchResult {
   callerClass?: string | null;
   callerFunction?: string | null;
   _source?: string;
+  subtype?: string;
 }
 
 export class DirectSearch {
@@ -143,6 +144,123 @@ export class DirectSearch {
               results.push({
                 name: mixinMatch[1],
                 type: 'mixin_definition',
+                file,
+                line: i + 1,
+              });
+            }
+          }
+        }
+      }
+
+      // Search for extension definitions
+      if (!filter || filter === 'extension') {
+        if (searchMode === 'definitions' || searchMode === 'both') {
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            const extMatch = line.match(/^extension\s+(\w+)?\s+on\s+(\w+)/);
+            if (extMatch) {
+              const name = extMatch[1] || 'unnamed extension';
+              if (name.toLowerCase().includes(q) || extMatch[2].toLowerCase().includes(q)) {
+                results.push({
+                  name,
+                  type: 'extension_definition',
+                  subtype: `on ${extMatch[2]}`,
+                  file,
+                  line: i + 1,
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // Search for typedef definitions
+      if (!filter || filter === 'typedef') {
+        if (searchMode === 'definitions' || searchMode === 'both') {
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            const tdMatch = line.match(/^typedef\s+(\w+)\s*=/);
+            if (tdMatch && tdMatch[1].toLowerCase().includes(q)) {
+              results.push({
+                name: tdMatch[1],
+                type: 'typedef_definition',
+                file,
+                line: i + 1,
+              });
+            }
+          }
+        }
+      }
+
+      // Search for top-level variable definitions
+      if (!filter || filter === 'variable') {
+        if (searchMode === 'definitions' || searchMode === 'both') {
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            const varMatch = line.match(/^(final|const|late)?\s*(final|const)?\s*([\w<>\[\]?,\s]+?)\s+(\w+)\s*(=\s*[^;]+)?;/);
+            if (varMatch && varMatch[4].toLowerCase().includes(q)) {
+              results.push({
+                name: varMatch[4],
+                type: 'variable_definition',
+                subtype: varMatch[3],
+                file,
+                line: i + 1,
+              });
+            }
+          }
+        }
+      }
+
+      // Search for constructor definitions
+      if (!filter || filter === 'constructor') {
+        if (searchMode === 'definitions' || searchMode === 'both') {
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const ctorMatch = line.match(/^\s+(const\s+)?(factory\s+)?(\w+)\s*(\.\w+)?\s*\(/);
+            if (ctorMatch) {
+              const fullName = `${ctorMatch[3]}${ctorMatch[4] || ''}`;
+              if (fullName.toLowerCase().includes(q)) {
+                results.push({
+                  name: fullName,
+                  type: 'constructor_definition',
+                  file,
+                  line: i + 1,
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // Search for properties (Fields, Getters, Setters)
+      if (!filter || filter === 'property') {
+        if (searchMode === 'definitions' || searchMode === 'both') {
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const propMatch = line.match(/^\s+(static\s+)?(final|const|late)?\s*(final|const)?\s*([\w<>\[\]?,\s]+?)\s+(\w+)\s*(?:[;=]|\s+get\s+)/);
+            if (propMatch && propMatch[5].toLowerCase().includes(q)) {
+              results.push({
+                name: propMatch[5],
+                type: 'property_definition',
+                subtype: propMatch[4],
+                file,
+                line: i + 1,
+              });
+            }
+          }
+        }
+      }
+
+      // Search for annotations
+      if (!filter || filter === 'annotation') {
+        if (searchMode === 'definitions' || searchMode === 'both') {
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            const annMatch = line.match(/^@(\w+)/);
+            if (annMatch && annMatch[1].toLowerCase().includes(q)) {
+              results.push({
+                name: `@${annMatch[1]}`,
+                type: 'annotation_definition',
                 file,
                 line: i + 1,
               });
