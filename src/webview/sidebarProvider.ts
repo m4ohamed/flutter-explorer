@@ -189,6 +189,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       <div class="pubspec-content" id="pubspecContent"></div>
     </div>
     <!-- Analysis Tab -->
+    <div class="tab-content" id="tab-analysis">
       <div class="pubspec-content" id="analysisContent"></div>
     </div>
     <!-- Libraries Tab -->

@@ -124,11 +124,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const cacheLoaded = indexManager.loadCache();
     if (cacheLoaded) {
         updateStatusBar(indexManager);
-        // Start file watcher for incremental updates
         fileWatcher.start();
         context.subscriptions.push(fileWatcher);
+        
+        // Build reverse dependencies in background
+        indexManager.buildReverseDependencies().catch(err => {
+            console.error('Error building reverse dependencies:', err);
+        });
     } else {
-        // No cache → build full index with progress in the background
+        // Build index without blocking on reverse dependencies
         vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Notification,
@@ -140,7 +144,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 updateStatusBar(indexManager);
             },
         );
-        // Start file watcher after initial build
+        
         fileWatcher.start();
         context.subscriptions.push(fileWatcher);
     }

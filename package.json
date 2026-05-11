@@ -38,7 +38,8 @@
                 {
                     "id": "flutterExplorer.sidebar",
                     "name": "Flutter Explorer",
-                    "type": "webview"
+                    "type": "webview",
+                    "icon": "resources/icon.png "
                 }
             ]
         },
@@ -75,6 +76,11 @@
                     "type": "number",
                     "default": 300,
                     "description": "Debounce delay (ms) for file change events"
+                },
+                "flutterExplorer.enableReverseDependencies": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable reverse dependencies analysis (may slow down indexing in large projects)"
                 }
             }
         }

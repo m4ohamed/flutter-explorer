@@ -61,7 +61,13 @@ export class IndexManager {
     // Index packages
     this.packages = PackageIndexer.indexPackages(this.workspaceRoot);
 
-    this.buildReverseDependencies();
+    // Don't block on reverse dependencies
+    if (this.shouldBuildReverseDeps()) {
+      this.buildReverseDependencies().catch(err => {
+        console.error('Error building reverse dependencies:', err);
+      });
+    }
+
     this.saveCache();
     this.onIndexChanged.fire();
   }
@@ -88,11 +94,33 @@ export class IndexManager {
         this.arbIndex.set(relPath, translations);
       }
       this.saveCache();
-      this.buildReverseDependencies();
+      
+      // Debounce reverse dependencies rebuild
+      if (this.shouldBuildReverseDeps()) {
+        this.debounceReverseDeps();
+      }
+      
       this.onIndexChanged.fire();
     } catch {
       // File might have been deleted between event and processing
     }
+  }
+
+  private shouldBuildReverseDeps(): boolean {
+    return vscode.workspace.getConfiguration('flutterExplorer').get<boolean>('enableReverseDependencies', true);
+  }
+
+  private reverseDepsTimeout: NodeJS.Timeout | null = null;
+
+  private debounceReverseDeps(): void {
+    if (this.reverseDepsTimeout) {
+      clearTimeout(this.reverseDepsTimeout);
+    }
+    this.reverseDepsTimeout = setTimeout(() => {
+      this.buildReverseDependencies().catch(err => {
+        console.error('Error building reverse dependencies:', err);
+      });
+    }, 2000); // 2 seconds debounce
   }
 
   private computeHash(content: string): string {
@@ -100,7 +128,7 @@ export class IndexManager {
   }
 
   /** Build reverse dependencies across all files */
-  public buildReverseDependencies(): void {
+  public async buildReverseDependencies(): Promise<void> {
     // Collect all imports and cross-reference
     for (const [filePath, info] of this.index.entries()) {
       for (const imp of info.imports) {
