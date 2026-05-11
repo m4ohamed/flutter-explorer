@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import * as fs from "fs";
 import * as path from "path";
+import { DirectSearch } from './mcp-direct-search.js';
 
 /**
  * Flutter Explorer MCP Server
@@ -11,6 +12,8 @@ import * as path from "path";
 
 // Current project path, defaults to environment variable or current working directory
 let currentProjectPath = process.env.FLUTTER_PROJECT_PATH || process.cwd();
+const INDEX_PATH = () => path.join(currentProjectPath, ".vscode", "flutter-explorer-index.json");
+const PUBSPEC_PATH = () => path.join(currentProjectPath, "pubspec.yaml");
 
 const server = new McpServer({
   name: "flutter-explorer-mcp",
@@ -20,7 +23,7 @@ const server = new McpServer({
 // Helper to read the index file
 function readIndex() {
   try {
-    const indexPath = path.join(currentProjectPath, ".vscode", "flutter-explorer-index.json");
+    const indexPath = INDEX_PATH();
     if (fs.existsSync(indexPath)) {
       const data = fs.readFileSync(indexPath, "utf-8");
       return JSON.parse(data);
@@ -41,40 +44,83 @@ server.registerTool(
     inputSchema: z.object({
       query: z.string().describe("The search term (class name, function name, etc.)"),
       filter: z.enum(["class", "function", "widget", "enum", "mixin"]).optional().describe("Filter by type"),
+      searchMode: z.enum(["definitions", "calls", "both"]).optional().describe("Search in definitions, calls, or both (default: both)"),
+      useDirectSearch: z.boolean().optional().describe("Force direct file search even if index exists (default: false)"),
     }),
   },
-  async ({ query, filter }) => {
+  async ({ query, filter, searchMode = "both", useDirectSearch = false }) => {
     const index = readIndex();
-    if (!index) return { content: [{ type: "text", text: "Index not found. Please build the index in VS Code first." }] };
-
     const results: any[] = [];
     const q = query.toLowerCase();
-
-    for (const file in index.dart) {
-      const info = index.dart[file];
-      
-      // Search Classes
-      if (!filter || filter === "class" || filter === "widget") {
-        for (const c of info.classes) {
-          if (c.name.toLowerCase().includes(q)) {
-            if (filter === "widget" && c.type === "plain") continue;
-            results.push({ name: c.name, type: c.type, file, line: c.line });
+    const mode = searchMode || "both";
+  
+    // Try indexed search first  
+    if (index && !useDirectSearch) {
+      for (const file in index.dart) {
+        const info = index.dart[file];
+          
+        if (!filter || filter === "class" || filter === "widget") {
+          if (mode === "definitions" || mode === "both") {
+            for (const c of info.classes) {
+              if (c.name.toLowerCase().includes(q)) {
+                if (filter === "widget" && c.type === "plain") continue;
+                results.push({ name: c.name, type: "class_definition", subtype: c.type, file, line: c.line });
+              }
+            }
           }
         }
-      }
-
-      // Search Functions
-      if (!filter || filter === "function") {
-        for (const f of info.functions) {
-          if (f.name.toLowerCase().includes(q)) {
-            results.push({ name: f.name, type: "function", parent: f.parentClass, file, line: f.line });
+  
+        if (!filter || filter === "function") {
+          if (mode === "definitions" || mode === "both") {
+            for (const f of info.functions) {
+              if (f.name.toLowerCase().includes(q)) {
+                results.push({ name: f.name, type: "function_definition", parent: f.parentClass, file, line: f.line });
+              }
+            }
+          }
+            
+          if ((mode === "calls" || mode === "both") && info.calls) {
+            for (const call of info.calls) {
+              if (call.name.toLowerCase().includes(q)) {
+                results.push({ 
+                  name: call.name, 
+                  type: "function_call", 
+                  callerClass: call.callerClass, 
+                  callerFunction: call.callerFunction,
+                  file, 
+                  line: call.line,
+                  context: call.context,
+                });
+              }
+            }
           }
         }
       }
     }
-
+  
+    // Fallback to direct search if no results or index not found  
+    if (results.length === 0 || !index || useDirectSearch) {
+      const directSearch = new DirectSearch(currentProjectPath);
+      const directResults = directSearch.search(query, filter, mode);
+        
+      // Add source indicator  
+      for (const result of directResults) {
+        results.push({
+          ...result,
+          _source: !index || useDirectSearch ? "direct_search" : "index",
+        });
+      }
+    }
+  
     return {
-      content: [{ type: "text", text: JSON.stringify(results.slice(0, 20), null, 2) }],
+      content: [{ 
+        type: "text", 
+        text: JSON.stringify({
+          results: results.slice(0, 50),
+          source: !index || useDirectSearch ? "direct_search" : "index",
+          note: !index ? "Index not found. Using direct file search (slower)." : "",
+        }, null, 2) 
+      }],
     };
   }
 );
@@ -139,7 +185,7 @@ server.registerTool(
   },
   async () => {
     try {
-      const pubspecPath = path.join(currentProjectPath, "pubspec.yaml");
+      const pubspecPath = PUBSPEC_PATH();
       if (fs.existsSync(pubspecPath)) {
         const content = fs.readFileSync(pubspecPath, "utf-8");
         return { content: [{ type: "text", text: content }] };

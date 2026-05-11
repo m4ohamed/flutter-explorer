@@ -52,6 +52,15 @@ export interface WarningInfo {
     message: string;
     line: number;
 }
+export interface FunctionCall {
+    name: string;
+    line: number;
+    callerClass: string | null;
+    callerFunction: string | null;
+    isStatic: boolean;
+    isChained: boolean;
+    context: string;
+}
 export interface ClassUsage {
     className: string;
     usedInFiles: string[]; // Files that use this class
@@ -70,6 +79,7 @@ export interface DartFileInfo {
     filePath: string;
     classes: ClassInfo[];
     functions: FunctionInfo[];
+    calls: FunctionCall[];
     imports: ImportInfo[];
     exports: string[];
     widgets: WidgetInfo[];
@@ -100,13 +110,15 @@ export class DartParser {
     parse(filePath: string, content: string): DartFileInfo {
         const lines = content.split('\n');
         const result: DartFileInfo = {
-            filePath, classes: [], functions: [], imports: [], exports: [],
-            widgets: [], enums: [], mixins: [], warnings: [], lastModified: Date.now(),
+            filePath, classes: [], functions: [], calls: [],
+            imports: [], exports: [], widgets: [], enums: [], mixins: [], warnings: [], lastModified: Date.now(),
             classUsages: [], functionUsages: [],
         };
         let currentClass: string | null = null;
+        let currentFunction: string | null = null;
         let braceDepth = 0;
         let classBraceStart = 0;
+        let functionBraceStart = 0;
         let inBuildMethod = false;
         let buildBraceStart = 0;
         let buildLines: string[] = [];
@@ -130,6 +142,9 @@ export class DartParser {
             const exp = trimmed.match(/^export\s+['"]([^'"]+)['"]\s*;/);
             if (exp) { result.exports.push(exp[1]); continue; }
 
+            if (trimmed.startsWith('import ') || trimmed.startsWith('export ')) {
+                continue;
+            }
             // Hardcoded Text Detection
             const textMatch = line.match(/Text\s*\(\s*(['"])(.*?)\1/);
             if (textMatch && !line.includes('.tr') && !line.includes('S.of') && !line.includes('Intl.message')) {
@@ -190,6 +205,7 @@ export class DartParser {
                 else if (ch === '}') {
                     braceDepth--;
                     if (currentClass && braceDepth <= classBraceStart) { currentClass = null; }
+                    if (currentFunction && braceDepth <= functionBraceStart) { currentFunction = null; }
                     if (inBuildMethod && braceDepth <= buildBraceStart) {
                         inBuildMethod = false;
                         const wt = this.parseWidgetTree(buildLines.join('\n'));
@@ -215,6 +231,8 @@ export class DartParser {
                         line: lineNum, isPrivate: m[3].startsWith('_'),
                         isAsync: !!m[5], isStatic: !!m[1], parentClass: currentClass,
                     });
+                    currentFunction = m[3];
+                    functionBraceStart = braceDepth - 1;
                 }
                 continue;
             }
@@ -227,11 +245,14 @@ export class DartParser {
                         line: lineNum, isPrivate: f[2].startsWith('_'),
                         isAsync: !!f[4], isStatic: false, parentClass: null,
                     });
+                    currentFunction = f[2];
+                    functionBraceStart = braceDepth - 1;
                 }
             }
         }
         // Analyze usages before returning
         this.analyzeUsages(content, result);
+        this.extractFunctionCalls(lines, result, currentClass, currentFunction);
         return result;
     }
     private extractEnumValues(lines: string[], startIndex: number): string[] {
@@ -346,5 +367,52 @@ export class DartParser {
             }
         }
         return { type: 'none', name: '' };
+    }
+
+    private extractFunctionCalls(lines: string[], result: DartFileInfo, currentClass: string | null, currentFunction: string | null): void {
+        const classNameSet = new Set(result.classes.map(c => c.name));
+        const RESERVED_CALLS = new Set([
+            'print', 'setState', 'Navigator', 'Scaffold', 'Container', 'Text',
+            'Column', 'Row', 'Stack', 'Padding', 'SizedBox', 'Expanded', 'Flexible',
+            'if', 'for', 'while', 'switch', 'return', 'await', 'async', 'try', 'catch',
+            'throw', 'finally', 'break', 'continue', 'import', 'export', 'library',
+            'part', 'of', 'part of', 'show', 'hide', 'as', 'is', 'assert', 'rethrow',
+        ]);
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const trimmed = line.trim();
+            const lineNum = i + 1;
+            if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*'))
+                continue;
+            if (trimmed.match(/^(class|enum|mixin|import|export)\s/))
+                continue;
+            if (trimmed.match(/^\s*(static\s+)?[\w<>\[\]?,\s]+\s+\w+\s*\([^)]*\)\s*(async\s*)?\{/))
+                continue;
+            const callPattern = /\b([a-zA-Z_]\w*)\s*\(/g;
+            let match;
+            while ((match = callPattern.exec(line)) !== null) {
+                const funcName = match[1];
+                if (RESERVED_CALLS.has(funcName))
+                    continue;
+                if (funcName === currentFunction)
+                    continue;
+                if (classNameSet.has(funcName) && line.includes(`new ${funcName}`))
+                    continue;
+                const contextStart = Math.max(0, i - 1);
+                const contextEnd = Math.min(lines.length - 1, i + 1);
+                const context = lines.slice(contextStart, contextEnd + 1).join('\n').trim();
+                const isStatic = line.includes(`${funcName}(`) && !line.includes(`.${funcName}(`);
+                const isChained = line.includes(`.${funcName}(`);
+                result.calls.push({
+                    name: funcName,
+                    line: lineNum,
+                    callerClass: currentClass,
+                    callerFunction: currentFunction,
+                    isStatic,
+                    isChained,
+                    context: context.substring(0, 200),
+                });
+            }
+        }
     }
 }
