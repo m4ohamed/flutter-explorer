@@ -809,7 +809,7 @@ export class DartParser {
     /**
      * Extract the full body of a class, function, or method from the source code
      */
-    extractCodeBlock(content: string, elementType: 'class' | 'function' | 'method', name: string, parentClass?: string): { body: string; startLine: number; endLine: number; comments: string[] } | null {
+    extractCodeBlock(content: string, elementType: 'class' | 'function' | 'method' | 'enum' | 'mixin' | 'extension', name: string, parentClass?: string): { body: string; startLine: number; endLine: number; comments: string[] } | null {
         const lines = content.split('\n');
         let startLine = -1;
         let endLine = -1;
@@ -828,8 +828,20 @@ export class DartParser {
                 continue;
             }
 
-            // Match class definition
+            // Match definition based on elementType
             if (elementType === 'class' && trimmed.match(new RegExp(`^class\\s+${name}\\s*`))) {
+                startLine = i;
+                found = true;
+            } else if (elementType === 'enum' && trimmed.match(new RegExp(`^enum\\s+${name}\\s*`))) {
+                startLine = i;
+                found = true;
+            } else if (elementType === 'mixin' && trimmed.match(new RegExp(`^mixin\\s+${name}\\s*`))) {
+                startLine = i;
+                found = true;
+            } else if (elementType === 'extension' && trimmed.match(new RegExp(`^extension\\s+${name}\\s*`))) {
+                startLine = i;
+                found = true;
+            } else if (elementType === 'extension' && name === 'unnamed extension' && trimmed.match(/^extension\s+on\s+/)) {
                 startLine = i;
                 found = true;
             }
@@ -840,12 +852,12 @@ export class DartParser {
                     // Search backwards for the class definition
                     let inCorrectClass = false;
                     for (let j = i; j >= 0; j--) {
-                        if (lines[j].match(new RegExp(`^class\\s+${parentClass}\\s*`))) {
+                        if (lines[j].match(new RegExp(`^(class|mixin|extension|enum)\\s+${parentClass}\\s*`))) {
                             inCorrectClass = true;
                             break;
                         }
-                        if (lines[j].match(/^class\s+\w+/)) {
-                            break; // Found a different class
+                        if (lines[j].match(/^(class|mixin|extension|enum)\s+\w+/)) {
+                            break; // Found a different class/container
                         }
                     }
                     if (!inCorrectClass) continue;

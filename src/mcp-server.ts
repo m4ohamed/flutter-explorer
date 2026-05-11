@@ -626,7 +626,7 @@ server.registerTool(
   {
     description: "Get the full body of a class, function, or method including comments",
     inputSchema: z.object({
-      elementType: z.enum(["class", "function", "method"]).describe("Type of element to extract"),
+      elementType: z.enum(["class", "function", "method", "enum", "mixin", "extension"]).describe("Type of element to extract"),
       name: z.string().describe("Name of the class, function, or method"),
       filePath: z.string().optional().describe("Relative path to the file (optional, will search all files if not provided)"),
       parentClass: z.string().optional().describe("Parent class name (required for methods)"),
@@ -650,6 +650,12 @@ server.registerTool(
 
         if (elementType === 'class') {
           found = info.classes.some((c: ClassInfo) => c.name === name);
+        } else if (elementType === 'enum') {
+          found = (info.enums || []).some((e: any) => e.name === name);
+        } else if (elementType === 'mixin') {
+          found = (info.mixins || []).some((m: any) => m.name === name);
+        } else if (elementType === 'extension') {
+          found = (info.extensions || []).some((e: any) => e.name === name || (name === 'unnamed extension' && !e.name));
         } else if (elementType === 'function') {
           found = info.functions.some((f: FunctionInfo) => f.name === name && !f.parentClass);
         } else if (elementType === 'method') {
@@ -962,6 +968,90 @@ server.registerTool(
           body: finalBody,
           hasContext: includeContext
         }, null, 2)
+      }],
+    };
+  }
+);
+
+// 15. Text Search Tool
+server.registerTool(
+  "flutter_search_text",
+  {
+    description: "Search for specific text, strings, or comments across all Dart files",
+    inputSchema: z.object({
+      query: z.string().describe("The text or regex to search for"),
+      isRegex: z.boolean().optional().describe("Whether to treat query as a regular expression (default: false)"),
+      caseInsensitive: z.boolean().optional().describe("Whether the search should be case-insensitive (default: true)"),
+      includeComments: z.boolean().optional().describe("Whether to include comments in the search (default: true)"),
+      includeStrings: z.boolean().optional().describe("Whether to include string literals in the search (default: true)"),
+    }),
+  },
+  async (options) => {
+    const directSearch = new DirectSearch(currentProjectPath);
+    const results = directSearch.searchText(options.query, options);
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          results,
+          totalResults: results.length,
+          query: options.query
+        }, null, 2)
+      }],
+    };
+  }
+);
+
+// 16. Index Management Tools
+server.registerTool(
+  "flutter_get_index_status",
+  {
+    description: "Check the status and last update time of the project index",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    const indexPath = INDEX_PATH();
+    if (!fs.existsSync(indexPath)) {
+      return { content: [{ type: "text", text: "Index file not found. A full rebuild is required." }] };
+    }
+
+    try {
+      const stats = fs.statSync(indexPath);
+      const index = readIndex();
+      const fileCount = index ? Object.keys(index.dart || {}).length : 0;
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            exists: true,
+            lastModified: stats.mtime,
+            sizeBytes: stats.size,
+            indexedFiles: fileCount,
+            path: indexPath
+          }, null, 2)
+        }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error checking index status: ${error}` }] };
+    }
+  }
+);
+
+server.registerTool(
+  "flutter_rebuild_index",
+  {
+    description: "Request a manual rebuild of the project index (Note: Requires the VS Code extension to be active for a full background rebuild)",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    // In a real scenario, we might trigger a message to the VS Code extension
+    // For the MCP standalone, we can only report that it needs the extension
+    return {
+      content: [{
+        type: "text",
+        text: "Rebuild request received. Please ensure the Flutter Explorer VS Code extension is active to perform a full project re-indexing. The MCP server will automatically pick up the new index once completed."
       }],
     };
   }

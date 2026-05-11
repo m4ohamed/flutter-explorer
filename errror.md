@@ -14,9 +14,12 @@
 - [x] Fix extension method/property collection.
 
 ## New Tasks - Advanced MCP Tools
-- [x] Implement `extractCodeBlock` in `DartParser`.
+- [x] Implement `extractCodeBlock` in `DartParser` for all types (enums, mixins, extensions).
 - [x] Implement `CodeAnalyzer` for logic flow and dependencies.
-- [x] Register new tools in `mcp-server.ts`.
+- [x] Register `flutter_get_code_block`, `flutter_analyze_logic_flow`, `flutter_get_dependencies`, `flutter_read_fragment` in `mcp-server.ts`.
+- [x] Implement and register `flutter_search_text` for general text search.
+- [x] Add index management tools (`flutter_get_index_status`, `flutter_rebuild_index`).
+- [x] Verified type safety with `npx tsc --noEmit`.
 
 
 ### Potential Issues to Avoid

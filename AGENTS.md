@@ -26,6 +26,9 @@ Use the `flutter-explorer-mcp` tools to gather context.
   
 - **`flutter_get_file_info`**: Get detailed information about a specific Dart file  
   
+- **`flutter_search_text`**: Search for specific text, strings, or comments across all Dart files
+  - Supports: Regex, Case-sensitivity, Filter by comments/strings
+  
 ### Dependencies & Packages  
 - **`flutter_list_packages`**: List all project dependencies from pubspec.lock  
   - Filters: `direct`, `dev`, `transitive`, `all`  
@@ -34,6 +37,15 @@ Use the `flutter-explorer-mcp` tools to gather context.
 - **`flutter_get_pubspec`**: Read and analyze pubspec.yaml  
   
 ### Code Analysis  
+- **`flutter_get_code_block`**: Get the full body of a class, function, or method including comments
+  - Supports: `class`, `function`, `method`, `enum`, `mixin`, `extension`
+  
+- **`flutter_analyze_logic_flow`**: Analyze a function's logic and return a summarized flow of steps
+  
+- **`flutter_get_dependencies`**: Get the dependencies (repositories, services, etc.) that a class depends on from its constructor
+  
+- **`flutter_read_fragment`**: Read a code fragment by element name with surrounding context
+  
 - **`flutter_get_code_warnings`**: Get all code warnings (hardcoded strings/colors)  
   
 - **`flutter_get_reverse_deps`**: Get reverse dependencies for any element  
@@ -50,6 +62,10 @@ Use the `flutter-explorer-mcp` tools to gather context.
   
 - **`flutter_delete_translation`**: Delete a translation key from all ARB files  
   
+### Index Management
+- **`flutter_get_index_status`**: Check the status and last update time of the project index
+- **`flutter_rebuild_index`**: Request a manual rebuild of the project index (requires active VS Code extension)
+
 ### Project Path Management  
 - **`flutter_set_project_path`**: Set the Flutter project root path for the MCP server  
   - Validates that pubspec.yaml exists in the specified path  

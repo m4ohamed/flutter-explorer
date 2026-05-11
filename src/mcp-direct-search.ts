@@ -272,4 +272,69 @@ export class DirectSearch {
 
     return results.slice(0, 50);
   }
+
+  /** Search for general text (strings, comments) in all Dart files */
+  searchText(query: string, options: { isRegex?: boolean; caseInsensitive?: boolean; includeComments?: boolean; includeStrings?: boolean } = {}): TextSearchResult[] {
+    const results: TextSearchResult[] = [];
+    const { isRegex = false, caseInsensitive = true, includeComments = true, includeStrings = true } = options;
+    const dartFiles = this.findDartFiles();
+
+    let regex: RegExp;
+    try {
+      const flags = caseInsensitive ? 'gi' : 'g';
+      regex = isRegex ? new RegExp(query, flags) : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
+    } catch (e) {
+      return [];
+    }
+
+    for (const file of dartFiles) {
+      const fullPath = path.join(this.projectRoot, file);
+      const content = fs.readFileSync(fullPath, 'utf-8');
+      const lines = content.split('\n');
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        let match;
+        
+        while ((match = regex.exec(line)) !== null) {
+          const matchedText = match[0];
+          const index = match.index;
+          
+          // Check if match is in a comment
+          const lineBeforeMatch = line.substring(0, index);
+          const isComment = lineBeforeMatch.includes('//') || line.trim().startsWith('///');
+          
+          // Check if match is in a string (rough check)
+          const quotesCount = (lineBeforeMatch.match(/['"]/g) || []).length;
+          const isString = quotesCount % 2 !== 0;
+
+          if ((isComment && includeComments) || (isString && includeStrings) || (!isComment && !isString)) {
+            const contextStart = Math.max(0, i - 1);
+            const contextEnd = Math.min(lines.length - 1, i + 1);
+            const context = lines.slice(contextStart, contextEnd + 1).join('\n').trim();
+
+            results.push({
+              text: matchedText,
+              file,
+              line: i + 1,
+              context: context.substring(0, 200),
+              isComment,
+              isString
+            });
+          }
+        }
+      }
+    }
+
+    return results.slice(0, 100);
+  }
+}
+
+export interface TextSearchResult {
+  text: string;
+  file: string;
+  line: number;
+  context: string;
+  isComment: boolean;
+  isString: boolean;
 }
