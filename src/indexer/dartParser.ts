@@ -299,7 +299,7 @@ export class DartParser {
             // Extensions
             const extMatch = trimmed.match(/^extension\s+(\w+)?\s+on\s+([\w<>\[\]?,\s]+?)\s*\{/);
             if (extMatch) {
-                const name = extMatch[1] || 'UnnamedExtension';
+                const name = extMatch[1] || `UnnamedExtension_${lineNum}`;
                 result.extensions.push({
                     name,
                     onType: extMatch[2].trim(),
@@ -439,6 +439,14 @@ export class DartParser {
                         isFinal: false, isConst: false, isStatic: false, isPrivate: getterMatch[2].startsWith('_'),
                         isGetter: true, isSetter: false, line: lineNum,
                     });
+                    const prop = result.properties[result.properties.length - 1];
+                    const cls = result.classes.find(c => c.name === currentClass);
+                    if (cls) {
+                        cls.properties.push(prop);
+                    } else {
+                        const ext = result.extensions.find(e => e.name === currentClass);
+                        if (ext) ext.properties.push(prop);
+                    }
                 }
 
                 const setterMatch = line.match(/^\s+(\w+)\s+set\s+(\w+)\s*\(([^)]*)\)/);
@@ -448,10 +456,13 @@ export class DartParser {
                         isFinal: false, isConst: false, isStatic: false, isPrivate: setterMatch[2].startsWith('_'),
                         isGetter: false, isSetter: true, line: lineNum,
                     });
-                    const ext = result.extensions.find(e => e.name === currentClass);
-                    if (ext) {
-                        const prop = result.properties[result.properties.length - 1];
-                        if (prop) ext.properties.push(prop);
+                    const prop = result.properties[result.properties.length - 1];
+                    const cls = result.classes.find(c => c.name === currentClass);
+                    if (cls) {
+                        cls.properties.push(prop);
+                    } else {
+                        const ext = result.extensions.find(e => e.name === currentClass);
+                        if (ext) ext.properties.push(prop);
                     }
                 }
 
@@ -464,10 +475,13 @@ export class DartParser {
                         isStatic: !!fieldMatch[3], isPrivate: fieldMatch[5].startsWith('_'),
                         isGetter: false, isSetter: false, line: lineNum,
                     });
-                    const ext = result.extensions.find(e => e.name === currentClass);
-                    if (ext) {
-                        const prop = result.properties[result.properties.length - 1];
-                        if (prop) ext.properties.push(prop);
+                    const prop = result.properties[result.properties.length - 1];
+                    const cls = result.classes.find(c => c.name === currentClass);
+                    if (cls) {
+                        cls.properties.push(prop);
+                    } else {
+                        const ext = result.extensions.find(e => e.name === currentClass);
+                        if (ext) ext.properties.push(prop);
                     }
                 }
             }
