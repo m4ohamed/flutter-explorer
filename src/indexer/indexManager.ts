@@ -245,7 +245,7 @@ export class IndexManager {
   }
 
   /** Get all indexed packages */
-  public getPackages(): PackageInfo[] {
+  public getAllPackages(): PackageInfo[] {
     return this.packages;
   }
 

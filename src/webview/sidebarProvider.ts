@@ -88,8 +88,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'getPackages': {
-                    const packages = this.indexManager.getPackages();
-                    this.postMessage({ command: 'packages', data: packages });
+                    const packages = this.indexManager.getAllPackages();
+                    this.postMessage({ command: 'packagesData', data: packages });
                     break;
                 }
             }
@@ -137,7 +137,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       <button class="tab" data-tab="tree" title="Widget Tree">🌳 Tree</button>
       <button class="tab" data-tab="graph" title="Dependencies">📊 Graph</button>
       <button class="tab" data-tab="pubspec" title="Pubspec">📦 Pubspec</button>
-      <button class="tab" data-tab="libraries" title="Libraries">📚 Libs</button>
+      <button class="tab" data-tab="libraries" title="External Libraries">📚 Libraries</button>
       <button class="tab" data-tab="analysis" title="Analysis">⚠️ Analysis</button>
     </div>
     <!-- Stats Bar -->
@@ -193,11 +193,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     </div>
     <!-- Libraries Tab -->
     <div class="tab-content" id="tab-libraries">
-      <div class="tree-header">
+      <div class="libraries-header">
         <span>External Libraries</span>
         <button class="icon-btn" id="refreshLibraries" title="Refresh">⟳</button>
       </div>
-      <div class="libraries-list" id="librariesList"></div>
+      <div class="libraries-content" id="librariesContent"></div>
     </div>
   </div>
   <script nonce="${nonce}">${jsContent}</script>

@@ -116,7 +116,7 @@
       case 'stats':
         renderStats(message.data);
         break;
-      case 'packages':
+      case 'packagesData':
         renderPackages(message.data);
         break;
     }
@@ -445,45 +445,25 @@
     });
   }
 
-  function renderPackages(packages) {
-    var container = document.getElementById('librariesList');
-    if (!container) { return; }
+  function renderPackages(data) {
+    var container = document.getElementById('librariesContent');
+    if (!container) return;
 
-    if (!packages || packages.length === 0) {
-      container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📚</div><div class="empty-state-text">No libraries indexed yet.<br>Rebuild index to scan pubspec.lock</div></div>';
+    if (!data || data.length === 0) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📚</div><div class="empty-state-text">No packages found.<br>Run "flutter pub get" first.</div></div>';
       return;
     }
 
     var html = '';
-    
-    // Sort packages: direct first, then dev, then transitive
-    var sorted = packages.sort(function(a, b) {
-        var score = { 'direct': 0, 'dev': 1, 'transitive': 2 };
-        if (score[a.dependencyType] !== score[b.dependencyType]) {
-            return score[a.dependencyType] - score[b.dependencyType];
-        }
-        return a.name.localeCompare(b.name);
-    });
-
-    for (var i = 0; i < sorted.length; i++) {
-      var p = sorted[i];
-      var badgeClass = 'badge-' + p.dependencyType;
-      var sourceBadge = p.source !== 'hosted' ? '<span class="dep-badge dep-badge-' + p.source + '">' + p.source + '</span>' : '';
-      
-      html += '<div class="lib-item">';
-      html += '<div class="lib-header">';
-      html += '<span class="lib-name">' + escapeHtml(p.name) + '</span>';
-      html += '<span class="lib-version">' + escapeHtml(p.version) + '</span>';
+    for (var i = 0; i < data.length; i++) {
+      var pkg = data[i];
+      html += '<div class="package-item">';
+      html += '<div class="package-name">' + escapeHtml(pkg.name) + '</div>';
+      html += '<div class="package-version">v' + escapeHtml(pkg.version) + '</div>';
+      html += '<span class="package-badge">' + escapeHtml(pkg.dependencyType) + '</span>';
+      html += '<span class="package-badge">' + escapeHtml(pkg.source) + '</span>';
       html += '</div>';
-      html += '<div class="lib-footer">';
-      html += '<span class="result-badge ' + badgeClass + '">' + p.dependencyType + '</span>';
-      html += sourceBadge;
-      if (p.description && p.description.url) {
-          html += '<span class="lib-url">' + escapeHtml(p.description.url) + '</span>';
-      }
-      html += '</div></div>';
     }
-    
     container.innerHTML = html;
   }
 
