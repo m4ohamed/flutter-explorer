@@ -598,15 +598,28 @@ body {
   margin-bottom: 8px;
 }
 
+.package-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .package-badge {
   display: inline-block;
-  padding: 2px 6px;
+  padding: 2px 8px;
   font-size: 10px;
-  border-radius: 3px;
+  font-weight: 500;
+  border-radius: 10px;
   background: var(--vscode-badge-background, #4a4a4a);
   color: var(--vscode-badge-foreground, #ffffff);
-  margin-right: 4px;
 }
+
+.package-badge.badge-direct { background: #264f78; color: #6cb6ff; }
+.package-badge.badge-dev { background: #4d3800; color: #e2c08d; }
+.package-badge.badge-transitive { background: #2a2a2a; color: #aaaaaa; }
+.package-badge.badge-hosted { background: #1a4d4d; color: #91c9c9; }
+.package-badge.badge-git { background: #1a3d1a; color: #73c991; }
+.package-badge.badge-path { background: #4d1a1a; color: #ff8888; }
 
 /* ─── Scrollbar ───────────────────────────────────────── */
 ::-webkit-scrollbar {

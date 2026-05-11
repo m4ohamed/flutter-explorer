@@ -459,10 +459,11 @@
       var pkg = data[i];
       html += '<div class="package-item">';
       html += '<div class="package-name">' + escapeHtml(pkg.name) + '</div>';
-      html += '<div class="package-version">v' + escapeHtml(pkg.version) + '</div>';
-      html += '<span class="package-badge">' + escapeHtml(pkg.dependencyType) + '</span>';
-      html += '<span class="package-badge">' + escapeHtml(pkg.source) + '</span>';
-      html += '</div>';
+      html += '<div class="package-version">Version: ' + escapeHtml(pkg.version) + '</div>';
+      html += '<div class="package-badges">';
+      html += '<span class="package-badge badge-' + pkg.dependencyType + '">' + escapeHtml(pkg.dependencyType) + '</span>';
+      html += '<span class="package-badge badge-' + pkg.source + '">' + escapeHtml(pkg.source) + '</span>';
+      html += '</div></div>';
     }
     container.innerHTML = html;
   }
