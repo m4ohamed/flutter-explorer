@@ -68,6 +68,7 @@ export interface ExtensionInfo {
     name: string;
     onType: string;
     methods: FunctionInfo[];
+    properties: PropertyInfo[];
     line: number;
     isPrivate: boolean;
 }
@@ -164,6 +165,16 @@ export interface AnnotationUsage {
     usedInFiles: string[];
     confidence: 'high' | 'medium' | 'low';
 }
+export interface EnumUsage {
+    enumName: string;
+    usedInFiles: string[];
+    confidence: 'high' | 'medium' | 'low';
+}
+export interface MixinUsage {
+    mixinName: string;
+    usedInFiles: string[];
+    confidence: 'high' | 'medium' | 'low';
+}
 export interface DartFileInfo {
     filePath: string;
     classes: ClassInfo[];
@@ -185,6 +196,8 @@ export interface DartFileInfo {
     constructorUsages: ConstructorUsage[];
     propertyUsages: PropertyUsage[];
     annotationUsages: AnnotationUsage[];
+    enumUsages: EnumUsage[];
+    mixinUsages: MixinUsage[];
     // New elements
     extensions: ExtensionInfo[];
     typedefs: TypedefInfo[];
@@ -216,6 +229,7 @@ export class DartParser {
             imports: [], exports: [], widgets: [], enums: [], mixins: [], warnings: [], lastModified: Date.now(),
             classUsages: [], functionUsages: [],
             extensionUsages: [], typedefUsages: [], variableUsages: [], constructorUsages: [], propertyUsages: [], annotationUsages: [],
+            enumUsages: [], mixinUsages: [],
             extensions: [], typedefs: [], variables: [], constructors: [], properties: [], annotations: [],
         };
         let currentClass: string | null = null;
@@ -289,7 +303,8 @@ export class DartParser {
                 result.extensions.push({
                     name,
                     onType: extMatch[2].trim(),
-                    methods: [], // Methods will be added in currentClass logic if we treat extension as a class-like scope
+                    methods: [],
+                    properties: [],
                     line: lineNum,
                     isPrivate: name.startsWith('_'),
                 });
@@ -407,7 +422,12 @@ export class DartParser {
                         isAsync: !!methodMatch[5], isStatic: !!methodMatch[1], parentClass: currentClass,
                     };
                     const cls = result.classes.find(c => c.name === currentClass);
-                    if (cls) cls.methods.push(methodInfo);
+                    if (cls) {
+                        cls.methods.push(methodInfo);
+                    } else {
+                        const ext = result.extensions.find(e => e.name === currentClass);
+                        if (ext) ext.methods.push(methodInfo);
+                    }
                     currentFunction = methodMatch[3];
                     functionBraceStart = braceDepth - 1;
                 }
@@ -428,6 +448,11 @@ export class DartParser {
                         isFinal: false, isConst: false, isStatic: false, isPrivate: setterMatch[2].startsWith('_'),
                         isGetter: false, isSetter: true, line: lineNum,
                     });
+                    const ext = result.extensions.find(e => e.name === currentClass);
+                    if (ext) {
+                        const prop = result.properties[result.properties.length - 1];
+                        if (prop) ext.properties.push(prop);
+                    }
                 }
 
                 const fieldMatch = line.match(/^\s+(final|const|late)?\s*(final|const)?\s*(static\s+)?([\w<>\[\]?,\s]+?)\s+(\w+)\s*(=\s*[^;]+)?;/);
@@ -439,6 +464,11 @@ export class DartParser {
                         isStatic: !!fieldMatch[3], isPrivate: fieldMatch[5].startsWith('_'),
                         isGetter: false, isSetter: false, line: lineNum,
                     });
+                    const ext = result.extensions.find(e => e.name === currentClass);
+                    if (ext) {
+                        const prop = result.properties[result.properties.length - 1];
+                        if (prop) ext.properties.push(prop);
+                    }
                 }
             }
             // Top-level variables
@@ -572,29 +602,117 @@ export class DartParser {
         }
         // Extensions
         for (const ext of result.extensions) {
-            result.extensionUsages.push({ extensionName: ext.name, usedInFiles: [result.filePath], confidence: 'medium' });
+            const usage: ExtensionUsage = {
+                extensionName: ext.name,
+                usedInFiles: [result.filePath],
+                confidence: 'medium'
+            };
+            const pattern = new RegExp(`\\b${ext.name}\\b`, 'g');
+            for (let i = 0; i < lines.length; i++) {
+                if (pattern.test(lines[i]) && !lines[i].includes(`extension ${ext.name}`)) {
+                    // Internal usage found
+                }
+            }
+            result.extensionUsages.push(usage);
         }
         // Typedefs
         for (const td of result.typedefs) {
-            result.typedefUsages.push({ typedefName: td.name, usedInFiles: [result.filePath], confidence: 'medium' });
+            const usage: TypedefUsage = {
+                typedefName: td.name,
+                usedInFiles: [result.filePath],
+                confidence: 'medium'
+            };
+            const pattern = new RegExp(`\\b${td.name}\\b`, 'g');
+            for (let i = 0; i < lines.length; i++) {
+                if (pattern.test(lines[i]) && !lines[i].includes(`typedef ${td.name}`)) {
+                    // Internal usage found
+                }
+            }
+            result.typedefUsages.push(usage);
         }
         // Variables
         for (const v of result.variables) {
-            result.variableUsages.push({ variableName: v.name, usedInFiles: [result.filePath], confidence: 'medium' });
+            const usage: VariableUsage = {
+                variableName: v.name,
+                usedInFiles: [result.filePath],
+                confidence: 'medium'
+            };
+            const pattern = new RegExp(`\\b${v.name}\\b`, 'g');
+            for (let i = 0; i < lines.length; i++) {
+                if (pattern.test(lines[i]) && !lines[i].match(new RegExp(`\\b(final|const|var|late)?\\s*\\b${v.name}\\s*=`))) {
+                    // Internal usage found
+                }
+            }
+            result.variableUsages.push(usage);
         }
         // Constructors
         for (const c of result.constructors) {
-            result.constructorUsages.push({ constructorName: c.name, className: c.className, usedInFiles: [result.filePath], confidence: 'medium' });
+            const usage: ConstructorUsage = {
+                constructorName: c.name,
+                className: c.className,
+                usedInFiles: [result.filePath],
+                confidence: 'medium'
+            };
+            const fullName = c.name === c.className ? c.className : `${c.className}.${c.name}`;
+            const pattern = new RegExp(`\\b${fullName.replace('.', '\\.')}\\b`, 'g');
+            for (let i = 0; i < lines.length; i++) {
+                if (pattern.test(lines[i]) && !lines[i].includes(`${fullName}(`)) {
+                    // Internal usage found
+                }
+            }
+            result.constructorUsages.push(usage);
         }
         // Properties
         for (const p of result.properties) {
-            result.propertyUsages.push({ propertyName: p.name, className: p.className, usedInFiles: [result.filePath], confidence: 'medium' });
+            const usage: PropertyUsage = {
+                propertyName: p.name,
+                className: p.className,
+                usedInFiles: [result.filePath],
+                confidence: 'medium'
+            };
+            const pattern = new RegExp(`\\b${p.name}\\b`, 'g');
+            for (let i = 0; i < lines.length; i++) {
+                if (pattern.test(lines[i]) && !lines[i].includes(`${p.name};`) && !lines[i].includes(`get ${p.name}`)) {
+                    // Internal usage found
+                }
+            }
+            result.propertyUsages.push(usage);
         }
         // Annotations
         for (const a of result.annotations) {
             if (!result.annotationUsages.find(au => au.annotationName === a.name)) {
                 result.annotationUsages.push({ annotationName: a.name, usedInFiles: [result.filePath], confidence: 'medium' });
             }
+        }
+        // Enums
+        for (const e of result.enums) {
+            const usage: EnumUsage = {
+                enumName: e.name,
+                usedInFiles: [result.filePath],
+                confidence: 'medium'
+            };
+            const pattern = new RegExp(`\\b${e.name}\\b`, 'g');
+            for (let i = 0; i < lines.length; i++) {
+                if (pattern.test(lines[i]) && !lines[i].includes(`enum ${e.name}`)) {
+                    // Internal usage found
+                }
+            }
+            result.enumUsages.push(usage);
+        }
+        // Mixins
+        for (const m of result.mixins) {
+            const usage: MixinUsage = {
+                mixinName: m.name,
+                usedInFiles: [result.filePath],
+                confidence: 'medium'
+            };
+            const pattern = new RegExp(`\\b${m.name}\\b`, 'g');
+            for (let i = 0; i < lines.length; i++) {
+                if (pattern.test(lines[i]) && !lines[i].includes(`mixin ${m.name}`)) {
+                    // Internal usage found
+                }
+            }
+            result.mixinUsages.push(usage);
         }
     }
     private getUsageContext(lines: string[], lineIndex: number): { type: 'class' | 'function' | 'none', name: string } {

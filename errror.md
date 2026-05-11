@@ -1,11 +1,14 @@
 # Error Log & Fixes
 
 ## Pending Improvements
-- [ ] Add `enumUsages` and `mixinUsages` to `DartFileInfo`.
-- [ ] Enhance `analyzeUsages` to search for all new element types (extensions, typedefs, etc.).
-- [ ] Support `enum` and `mixin` in `flutter_get_reverse_deps`.
-- [ ] Fix `Extensions` method/property collection in `DartParser`.
-- [ ] Propagate all new usage types in `buildReverseDependencies`.
+- [x] Add `enumUsages` and `mixinUsages` to `DartFileInfo`.
+- [x] Enhance `analyzeUsages` to search for all new element types (extensions, typedefs, etc.).
+- [x] Support `enum` and `mixin` in `flutter_get_reverse_deps`.
+- [x] Fix `Extensions` method/property collection in `DartParser`.
+- [x] Propagate all new usage types in `buildReverseDependencies`.
 
 ## Fixed Errors
-(None yet)
+- Fixed `DartFileInfo` initialization missing `enumUsages` and `mixinUsages`.
+- Fixed `SearchResult` type union missing `'file'`.
+- Fixed missing support for `enums` and `mixins` in reverse dependencies.
+- Fixed extension method/property collection.

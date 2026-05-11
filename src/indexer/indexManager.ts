@@ -154,6 +154,8 @@ export class IndexManager {
             addFile(importedFile.constructorUsages, filePath);
             addFile(importedFile.propertyUsages, filePath);
             addFile(importedFile.annotationUsages, filePath);
+            addFile(importedFile.enumUsages, filePath);
+            addFile(importedFile.mixinUsages, filePath);
           }
         }
       }
@@ -288,7 +290,7 @@ export class IndexManager {
   }
 
   /** Search across all indexed files */
-  search(query: string, filter?: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call' | 'extension' | 'typedef' | 'variable' | 'constructor' | 'property' | 'annotation'): SearchResult[] {
+  search(query: string, filter?: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call' | 'extension' | 'typedef' | 'variable' | 'constructor' | 'property' | 'annotation' | 'file'): SearchResult[] {
     const results: SearchResult[] = [];
     const q = query.toLowerCase();
 
@@ -379,6 +381,36 @@ export class IndexManager {
               results.push({ name: `@${a.name}`, type: 'annotation', subType: `on ${a.target} ${a.targetName}`, file: info.filePath, line: a.line, isPrivate: false });
             }
           }
+        }
+      }
+    }
+
+    // Search Files
+    if (!filter || filter === 'file') {
+      for (const filePath of this.index.keys()) {
+        const fileName = path.basename(filePath);
+        if (fileName.toLowerCase().includes(q)) {
+          results.push({
+            name: fileName,
+            type: 'file',
+            subType: filePath,
+            file: filePath,
+            line: 1,
+            isPrivate: false
+          });
+        }
+      }
+      for (const filePath of this.arbIndex.keys()) {
+        const fileName = path.basename(filePath);
+        if (fileName.toLowerCase().includes(q) && !results.find(r => r.file === filePath)) {
+          results.push({
+            name: fileName,
+            type: 'file',
+            subType: filePath,
+            file: filePath,
+            line: 1,
+            isPrivate: false
+          });
         }
       }
     }
@@ -555,7 +587,7 @@ export class IndexManager {
 
 export interface SearchResult {
   name: string;
-  type: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call' | 'extension' | 'typedef' | 'variable' | 'constructor' | 'property' | 'annotation';
+  type: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call' | 'extension' | 'typedef' | 'variable' | 'constructor' | 'property' | 'annotation' | 'file';
   subType: string;
   file: string;
   line: number;

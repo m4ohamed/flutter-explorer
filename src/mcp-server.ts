@@ -44,7 +44,7 @@ server.registerTool(
     description: "Search for classes, functions, or widgets in the Flutter project",
     inputSchema: z.object({
       query: z.string().describe("The search term (class name, function name, etc.)"),
-      filter: z.enum(["class", "function", "widget", "enum", "mixin", "extension", "typedef", "variable", "constructor", "property", "annotation"]).optional().describe("Filter by type"),
+      filter: z.enum(["class", "function", "widget", "enum", "mixin", "extension", "ext", "typedef", "type", "variable", "vars", "constructor", "property", "annotation", "file", "call", "translation"]).optional().describe("Filter by type (aliases: ext, type, vars)"),
       searchMode: z.enum(["definitions", "calls", "both"]).optional().describe("Search in definitions, calls, or both (default: both)"),
       useDirectSearch: z.boolean().optional().describe("Force direct file search even if index exists (default: false)"),
     }),
@@ -55,23 +55,33 @@ server.registerTool(
     const q = query.toLowerCase();
     const mode = searchMode || "both";
   
+    // Normalize filter aliases
+    let normalizedFilter = filter;
+    if (filter === "ext") normalizedFilter = "extension";
+    else if (filter === "type") normalizedFilter = "typedef";
+    else if (filter === "vars") normalizedFilter = "variable";
+    else if (filter === "call") normalizedFilter = "function"; // calls are handled in function block
+    
+    const targetFilter = normalizedFilter;
+  
     // Try indexed search first  
     if (index && !useDirectSearch) {
       for (const file in index.dart) {
         const info = index.dart[file];
           
-        if (!filter || filter === "class" || filter === "widget") {
+        if (!targetFilter || targetFilter === "class" || targetFilter === "widget") {
           if (mode === "definitions" || mode === "both") {
             for (const c of info.classes) {
               if (c.name.toLowerCase().includes(q)) {
                 if (filter === "widget" && c.type === "plain") continue;
+                if (targetFilter === "widget" && c.type === "plain") continue;
                 results.push({ name: c.name, type: "class_definition", subtype: c.type, file, line: c.line });
               }
             }
           }
         }
   
-        if (!filter || filter === "function") {
+        if (!targetFilter || targetFilter === "function") {
           if (mode === "definitions" || mode === "both") {
             for (const f of info.functions) {
               if (f.name.toLowerCase().includes(q)) {
@@ -98,7 +108,7 @@ server.registerTool(
         }
 
         // Search Enums
-        if (!filter || filter === "enum") {
+        if (!targetFilter || targetFilter === "enum") {
           if (mode === "definitions" || mode === "both") {
             for (const e of info.enums || []) {
               if (e.name.toLowerCase().includes(q)) {
@@ -109,7 +119,7 @@ server.registerTool(
         }
 
         // Search Mixins
-        if (!filter || filter === "mixin") {
+        if (!targetFilter || targetFilter === "mixin") {
           if (mode === "definitions" || mode === "both") {
             for (const m of info.mixins || []) {
               if (m.name.toLowerCase().includes(q)) {
@@ -120,7 +130,7 @@ server.registerTool(
         }
 
         // Search Extensions
-        if (!filter || filter === "extension") {
+        if (!targetFilter || targetFilter === "extension") {
           if (mode === "definitions" || mode === "both") {
             for (const e of info.extensions || []) {
               if (e.name.toLowerCase().includes(q)) {
@@ -131,7 +141,7 @@ server.registerTool(
         }
 
         // Search Typedefs
-        if (!filter || filter === "typedef") {
+        if (!targetFilter || targetFilter === "typedef") {
           if (mode === "definitions" || mode === "both") {
             for (const t of info.typedefs || []) {
               if (t.name.toLowerCase().includes(q)) {
@@ -142,7 +152,7 @@ server.registerTool(
         }
 
         // Search Top-level Variables
-        if (!filter || filter === "variable") {
+        if (!targetFilter || targetFilter === "variable") {
           if (mode === "definitions" || mode === "both") {
             for (const v of info.variables || []) {
               if (v.name.toLowerCase().includes(q)) {
@@ -153,7 +163,7 @@ server.registerTool(
         }
 
         // Search Constructors
-        if (!filter || filter === "constructor") {
+        if (!targetFilter || targetFilter === "constructor") {
           if (mode === "definitions" || mode === "both") {
             for (const c of info.constructors || []) {
               const fullName = `${c.className}.${c.name}`;
@@ -165,7 +175,7 @@ server.registerTool(
         }
 
         // Search Properties (Fields, Getters, Setters)
-        if (!filter || filter === "property") {
+        if (!targetFilter || targetFilter === "property") {
           if (mode === "definitions" || mode === "both") {
             for (const p of info.properties || []) {
               if (p.name.toLowerCase().includes(q)) {
@@ -176,12 +186,37 @@ server.registerTool(
         }
 
         // Search Annotations
-        if (!filter || filter === "annotation") {
+        if (!targetFilter || targetFilter === "annotation") {
           if (mode === "definitions" || mode === "both") {
             for (const a of info.annotations || []) {
               if (a.name.toLowerCase().includes(q)) {
                 results.push({ name: `@${a.name}`, type: "annotation_definition", file, line: a.line, target: a.target, targetName: a.targetName });
               }
+            }
+          }
+        }
+      }
+      
+      // Search Files
+      if (!targetFilter || targetFilter === "file") {
+        for (const file in index.dart) {
+          if (path.basename(file).toLowerCase().includes(q)) {
+            results.push({ name: path.basename(file), type: "file", file });
+          }
+        }
+        for (const file in index.arb) {
+          if (path.basename(file).toLowerCase().includes(q) && !results.find(r => r.file === file)) {
+            results.push({ name: path.basename(file), type: "file", file });
+          }
+        }
+      }
+
+      // Search Translations
+      if (!targetFilter || targetFilter === "translation") {
+        for (const file in index.arb) {
+          for (const t of index.arb[file]) {
+            if (t.key.toLowerCase().includes(q) || t.value.toLowerCase().includes(q)) {
+              results.push({ name: t.key, type: "translation", value: t.value, file, line: t.line });
             }
           }
         }
@@ -381,7 +416,7 @@ server.registerTool(
     description: "Get reverse dependencies for a class or function (what depends on this element)",
     inputSchema: z.object({
       name: z.string().describe("Element name"),
-      type: z.enum(["class", "function", "extension", "typedef", "variable", "constructor", "property", "annotation"]).describe("Type of element"),
+      type: z.enum(["class", "function", "extension", "typedef", "variable", "constructor", "property", "annotation", "enum", "mixin"]).describe("Type of element"),
       parentClass: z.string().optional().describe("Parent class name (required for properties/functions inside classes)"),
     }),
   },
@@ -427,6 +462,14 @@ server.registerTool(
         case "annotation":
           usages = info.annotationUsages || [];
           matchField = "annotationName";
+          break;
+        case "enum":
+          usages = info.enumUsages || [];
+          matchField = "enumName";
+          break;
+        case "mixin":
+          usages = info.mixinUsages || [];
+          matchField = "mixinName";
           break;
       }
 

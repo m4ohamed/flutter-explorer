@@ -29,7 +29,7 @@
                 {
                     "id": "flutter-explorer",
                     "title": "Flutter Explorer",
-                    "icon": "resources/icon.png"
+                    "icon": "resources/icon.svg"
                 }
             ]
         },
@@ -39,7 +39,7 @@
                     "id": "flutterExplorer.sidebar",
                     "name": "Flutter Explorer",
                     "type": "webview",
-                    "icon": "resources/icon.png "
+                    "icon": "resources/icon.svg"
                 }
             ]
         },

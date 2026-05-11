@@ -1,5 +1,5 @@
 # Flutter Explorer 🚀
-
+![Flutter Explorer Icon](resources/icon.png)
 
 **Flutter Explorer** is a high-performance, intelligent VS Code extension designed to streamline the development of large-scale Flutter applications. It provides deep project insights, advanced search capabilities, and automated code quality analysis directly within your editor.
 
