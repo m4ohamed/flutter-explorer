@@ -132,9 +132,12 @@
       html += '<span class="result-icon">' + r.icon + '</span>';
       html += '<div class="result-info">';
       html += '<div class="result-name' + (r.isPrivate ? ' private' : '') + '">' + escapeHtml(r.name) + '</div>';
-      html += '<div class="result-detail">' + escapeHtml(r.fileName) + ':' + r.line;
+      html += '<div class="result-detail">' + escapeHtml(r.relativePath) + ':' + r.line;
       if (r.subType && r.subType !== r.name) { html += ' — ' + escapeHtml(r.subType); }
       html += '</div></div>';
+      if (r.usageCount !== undefined && r.usageCount > 0) {
+        html += '<span class="result-usage-badge" title="Usage Count">↺ ' + r.usageCount + '</span>';
+      }
       html += '<span class="result-badge badge-' + r.type + '">' + r.type + '</span>';
       html += '</div>';
     }

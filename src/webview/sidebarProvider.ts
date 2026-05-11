@@ -4,7 +4,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { IndexManager } from '../indexer/indexManager';
+import { IndexManager, SearchResult } from '../indexer/indexManager';
 import { SearchProvider } from '../providers/searchProvider';
 import { WidgetTreeProvider } from '../providers/widgetTreeProvider';
 import { DependencyGraphProvider } from '../providers/dependencyGraphProvider';
@@ -197,6 +197,23 @@ interface WebviewMessage {
     filter?: string;
     file?: string;
     line?: number;
+}
+interface WebviewSearchResult {
+    name: string;
+    type: string;
+    subType: string;
+    file: string;
+    line: number;
+    relativePath: string;
+    isPrivate: boolean;
+    usageCount?: number;
+}
+function getSearchResultsForWebview(results: SearchResult[], rootPath: string): WebviewSearchResult[] {
+    return results.map(r => ({
+        ...r,
+        relativePath: path.relative(rootPath, r.file),
+        usageCount: r.usageCount
+    }));
 }
 function getNonce(): string {
     let text = '';

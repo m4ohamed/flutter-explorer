@@ -250,6 +250,18 @@ body {
     color: #c9c991;
 }
 
+.result-usage-badge {
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 500;
+    flex-shrink: 0;
+    align-self: center;
+    background: var(--vscode-button-secondaryBackground, #3a3a3a);
+    color: var(--vscode-button-secondaryForeground, #ccc);
+    margin-right: 4px;
+}
+
 .no-results {
     padding: 20px;
     text-align: center;

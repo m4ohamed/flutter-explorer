@@ -52,6 +52,20 @@ export interface WarningInfo {
     message: string;
     line: number;
 }
+export interface ClassUsage {
+    className: string;
+    usedInFiles: string[]; // Files that use this class
+    usedByClasses: string[]; // Classes that use this class
+    usedByFunctions: string[]; // Functions that use this class
+    confidence: 'high' | 'medium' | 'low'; // Confidence level
+}
+export interface FunctionUsage {
+    functionName: string;
+    parentClass: string | null;
+    calledByFunctions: string[]; // Functions that call this function
+    calledInFiles: string[];
+    confidence: 'high' | 'medium' | 'low';
+}
 export interface DartFileInfo {
     filePath: string;
     classes: ClassInfo[];
@@ -63,6 +77,9 @@ export interface DartFileInfo {
     mixins: MixinInfo[];
     warnings: WarningInfo[];
     lastModified: number;
+    contentHash?: string;
+    classUsages: ClassUsage[];
+    functionUsages: FunctionUsage[];
 }
 const WIDGET_BASE_CLASSES = new Set([
     'StatelessWidget', 'StatefulWidget', 'HookWidget',
@@ -85,6 +102,7 @@ export class DartParser {
         const result: DartFileInfo = {
             filePath, classes: [], functions: [], imports: [], exports: [],
             widgets: [], enums: [], mixins: [], warnings: [], lastModified: Date.now(),
+            classUsages: [], functionUsages: [],
         };
         let currentClass: string | null = null;
         let braceDepth = 0;
@@ -212,6 +230,8 @@ export class DartParser {
                 }
             }
         }
+        // Analyze usages before returning
+        this.analyzeUsages(content, result);
         return result;
     }
     private extractEnumValues(lines: string[], startIndex: number): string[] {
@@ -251,5 +271,80 @@ export class DartParser {
             }
         }
         return widgets;
+    }
+    private analyzeUsages(content: string, result: DartFileInfo): void {
+        const lines = content.split('\n');
+        // Analyze class usages
+        for (const cls of result.classes) {
+            const usage: ClassUsage = {
+                className: cls.name,
+                usedInFiles: [result.filePath],
+                usedByClasses: [],
+                usedByFunctions: [],
+                confidence: 'medium'
+            };
+            // Search for class name usage in the same file
+            const pattern = new RegExp(`\\b${cls.name}\\b`, 'g');
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                if (pattern.test(line)) {
+                    // Exclude the definition itself
+                    if (!line.includes(`class ${cls.name}`) && !line.includes(`extends ${cls.name}`)) {
+                        const context = this.getUsageContext(lines, i);
+                        if (context.type === 'class' && context.name !== cls.name) {
+                            if (!usage.usedByClasses.includes(context.name)) {
+                                usage.usedByClasses.push(context.name);
+                            }
+                        } else if (context.type === 'function') {
+                            if (!usage.usedByFunctions.includes(context.name)) {
+                                usage.usedByFunctions.push(context.name);
+                            }
+                        }
+                    }
+                }
+            }
+            result.classUsages.push(usage);
+        }
+        // Analyze function usages
+        for (const func of result.functions) {
+            const usage: FunctionUsage = {
+                functionName: func.name,
+                parentClass: func.parentClass,
+                calledByFunctions: [],
+                calledInFiles: [result.filePath],
+                confidence: 'medium'
+            };
+            const pattern = new RegExp(`\\b${func.name}\\s*\\(`, 'g');
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                if (pattern.test(line)) {
+                    // Exclude definition
+                    if (!line.includes(`${func.name}(`) || line.trim().startsWith('return')) {
+                        const context = this.getUsageContext(lines, i);
+                        if (context.type === 'function' && context.name !== func.name) {
+                            if (!usage.calledByFunctions.includes(context.name)) {
+                                usage.calledByFunctions.push(context.name);
+                            }
+                        }
+                    }
+                }
+            }
+            result.functionUsages.push(usage);
+        }
+    }
+    private getUsageContext(lines: string[], lineIndex: number): { type: 'class' | 'function' | 'none', name: string } {
+        // Search backwards for class or function definition
+        for (let i = lineIndex; i >= 0; i--) {
+            const line = lines[i].trim();
+            const clsMatch = line.match(/class\s+(\w+)/);
+            if (clsMatch) {
+                return { type: 'class', name: clsMatch[1] };
+            }
+            const funcMatch = line.match(/([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(/);
+            if (funcMatch && !RESERVED.has(funcMatch[2])) {
+                return { type: 'function', name: funcMatch[2] };
+            }
+        }
+        return { type: 'none', name: '' };
     }
 }

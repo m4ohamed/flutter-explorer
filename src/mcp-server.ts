@@ -210,7 +210,61 @@ server.registerTool(
   }
 );
 
-// 7. Set Project Path Tool
+// 7. Reverse Dependencies Tool
+server.registerTool(
+  "flutter_get_reverse_deps",
+  {
+    description: "Get reverse dependencies for a class or function (what depends on this element)",
+    inputSchema: z.object({
+      name: z.string().describe("Class or function name"),
+      type: z.enum(["class", "function"]).describe("Type of element"),
+      parentClass: z.string().optional().describe("Parent class name (required for functions inside classes)"),
+    }),
+  },
+  async ({ name, type, parentClass }) => {
+    const index = readIndex();
+    if (!index || !index.dart) return { content: [{ type: "text", text: "Index not found." }] };
+      
+    const results: any[] = [];
+      
+    if (type === "class") {
+      for (const [filePath, info] of Object.entries(index.dart as Record<string, any>)) {
+        if (info.classUsages) {
+          const usage = info.classUsages.find((u: any) => u.className === name);
+          if (usage) {
+            results.push({
+              filePath,
+              usedByClasses: usage.usedByClasses,
+              usedByFunctions: usage.usedByFunctions,
+              usedInFiles: usage.usedInFiles,
+              confidence: usage.confidence,
+            });
+          }
+        }
+      }
+    } else if (type === "function") {
+      for (const [filePath, info] of Object.entries(index.dart as Record<string, any>)) {
+        if (info.functionUsages) {
+          const usage = info.functionUsages.find((u: any) => u.functionName === name && u.parentClass === (parentClass || null));
+          if (usage) {
+            results.push({
+              filePath,
+              calledByFunctions: usage.calledByFunctions,
+              calledInFiles: usage.calledInFiles,
+              confidence: usage.confidence,
+            });
+          }
+        }
+      }
+    }
+      
+    return {
+      content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
+    };
+  }
+);
+
+// 8. Set Project Path Tool
 server.registerTool(
   "flutter_set_project_path",
   {
@@ -228,7 +282,7 @@ server.registerTool(
   }
 );
 
-// 8. Get Project Path Tool
+// 9. Get Project Path Tool
 server.registerTool(
   "flutter_get_project_path",
   {

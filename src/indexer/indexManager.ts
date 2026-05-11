@@ -4,6 +4,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 import { DartParser, DartFileInfo } from './dartParser';
 
 const CACHE_FILENAME = '.vscode/flutter-explorer-index.json';
@@ -43,6 +44,7 @@ export class IndexManager {
         const content = await this.readFile(uri);
         if (uri.fsPath.endsWith('.dart')) {
           const info = this.parser.parse(this.relativePath(uri.fsPath), content);
+          info.contentHash = this.computeHash(content);
           this.index.set(this.relativePath(uri.fsPath), info);
         } else if (uri.fsPath.endsWith('.arb')) {
           const translations = this.parseArb(content);
@@ -59,6 +61,7 @@ export class IndexManager {
       }
     }
 
+    this.buildReverseDependencies();
     this.saveCache();
     this.onIndexChanged.fire();
   }
@@ -68,17 +71,59 @@ export class IndexManager {
     const relPath = this.relativePath(uri.fsPath);
     try {
       const content = await this.readFile(uri);
+      const newHash = this.computeHash(content);
+
+      // Check if actual content changed
+      const existing = this.index.get(relPath);
+      if (existing && existing.contentHash === newHash) {
+        return; // Content hasn't changed, skip parsing
+      }
+
       if (uri.fsPath.endsWith('.dart')) {
         const info = this.parser.parse(relPath, content);
+        info.contentHash = newHash; // Save hash
         this.index.set(relPath, info);
       } else if (uri.fsPath.endsWith('.arb')) {
         const translations = this.parseArb(content);
         this.arbIndex.set(relPath, translations);
       }
       this.saveCache();
+      this.buildReverseDependencies();
       this.onIndexChanged.fire();
     } catch {
       // File might have been deleted between event and processing
+    }
+  }
+
+  private computeHash(content: string): string {
+    return crypto.createHash('md5').update(content).digest('hex');
+  }
+
+  /** Build reverse dependencies across all files */
+  public buildReverseDependencies(): void {
+    // Collect all imports and cross-reference
+    for (const [filePath, info] of this.index.entries()) {
+      for (const imp of info.imports) {
+        // Only track internal (relative) imports
+        if (!imp.path.startsWith('package:') && !imp.path.startsWith('dart:')) {
+          const resolved = this.resolveImportPath(filePath, imp.path);
+          const importedFile = this.index.get(resolved);
+          if (importedFile) {
+            // Update imported file's classUsages with this file
+            for (const clsUsage of importedFile.classUsages || []) {
+              if (!clsUsage.usedInFiles.includes(filePath)) {
+                clsUsage.usedInFiles.push(filePath);
+              }
+            }
+            // Update imported file's functionUsages with this file
+            for (const funcUsage of importedFile.functionUsages || []) {
+              if (!funcUsage.calledInFiles.includes(filePath)) {
+                funcUsage.calledInFiles.push(filePath);
+              }
+            }
+          }
+        }
+      }
     }
   }
 
@@ -177,21 +222,27 @@ export class IndexManager {
         if (!filter || filter === 'class') {
           for (const c of info.classes) {
             if (c.name.toLowerCase().includes(q)) {
-              results.push({ name: c.name, type: 'class', subType: c.type, file: info.filePath, line: c.line, isPrivate: c.isPrivate });
+              const usage = info.classUsages?.find(u => u.className === c.name);
+              const usageCount = usage ? (usage.usedByClasses.length + usage.usedByFunctions.length) : 0;
+              results.push({ name: c.name, type: 'class', subType: c.type, file: info.filePath, line: c.line, isPrivate: c.isPrivate, usageCount });
             }
           }
         }
         if (!filter || filter === 'function') {
           for (const f of info.functions) {
             if (f.name.toLowerCase().includes(q)) {
-              results.push({ name: f.name, type: 'function', subType: f.parentClass ? `${f.parentClass}.${f.name}` : f.name, file: info.filePath, line: f.line, isPrivate: f.isPrivate });
+              const usage = info.functionUsages?.find(u => u.functionName === f.name && u.parentClass === f.parentClass);
+              const usageCount = usage ? usage.calledByFunctions.length : 0;
+              results.push({ name: f.name, type: 'function', subType: f.parentClass ? `${f.parentClass}.${f.name}` : f.name, file: info.filePath, line: f.line, isPrivate: f.isPrivate, usageCount });
             }
           }
         }
         if (!filter || filter === 'widget') {
           for (const c of info.classes) {
             if (c.type !== 'plain' && c.type !== 'ChangeNotifier' && c.name.toLowerCase().includes(q)) {
-              results.push({ name: c.name, type: 'widget', subType: c.type, file: info.filePath, line: c.line, isPrivate: c.isPrivate });
+              const usage = info.classUsages?.find(u => u.className === c.name);
+              const usageCount = usage ? (usage.usedByClasses.length + usage.usedByFunctions.length) : 0;
+              results.push({ name: c.name, type: 'widget', subType: c.type, file: info.filePath, line: c.line, isPrivate: c.isPrivate, usageCount });
             }
           }
         }
@@ -369,6 +420,7 @@ export interface SearchResult {
   file: string;
   line: number;
   isPrivate: boolean;
+  usageCount?: number;
 }
 
 export interface DependencyNode {
