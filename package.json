@@ -65,6 +65,10 @@
             {
                 "command": "flutterExplorer.openFile",
                 "title": "Flutter Explorer: Open File at Line"
+            },
+            {
+                "command": "flutterExplorer.setupMcp",
+                "title": "Flutter Explorer: Auto-Setup MCP Config"
             }
         ],
         "configuration": {
@@ -101,10 +105,16 @@
         "build": "node esbuild.js"
     },
     "devDependencies": {
-        "@types/vscode": "^1.85.0",
+        "@types/better-sqlite3": "^7.6.13",
         "@types/node": "^20.11.0",
+        "@types/vscode": "^1.85.0",
+        "@vscode/vsce": "^2.22.0",
         "esbuild": "^0.20.0",
-        "typescript": "^5.3.0",
-        "@vscode/vsce": "^2.22.0"
+        "typescript": "^5.3.0"
+    },
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.29.0",
+        "better-sqlite3": "^12.9.0",
+        "zod": "^4.4.3"
     }
 }

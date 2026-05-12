@@ -47,8 +47,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 }
                 case 'openFile': {
                     if (message.file && message.line !== undefined) {
-                        const absPath = path.join(this.workspaceRoot, message.file);
-                        const uri = vscode.Uri.file(absPath);
+                        const absPath = path.isAbsolute(message.file)
+                            ? message.file
+                            : path.join(this.workspaceRoot, message.file); const uri = vscode.Uri.file(absPath);
                         try {
                             const doc = await vscode.workspace.openTextDocument(uri);
                             const editor = await vscode.window.showTextDocument(doc);

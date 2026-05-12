@@ -15,24 +15,49 @@ import { DartParser, DartFileInfo, ClassInfo, FunctionInfo } from './indexer/dar
  * Exposes indexed Dart/Flutter data to AI agents via stdio
  */
 
+import { SqliteCache } from './indexer/sqliteCache.js';
+
 // Current project path, defaults to environment variable or current working directory
 let currentProjectPath = process.env.FLUTTER_PROJECT_PATH || process.cwd();
-const INDEX_PATH = () => path.join(currentProjectPath, ".vscode", "flutter-explorer-index.json");
 const PUBSPEC_PATH = () => path.join(currentProjectPath, "pubspec.yaml");
+
+let sqliteCache: SqliteCache | null = null;
+
+function getSqliteCache() {
+  if (!sqliteCache) {
+    sqliteCache = new SqliteCache(currentProjectPath);
+  }
+  return sqliteCache;
+}
 
 const server = new McpServer({
   name: "flutter-explorer-mcp",
   version: "1.0.0",
 });
 
-// Helper to read the index file
+// Helper to read the index file (Prioritizes SQLite)
 function readIndex() {
   try {
-    const indexPath = INDEX_PATH();
-    if (fs.existsSync(indexPath)) {
-      const data = fs.readFileSync(indexPath, "utf-8");
-      return JSON.parse(data);
+    const cache = getSqliteCache();
+    if (cache.isAvailable) {
+      const dartRows = cache.getAllDartFiles();
+      const arbRows = cache.getAllArbFiles();
+      
+      if (dartRows.length > 0 || arbRows.length > 0) {
+        const index: any = {
+          dart: {},
+          arb: {},
+          packages: cache.getMeta<any[]>('packages') ?? [],
+          diagnostics: cache.getMeta<any[]>('diagnostics') ?? []
+        };
+
+        for (const row of dartRows) index.dart[row.path] = row.info;
+        for (const row of arbRows) index.arb[row.path] = row.translations;
+
+        return index;
+      }
     }
+    return null;
   } catch (error) {
     console.error("Error reading index:", error);
   }
@@ -93,7 +118,12 @@ server.registerTool(
       useDirectSearch: z.boolean().optional().describe("Force direct file search even if index exists (default: false)"),
     }),
   },
-  async ({ query, filter, searchMode = "both", useDirectSearch = false }) => {
+  async ({ query, filter, searchMode = "both", useDirectSearch = false }: { 
+    query: string; 
+    filter?: "class" | "function" | "widget" | "enum" | "mixin" | "extension" | "ext" | "typedef" | "type" | "variable" | "vars" | "constructor" | "property" | "annotation" | "file" | "call" | "translation";
+    searchMode?: "definitions" | "calls" | "both";
+    useDirectSearch?: boolean;
+  }) => {
     const index = readIndex();
     const results: any[] = [];
     const q = query.toLowerCase();
@@ -398,7 +428,7 @@ server.registerTool(
       relativePath: z.string().describe("The relative path of the file (e.g. lib/main.dart)"),
     }),
   },
-  async ({ relativePath }) => {
+  async ({ relativePath }: { relativePath: string }) => {
     const index = readIndex();
     if (!index) return { content: [{ type: "text", text: "Index not found." }] };
 
@@ -516,7 +546,11 @@ server.registerTool(
       parentClass: z.string().optional().describe("Parent class name (required for properties/functions inside classes)"),
     }),
   },
-  async ({ name, type, parentClass }) => {
+  async ({ name, type, parentClass }: { 
+    name: string; 
+    type: "class" | "function" | "extension" | "typedef" | "variable" | "constructor" | "property" | "annotation" | "enum" | "mixin";
+    parentClass?: string;
+  }) => {
     const index = readIndex();
     if (!index || !index.dart) return { content: [{ type: "text", text: "Index not found." }] };
       
@@ -602,7 +636,7 @@ server.registerTool(
       projectPath: z.string().describe("Absolute path to the Flutter project root (directory containing pubspec.yaml)"),
     }),
   },
-  async ({ projectPath }) => {
+  async ({ projectPath }: { projectPath: string }) => {
     if (!fs.existsSync(path.join(projectPath, "pubspec.yaml"))) {
       return { content: [{ type: "text", text: "Error: pubspec.yaml not found in the specified path. Please provide a valid Flutter project root." }] };
     }
@@ -635,7 +669,12 @@ server.registerTool(
       description: z.string().optional().describe("Optional description for translators"),
     }),
   },
-  async ({ key, arValue, enValue, description }) => {
+  async ({ key, arValue, enValue, description }: { 
+    key: string; 
+    arValue: string; 
+    enValue: string; 
+    description?: string;
+  }) => {
     try {
       const arbEditor = new ArbEditor(currentProjectPath);
       const result = arbEditor.updateTranslation(key, arValue, enValue, description);
@@ -671,7 +710,7 @@ server.registerTool(
       key: z.string().describe("Translation key to delete"),
     }),
   },
-  async ({ key }) => {
+  async ({ key }: { key: string }) => {
     try {
       const arbEditor = new ArbEditor(currentProjectPath);
       const result = arbEditor.deleteTranslation(key);
@@ -723,7 +762,12 @@ server.registerTool(
       parentClass: z.string().optional().describe("Parent class name (required for methods)"),
     }),
   },
-  async ({ elementType, name, filePath, parentClass }) => {
+  async ({ elementType, name, filePath, parentClass }: { 
+    elementType: "class" | "function" | "method" | "enum" | "mixin" | "extension";
+    name: string;
+    filePath?: string;
+    parentClass?: string;
+  }) => {
     const index = readIndex();
     if (!index || !index.dart) {
       return { content: [{ type: "text", text: "Index not found." }] };
@@ -807,7 +851,11 @@ server.registerTool(
       parentClass: z.string().optional().describe("Parent class name (required for methods)"),
     }),
   },
-  async ({ functionName, filePath, parentClass }) => {
+  async ({ functionName, filePath, parentClass }: {
+    functionName: string;
+    filePath?: string;
+    parentClass?: string;
+  }) => {
     const index = readIndex();
     if (!index || !index.dart) {
       return { content: [{ type: "text", text: "Index not found." }] };
@@ -886,7 +934,7 @@ server.registerTool(
       filePath: z.string().optional().describe("Relative path to the file (optional, will search if not provided)"),
     }),
   },
-  async ({ className, filePath }) => {
+  async ({ className, filePath }: { className: string; filePath?: string }) => {
     const index = readIndex();
     if (!index || !index.dart) {
       return { content: [{ type: "text", text: "Index not found." }] };
@@ -973,7 +1021,14 @@ server.registerTool(
       contextLines: z.number().optional().describe("Number of context lines before/after (default: 3)"),
     }),
   },
-  async ({ name, elementType, filePath, parentClass, includeContext = false, contextLines = 3 }) => {
+  async ({ name, elementType, filePath, parentClass, includeContext = false, contextLines = 3 }: {
+    name: string;
+    elementType?: "class" | "function" | "method";
+    filePath?: string;
+    parentClass?: string;
+    includeContext?: boolean;
+    contextLines?: number;
+  }) => {
     const index = readIndex();
     if (!index || !index.dart) {
       return { content: [{ type: "text", text: "Index not found." }] };
@@ -1077,7 +1132,13 @@ server.registerTool(
       includeStrings: z.boolean().optional().describe("Whether to include string literals in the search (default: true)"),
     }),
   },
-  async (options) => {
+  async (options: {
+    query: string;
+    isRegex?: boolean;
+    caseInsensitive?: boolean;
+    includeComments?: boolean;
+    includeStrings?: boolean;
+  }) => {
     const directSearch = new DirectSearch(currentProjectPath);
     const results = directSearch.searchText(options.query, options);
 
@@ -1102,13 +1163,13 @@ server.registerTool(
     inputSchema: z.object({}),
   },
   async () => {
-    const indexPath = INDEX_PATH();
-    if (!fs.existsSync(indexPath)) {
-      return { content: [{ type: "text", text: "Index file not found. A full rebuild is required." }] };
+    const dbPath = path.join(currentProjectPath, ".vscode", "flutter-explorer.db");
+    if (!fs.existsSync(dbPath)) {
+      return { content: [{ type: "text", text: "Index database not found. A full rebuild is required." }] };
     }
 
     try {
-      const stats = fs.statSync(indexPath);
+      const stats = fs.statSync(dbPath);
       const index = readIndex();
       const fileCount = index ? Object.keys(index.dart || {}).length : 0;
 
@@ -1120,7 +1181,7 @@ server.registerTool(
             lastModified: stats.mtime,
             sizeBytes: stats.size,
             indexedFiles: fileCount,
-            path: indexPath
+            path: dbPath
           }, null, 2)
         }],
       };

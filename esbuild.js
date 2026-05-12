@@ -13,7 +13,7 @@ const buildOptions = {
     sourcesContent: false,
     platform: 'node',
     outdir: 'out',
-    external: ['vscode'],
+    external: ['vscode', 'better-sqlite3'],
     logLevel: 'info',
     target: 'es2020',
 };

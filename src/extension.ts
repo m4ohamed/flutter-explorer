@@ -12,6 +12,7 @@ import { WidgetTreeProvider } from './providers/widgetTreeProvider';
 import { DependencyGraphProvider } from './providers/dependencyGraphProvider';
 import { PubspecProvider } from './providers/pubspecProvider';
 import { SidebarProvider } from './webview/sidebarProvider';
+import { setupMcpConfig } from './utils/mcpSetup';
 let statusBarItem: vscode.StatusBarItem;
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
@@ -83,6 +84,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const position = new vscode.Position(Math.max(0, line - 1), 0);
             editor.selection = new vscode.Selection(position, position);
             editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+        }),
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('flutterExplorer.setupMcp', async () => {
+            await setupMcpConfig(context.extensionPath, workspaceRoot);
         }),
     );
     // ─── Index Changed Listener ────────────────────────────
@@ -178,6 +184,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         context.subscriptions.push(fileWatcher);
     }
     vscode.window.showInformationMessage('Flutter Explorer is ready! 🚀');
+
+    // ─── Auto MCP Setup ───────────────────────────────────
+    setupMcpConfig(context.extensionPath, workspaceRoot);
 }
 function updateStatusBar(indexManager: IndexManager): void {
     const stats = indexManager.getStats();
