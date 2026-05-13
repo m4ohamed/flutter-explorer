@@ -47,10 +47,9 @@
     - **Root Cause**: The project path was changed, but no index exists yet in the new path's `.flutter-explorer/` directory. The VS Code extension might not be active to trigger background indexing.
     - **Planned Fix**: Manually trigger `rebuild_index` via MCP tool to bootstrap the SQLite database in the new location.
 - **Reverse Dependencies Missing in MCP**: Reverse dependency data (`usedInFiles`) is available in the extension but missing in the MCP server.
-    - **Root Cause**: `IndexManager.buildReverseDependencies()` updates the in-memory index but doesn't save the modified `DartFileInfo` objects back to the SQLite database.
-    - **Fix**: Update `buildReverseDependencies` to perform a bulk upsert to SQLite after calculation.
-- **MCP SQLite Access Reliability**: Doubt about whether MCP correctly handles `-wal` and `-shm` side-files.
-    - **Fix**: Open the database in `readonly` mode within the MCP server to improve compatibility and avoid lock contention with the extension's write operations. Also, restore the JSON fallback save for environments where `better-sqlite3` fails (ABI mismatch).
+    - **Fix**: Updated `buildReverseDependencies` to perform a bulk upsert to SQLite after calculation and automated checkpointing.
+- **MCP SQLite Access Reliability**: Resolved data visibility issues where updates were trapped in WAL files.
+    - **Fix**: Implemented automated `SqliteCache.checkpoint()` (using `PRAGMA wal_checkpoint(TRUNCATE)`) at the end of major indexing tasks. The MCP server now reads a fully updated `.db` file in `readonly` mode.
 - **TypeScript Type Mismatch (TS2345)**: `IndexManager.ts` failed to compile due to `string | undefined` hash being passed to `batchUpsertDartFiles`.
     - **Fix**: Updated `SqliteCache` methods (`upsertDartFile` and `batchUpsertDartFiles`) to accept `string | undefined` for the hash parameter, as `DartFileInfo.contentHash` is optional.
 - **MCP Path Synchronization Bug**: `flutter_set_project_path` was not resetting the `sqliteCache` singleton, causing it to stick to the first project path it was initialized with.

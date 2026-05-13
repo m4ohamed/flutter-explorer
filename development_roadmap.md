@@ -28,6 +28,7 @@
 - [x] **Direct SQLite MCP Access**: JSON fallback is no longer needed as MCP server now reads from SQLite.
 - [x] **Type-Safe Indexing**: Fixed type mismatch (TS2345) in `IndexManager` for optional content hashes.
 - [x] **MCP Path Synchronization**: Fixed singleton cache reset bug in `flutter_set_project_path`.
+- [x] **Automated SQLite Checkpointing**: Implemented manual WAL flushing to ensure data visibility for the MCP server.
 
 
 
