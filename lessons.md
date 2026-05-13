@@ -35,3 +35,4 @@
 
 - **Diagnostic Awareness**: Always check syntax in the source file before assuming a method is missing in a caller. A single missing brace can make the whole file syntactically invalid to the IDE.
 - **Bulk Upsert Persistence**: Ensure that global updates (like reverse dependencies) are persisted to the database, not just kept in-memory.
+- **SQLite WAL Checkpointing**: When using WAL mode, updates can stay in the `-wal` file for a long time. If another process (like an MCP server) reads the `.db` file in `readonly` mode, it might see stale data. **Solution**: Use `PRAGMA wal_checkpoint(TRUNCATE)` after major updates to flush data to the main file and ensure external visibility.
