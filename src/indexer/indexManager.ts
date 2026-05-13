@@ -54,11 +54,12 @@ export class IndexManager {
   private fileDocIds = new Map<string, string[]>(); // tracks BM25 doc IDs per file
 
   // ── Debounced save timer ────────────────────────────────────────────────────
-  private saveCacheTimer: NodeJS.Timeout | null = null;
   private reverseDepsTimeout: NodeJS.Timeout | null = null;
   private projectName: string | null = null;
 
   private extensionPath?: string;
+  private isIndexing = false;
+  private indexingCancellationTokenSource: vscode.CancellationTokenSource | null = null;
 
   constructor(workspaceRoot: string, extensionPath?: string) {
     this.workspaceRoot = workspaceRoot;
@@ -71,100 +72,139 @@ export class IndexManager {
 
   /** Build full index by scanning all Dart files */
   async buildFullIndex(progress?: vscode.Progress<{ message?: string; increment?: number }>): Promise<void> {
-    const dartFiles = await vscode.workspace.findFiles('lib/**/*.dart', '**/.*');
-    const androidFiles = await vscode.workspace.findFiles('android/app/**/*.{dart,kt,java,xml,gradle}', '**/.*');
-    const arbFiles = await vscode.workspace.findFiles('lib/**/*.arb', '**/.*');
-    const allFiles = [...dartFiles, ...androidFiles, ...arbFiles];
-
-    this.index.clear();
-    this.arbIndex.clear();
-    this.sqliteCache.clearAll(); // wipe SQLite rows for a clean full rebuild
-    this.projectName = await this._loadProjectName();
-
-    const total = allFiles.length;
-
-    const useDartAnalyzer = vscode.workspace.getConfiguration('flutterExplorer').get<boolean>('useDartAnalyzer', true);
-    let dartFilesAnalyzed = false;
-
-    if (useDartAnalyzer) {
-      if (progress) progress.report({ message: 'Analyzing project with Dart SDK...' });
-      const dartResults = await analyzeWithDart(this.workspaceRoot, this.extensionPath, (current) => {
-        if (progress) progress.report({ message: `Analyzed ${current} Dart files...` });
-      });
-
-      if (dartResults && dartResults.length > 0) {
-        let i = 0;
-        for (const info of dartResults) {
-          try {
-            if (progress && i % 10 === 0) {
-              progress.report({ message: `Processing ${info.filePath} (${i + 1}/${dartResults.length})` });
-            }
-            const fullPath = path.join(this.workspaceRoot, info.filePath);
-            const content = fs.readFileSync(fullPath, 'utf8');
-            info.contentHash = this.computeHash(content);
-            this.index.set(info.filePath, info);
-            this.sqliteCache.upsertDartFile(info.filePath, info.contentHash, info);
-          } catch (e) {
-            console.error(`Failed to post-process analyzed file ${info.filePath}:`, e);
-          }
-          i++;
-        }
-        dartFilesAnalyzed = true;
-      }
-    }
-
-    for (let i = 0; i < allFiles.length; i++) {
-      const uri = allFiles[i];
-      try {
-        const relPath = this.relativePath(uri.fsPath);
-
-        if (uri.fsPath.endsWith('.dart')) {
-          if (dartFilesAnalyzed) continue; // Skip if already done by analyzer
-          
-          const content = await this.readFile(uri);
-          const info = this.parser.parse(relPath, content);
-          info.contentHash = this.computeHash(content);
-          this.index.set(relPath, info);
-          this.sqliteCache.upsertDartFile(relPath, info.contentHash, info);
-        } else if (uri.fsPath.endsWith('.arb')) {
-          const content = await this.readFile(uri);
-          const translations = this.parseArb(content);
-          this.arbIndex.set(relPath, translations);
-          this.sqliteCache.upsertArbFile(relPath, translations);
-        } else if (uri.fsPath.endsWith('.kt') || uri.fsPath.endsWith('.java') || uri.fsPath.endsWith('.xml') || uri.fsPath.endsWith('.gradle')) {
-           // Basic indexing for android files if needed, currently buildFullIndex gathers them but doesn't do much
-        }
-      } catch {
-        // skip unreadable files
-      }
-
-      if (progress) {
-        progress.report({
-          message: `Indexing ${path.basename(uri.fsPath)} (${i + 1}/${total})`,
-          increment: 100 / total,
-        });
-      }
-    }
-
-
-    this.packages = PackageIndexer.indexPackages(this.workspaceRoot);
-    this.sqliteCache.setMeta('packages', this.packages);
-
-    // Build BM25 from scratch after full index
-    this._rebuildBM25();
-    this.bm25Dirty = false;
-
-    if (this.shouldBuildReverseDeps()) {
-      this.buildReverseDependencies().catch(e =>
-        console.error('Error building reverse dependencies:', e)
+    if (this.isIndexing) {
+      const choice = await vscode.window.showInformationMessage(
+        'A full re-index is already in progress. What would you like to do?',
+        { modal: true },
+        'Cancel Existing & Start Over',
+        'Continue Current',
       );
+
+      if (choice === 'Cancel Existing & Start Over') {
+        if (this.indexingCancellationTokenSource) {
+          this.indexingCancellationTokenSource.cancel();
+          // Give it a moment to stop
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } else if (choice === 'Continue Current') {
+        return; // Just let the other one finish
+      } else {
+        return; // Aborted by user
+      }
     }
 
-    // SQLite cache is already updated incrementally during indexing.
-    // JSON fallback is no longer needed as MCP server now reads from SQLite.
-    this.sqliteCache.checkpoint();
+    this.isIndexing = true;
+    this.indexingCancellationTokenSource = new vscode.CancellationTokenSource();
+    const token = this.indexingCancellationTokenSource.token;
 
-    this.onIndexChanged.fire();
+    try {
+      const dartFiles = await vscode.workspace.findFiles('lib/**/*.dart', '**/.*', 10000, token);
+      if (token.isCancellationRequested) return;
+      const androidFiles = await vscode.workspace.findFiles('android/app/**/*.{dart,kt,java,xml,gradle}', '**/.*', 1000, token);
+      if (token.isCancellationRequested) return;
+      const arbFiles = await vscode.workspace.findFiles('lib/**/*.arb', '**/.*', 500, token);
+      if (token.isCancellationRequested) return;
+
+      const allFiles = [...dartFiles, ...androidFiles, ...arbFiles];
+
+      this.index.clear();
+      this.arbIndex.clear();
+      this.sqliteCache.clearAll(); // wipe SQLite rows for a clean full rebuild
+      this.projectName = await this._loadProjectName();
+
+      const total = allFiles.length;
+
+      const useDartAnalyzer = vscode.workspace.getConfiguration('flutterExplorer').get<boolean>('useDartAnalyzer', true);
+      let dartFilesAnalyzed = false;
+
+      if (useDartAnalyzer) {
+        if (progress) progress.report({ message: 'Analyzing project with Dart SDK...' });
+        const dartResults = await analyzeWithDart(this.workspaceRoot, this.extensionPath, (current) => {
+          if (progress) progress.report({ message: `Analyzed ${current} Dart files...` });
+        });
+
+        if (token.isCancellationRequested) return;
+
+        if (dartResults && dartResults.length > 0) {
+          let i = 0;
+          for (const info of dartResults) {
+            if (token.isCancellationRequested) return;
+            try {
+              if (progress && i % 10 === 0) {
+                progress.report({ message: `Processing ${info.filePath} (${i + 1}/${dartResults.length})` });
+              }
+              const fullPath = path.join(this.workspaceRoot, info.filePath);
+              const content = fs.readFileSync(fullPath, 'utf8');
+              info.contentHash = this.computeHash(content);
+              this.index.set(info.filePath, info);
+              this.sqliteCache.upsertDartFile(info.filePath, info.contentHash, info);
+            } catch (e) {
+              console.error(`Failed to post-process analyzed file ${info.filePath}:`, e);
+            }
+            i++;
+          }
+          dartFilesAnalyzed = true;
+        }
+      }
+
+      for (let i = 0; i < allFiles.length; i++) {
+        if (token.isCancellationRequested) return;
+        const uri = allFiles[i];
+        try {
+          const relPath = this.relativePath(uri.fsPath);
+
+          if (uri.fsPath.endsWith('.dart')) {
+            if (dartFilesAnalyzed) continue; // Skip if already done by analyzer
+
+            const content = await this.readFile(uri);
+            const info = this.parser.parse(relPath, content);
+            info.contentHash = this.computeHash(content);
+            this.index.set(relPath, info);
+            this.sqliteCache.upsertDartFile(relPath, info.contentHash, info);
+          } else if (uri.fsPath.endsWith('.arb')) {
+            const content = await this.readFile(uri);
+            const translations = this.parseArb(content);
+            this.arbIndex.set(relPath, translations);
+            this.sqliteCache.upsertArbFile(relPath, translations);
+          } else if (uri.fsPath.endsWith('.kt') || uri.fsPath.endsWith('.java') || uri.fsPath.endsWith('.xml') || uri.fsPath.endsWith('.gradle')) {
+            // Basic indexing for android files if needed, currently buildFullIndex gathers them but doesn't do much
+          }
+        } catch {
+          // skip unreadable files
+        }
+
+        if (progress) {
+          progress.report({
+            message: `Indexing ${path.basename(uri.fsPath)} (${i + 1}/${total})`,
+            increment: 100 / total,
+          });
+        }
+      }
+
+
+      this.packages = PackageIndexer.indexPackages(this.workspaceRoot);
+      this.sqliteCache.setMeta('packages', this.packages);
+
+      // Build BM25 from scratch after full index
+      this._rebuildBM25();
+      this.bm25Dirty = false;
+
+      if (this.shouldBuildReverseDeps()) {
+        this.buildReverseDependencies().catch(e =>
+          console.error('Error building reverse dependencies:', e)
+        );
+      }
+
+      // SQLite cache is already updated incrementally during indexing.
+      // JSON fallback is no longer needed as MCP server now reads from SQLite.
+      this.sqliteCache.checkpoint();
+
+      this.onIndexChanged.fire();
+    } finally {
+      this.isIndexing = false;
+      this.indexingCancellationTokenSource?.dispose();
+      this.indexingCancellationTokenSource = null;
+    }
   }
 
   // ── Incremental update ──────────────────────────────────────────────────────
@@ -277,9 +317,11 @@ export class IndexManager {
     enums: number; mixins: number; calls: number; translations: number;
     extensions: number; typedefs: number; variables: number;
     constructors: number; properties: number; annotations: number;
+    extensionTypes: number;
   } {
     let classes = 0, functions = 0, widgets = 0, enums = 0, mixins = 0, calls = 0;
     let extensions = 0, typedefs = 0, variables = 0, constructors = 0, properties = 0, annotations = 0;
+    let extensionTypes = 0;
 
     for (const info of this.index.values()) {
       classes += info.classes.length;
@@ -294,6 +336,7 @@ export class IndexManager {
       constructors += (info.constructors?.length ?? 0);
       properties += (info.properties?.length ?? 0);
       annotations += (info.annotations?.length ?? 0);
+      extensionTypes += (info.extensionTypes?.length ?? 0);
     }
     let translations = 0;
     for (const arb of this.arbIndex.values()) translations += arb.length;
@@ -302,6 +345,7 @@ export class IndexManager {
       files: this.index.size + this.arbIndex.size,
       classes, functions, widgets, enums, mixins, calls, translations,
       extensions, typedefs, variables, constructors, properties, annotations,
+      extensionTypes,
     };
   }
 
@@ -315,7 +359,7 @@ export class IndexManager {
     query: string,
     filter?: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation'
       | 'call' | 'extension' | 'typedef' | 'variable' | 'constructor'
-      | 'property' | 'annotation' | 'file'
+      | 'property' | 'annotation' | 'file' | 'extensionType'
   ): SearchResult[] {
     const results: SearchResult[] = [];
     const q = query.toLowerCase();
@@ -359,6 +403,12 @@ export class IndexManager {
           for (const m of info.mixins) {
             if (m.name.toLowerCase().includes(q))
               results.push({ name: m.name, type: 'mixin', subType: m.on || '', file: info.filePath, line: m.line, isPrivate: m.isPrivate });
+          }
+        }
+        if (!filter || filter === 'extensionType') {
+          for (const et of (info.extensionTypes ?? [])) {
+            if (et.name.toLowerCase().includes(q))
+              results.push({ name: et.name, type: 'extensionType', subType: `on ${et.representationType}`, file: info.filePath, line: et.line, isPrivate: et.isPrivate });
           }
         }
         if (!filter || filter === 'extension') {
@@ -572,7 +622,7 @@ export class IndexManager {
         }
 
         const calleeId = call.name.includes('.') ? `method:${call.name}` : `func:${call.name}`;
-        
+
         // Only add edge if we actually found a caller and it's not self-call
         if (callerId !== calleeId) {
           edges.push({ from: callerId, to: calleeId, type: 'calls' });
@@ -581,10 +631,10 @@ export class IndexManager {
 
       // 5. Imports (File to File)
       for (const imp of info.imports) {
-          const resolved = this.resolveImportPath(path, imp.path);
-          if (this.index.has(resolved)) {
-              edges.push({ from: fileId, to: `file:${resolved}`, type: 'imports' });
-          }
+        const resolved = this.resolveImportPath(path, imp.path);
+        if (this.index.has(resolved)) {
+          edges.push({ from: fileId, to: `file:${resolved}`, type: 'imports' });
+        }
       }
     }
 
@@ -748,6 +798,13 @@ export class IndexManager {
       });
     }
 
+    for (const et of (info.extensionTypes ?? [])) {
+      docs.push({
+        id: this._bm25Id({ name: et.name, file: filePath, line: et.line, type: 'extensionType' } as any),
+        fields: { name: et.name, path: filePath, comments: et.representationType },
+      });
+    }
+
     return docs;
   }
 
@@ -784,7 +841,7 @@ export class IndexManager {
 
   /** Add/update BM25 documents for a single file. */
   private _upsertBM25ForFile(relPath: string, info: DartFileInfo): void {
-    this._removeBM25ForFile(relPath); 
+    this._removeBM25ForFile(relPath);
     const docs = this._extractBM25Docs(info, relPath);
     const ids: string[] = [];
     for (const doc of docs) {
@@ -834,6 +891,12 @@ export class IndexManager {
   }
 
   private resolveImportPath(fromFile: string, importPath: string): string {
+    if (importPath.startsWith('package:')) {
+      if (this.projectName && importPath.startsWith(`package:${this.projectName}/`)) {
+        return 'lib/' + importPath.substring(`package:${this.projectName}/`.length);
+      }
+      return importPath; // Cannot resolve external packages yet
+    }
     const dir = path.dirname(fromFile);
     return path.posix.normalize(path.posix.join(dir, importPath));
   }
@@ -876,49 +939,55 @@ export class IndexManager {
     const targets = new Set<string>();
     for (const cls of fileInfo.classes) targets.add(cls.name);
     for (const func of fileInfo.functions) targets.add(func.name);
-    
+
     // 2. Perform backward search on the global call graph
     const affectedFlows: any[] = [];
     const entryPoints = this._findEntryPoints();
-    
+
     // For each entry point, check if it can reach any target
     // In a large project, we'd use a pre-built adjacency map, but for now we'll traverse
     for (const ep of entryPoints) {
-        const path = this._findPathToTargets(ep, targets);
-        if (path) {
-            affectedFlows.push({
-                entryPoint: ep.name,
-                path: path
-            });
-        }
+      const path = this._findPathToTargets(ep, targets);
+      if (path) {
+        affectedFlows.push({
+          entryPoint: ep.name,
+          path: path
+        });
+      }
     }
 
     return {
-        targetFile: relPath,
-        entitiesCount: targets.size,
-        affectedFlows: affectedFlows
+      targetFile: relPath,
+      entitiesCount: targets.size,
+      affectedFlows: affectedFlows
     };
   }
 
   private _findEntryPoints(): any[] {
     const entryPoints: any[] = [];
     for (const [path, info] of this.index.entries()) {
-        // main() is always an entry point
-        for (const func of info.functions) {
-            if (func.name === 'main') {
-                entryPoints.push({ ...func, filePath: path, kind: 'Function' });
-            }
+      // main() is always an entry point
+      for (const func of info.functions) {
+        if (func.name === 'main') {
+          entryPoints.push({ ...func, filePath: path, kind: 'Function' });
         }
-        // build() methods in Widgets are entry points
-        for (const cls of info.classes) {
-            if (cls.extendsClass && (cls.extendsClass.includes('Widget') || cls.extendsClass.includes('State'))) {
-                for (const method of info.functions.filter(f => f.parentClass === cls.name)) {
-                    if (method.name === 'build') {
-                        entryPoints.push({ ...method, filePath: path, kind: 'Method' });
-                    }
-                }
+      }
+      // build() methods in Widgets are entry points
+      for (const cls of info.classes) {
+        const isWidget = cls.extendsClass && (
+          cls.extendsClass.includes('Widget') ||
+          cls.extendsClass.includes('State') ||
+          cls.extendsClass.includes('Controller')
+        );
+        if (isWidget) {
+          // Look for build or other lifecycle methods
+          for (const method of cls.methods) {
+            if (method.name === 'build' || method.name === 'initState') {
+              entryPoints.push({ ...method, filePath: path, kind: 'Method' });
             }
+          }
         }
+      }
     }
     return entryPoints;
   }
@@ -928,46 +997,64 @@ export class IndexManager {
     const visited = new Set<string>();
 
     while (queue.length > 0) {
-        const { node, path } = queue.shift()!;
-        const qname = `${node.filePath}:${node.name}`;
-        if (visited.has(qname)) continue;
-        visited.add(qname);
+      const { node, path } = queue.shift()!;
+      const qname = `${node.filePath}:${node.name}`;
+      if (visited.has(qname)) continue;
+      visited.add(qname);
 
-        if (targets.has(node.name)) {
-            return path;
+      if (targets.has(node.name)) {
+        return path;
+      }
+
+      if (path.length >= maxDepth) continue;
+
+      // Find functions called by this node
+      const fileInfo = this.index.get(node.filePath);
+      if (fileInfo) {
+        const calls = fileInfo.functionCalls.filter(c =>
+          c.callerFunction === node.name &&
+          (!node.parentClass || c.callerClass === node.parentClass)
+        );
+
+        for (const call of calls) {
+          // Resolve target node (simplistic: look for first match in index)
+          const targetNode = this._resolveCall(call.name);
+          if (targetNode) {
+            queue.push({ node: targetNode, path: [...path, targetNode] });
+          }
         }
-
-        if (path.length >= maxDepth) continue;
-
-        // Find functions called by this node
-        const fileInfo = this.index.get(node.filePath);
-        if (fileInfo) {
-            const calls = fileInfo.functionCalls.filter(c => 
-                c.callerFunction === node.name && 
-                (!node.parentClass || c.callerClass === node.parentClass)
-            );
-
-            for (const call of calls) {
-                // Resolve target node (simplistic: look for first match in index)
-                const targetNode = this._resolveCall(call.name);
-                if (targetNode) {
-                    queue.push({ node: targetNode, path: [...path, targetNode] });
-                }
-            }
-        }
+      }
     }
     return null;
   }
 
   private _resolveCall(name: string): any | null {
-    // Very basic resolution: find first function or class with this name
-    for (const [path, info] of this.index.entries()) {
-        for (const f of info.functions) {
-            if (f.name === name) return { ...f, filePath: path, kind: 'Function' };
-        }
+    // Check if name is Class.method
+    const dotIdx = name.indexOf('.');
+    if (dotIdx !== -1) {
+      const clsName = name.substring(0, dotIdx);
+      const methodName = name.substring(dotIdx + 1);
+      for (const [path, info] of this.index.entries()) {
         for (const c of info.classes) {
-            if (c.name === name) return { ...c, filePath: path, kind: 'Class', name: c.name, line: c.line };
+          if (c.name === clsName) {
+            const m = c.methods.find(meth => meth.name === methodName);
+            if (m) return { ...m, filePath: path, kind: 'Method' };
+          }
         }
+      }
+    }
+
+    // Basic resolution: find first function or class with this name
+    for (const [path, info] of this.index.entries()) {
+      for (const f of info.functions) {
+        if (f.name === name) return { ...f, filePath: path, kind: 'Function' };
+      }
+      for (const c of info.classes) {
+        if (c.name === name) return { ...c, filePath: path, kind: 'Class', name: c.name, line: c.line };
+      }
+      for (const et of info.extensionTypes) {
+        if (et.name === name) return { ...et, filePath: path, kind: 'ExtensionType', name: et.name, line: et.line };
+      }
     }
     return null;
   }
@@ -1007,7 +1094,7 @@ export interface SearchResult {
   name: string;
   type: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation'
   | 'call' | 'extension' | 'typedef' | 'variable' | 'constructor'
-  | 'property' | 'annotation' | 'file';
+  | 'property' | 'annotation' | 'file' | 'extensionType';
   subType: string;
   file: string;
   line: number;

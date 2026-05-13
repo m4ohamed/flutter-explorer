@@ -37,6 +37,8 @@
 - [x] **Real-time Indexing Progress**: Added detailed progress updates for Dart analyzer indexing (file counts and current file processing).
 - [x] **Windows Spawn Fix**: Resolved `ENOENT` error when spawning the Dart analyzer by using `shell: true`.
 - [x] **SQLite ABI Resilience**: Resolved native module incompatibility by rebuilding `better-sqlite3` for Electron v39.2.3.
+- [x] **Advanced Dart 3.3+ Support**: Support for `extension type`, legacy `typedef` syntax, and multi-line definitions with O(n) performance and usage tracking.
+- [x] **Indexing Concurrency Control**: Implemented re-indexing collision detection with UI prompt and full cancellation support.
 
 
 

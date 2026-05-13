@@ -55,3 +55,22 @@ The MCP server tools often return a generic "Index not found" message when the S
     3. Enhanced `sqliteCache.ts` to log the full error message for better diagnostics.
 - **Result**: `better-sqlite3` recompiled successfully for Electron v39.2.3. Detailed logs will now show the exact version mismatch if it persists.
 - **Lessons**: Use `@electron/rebuild` instead of the legacy `electron-rebuild` for newer Electron versions. Always log the full exception message when catching ABI errors.
+## [2026-05-14] RESOLVED: Advanced Dart 3.3+ Support (Extension Types & Multi-line)
+- **Problem**: `DartParser` was missing `extension type` support, failed on multi-line definitions, had O(n²) bottlenecks in usage analysis, and incorrectly handled legacy `typedef` syntax.
+- **Solution**: 
+    1. Added `extensionType_` regex and `ExtensionTypeInfo` interface.
+    2. Implemented lookahead (maskedLines slice) for multi-line support in classes, functions, and extension types.
+    3. Replaced O(n²) backward-scanning with O(n) inline scope tracking in `analyzeUsages`.
+    4. Added support for legacy `typedef Name(args)` syntax.
+    5. Optimized masking to reuse preprocessed data across all analysis functions.
+- **Result**: Accurate indexing of modern Dart features with significant performance gains on large files.
+- **Lessons**: Always use lookahead for regex parsing of multi-line structures. Maintain O(n) complexity by tracking context statefully during a single pass. Clean up dead code (like `ctxClass`) and ensure all new types (like `extension type`) are registered in the usage tracking symbols map.
+
+## [2026-05-14] RESOLVED: Indexing Concurrency Conflict
+- **Problem**: Users could trigger multiple full re-index operations simultaneously, leading to redundant work and potential race conditions in the SQLite cache.
+- **Solution**: 
+    1. Implemented an `isIndexing` flag and a `CancellationTokenSource` in `IndexManager`.
+    2. Added a modal UI prompt that appears if a re-index is requested while one is already running.
+    3. Integrated full cancellation support throughout the indexing pipeline (file discovery, analysis, and processing).
+- **Result**: Users have clear control over overlapping indexing tasks, and redundant operations are prevented.
+- **Lessons**: Use VS Code's `CancellationToken` pattern to manage long-running async tasks. Always wrap state-dependent operations in `finally` blocks to ensure the system returns to a valid state even on failure or cancellation.
