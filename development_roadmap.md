@@ -23,6 +23,12 @@
 - [x] **Standardized Data Directory**: Moved database and index files to a dedicated `.flutter-explorer/` directory.
 - [x] **Automated DB Migration**: Safe migration of legacy databases and SQLite side-files from `.vscode/`.
 - [x] **AI Skills System**: Automated generation of AI instruction sets (skills) for project exploration, debugging, and impact analysis.
+- [x] **Legacy Artifact Cleanup**: Automated deletion of old JSON cache files from `.vscode/`.
+- [x] **Incremental SQLite Updates**: SQLite cache is already updated incrementally during indexing.
+- [x] **Direct SQLite MCP Access**: JSON fallback is no longer needed as MCP server now reads from SQLite.
+- [x] **Type-Safe Indexing**: Fixed type mismatch (TS2345) in `IndexManager` for optional content hashes.
+- [x] **MCP Path Synchronization**: Fixed singleton cache reset bug in `flutter_set_project_path`.
+
 
 
 

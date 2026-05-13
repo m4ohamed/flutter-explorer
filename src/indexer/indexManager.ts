@@ -120,6 +120,7 @@ export class IndexManager {
 
     // SQLite cache is already updated incrementally during indexing.
     // JSON fallback is no longer needed as MCP server now reads from SQLite.
+    this.sqliteCache.checkpoint();
 
     this.onIndexChanged.fire();
   }
@@ -606,6 +607,15 @@ export class IndexManager {
         }
       }
     }
+
+    // SQLite: save all modified entries (reverse deps are global)
+    const filesToUpdate = Array.from(this.index.entries()).map(([relPath, info]) => ({
+      relPath,
+      hash: info.contentHash,
+      info
+    }));
+    this.sqliteCache.batchUpsertDartFiles(filesToUpdate);
+    this.sqliteCache.checkpoint();
   }
 
   public relativePath(absPath: string): string {

@@ -31,4 +31,7 @@
 - **Centralized Data**: Use a dedicated hidden folder (like `.flutter-explorer/`) in the project root for tools-specific data rather than polluting standard folders like `.vscode/`.
 - **AI-Guided Development (Skills)**: Provide structured instructions (skills) in the repository to guide AI agents. This ensures the AI follows established patterns for codebase exploration, debugging, and refactoring without needing constant user guidance.
 - **Nested Template Literals**: When generating code that contains markdown with backticks (like skill files), avoid nested template literals if possible. Using `Array.join('\n')` is a safer way to construct multi-line content with special characters in code generators.
+- **Legacy Artifact Cleanup**: When migrating to a new storage format (e.g., JSON to SQLite) or directory structure (e.g., `.vscode/` to `.flutter-explorer/`), always include logic to clean up the old artifacts. This prevents disk bloat and avoids confusion for the user.
 
+- **Diagnostic Awareness**: Always check syntax in the source file before assuming a method is missing in a caller. A single missing brace can make the whole file syntactically invalid to the IDE.
+- **Bulk Upsert Persistence**: Ensure that global updates (like reverse dependencies) are persisted to the database, not just kept in-memory.

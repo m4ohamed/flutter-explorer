@@ -1,0 +1,5 @@
+name: flutter_explorer_test
+description: A dummy pubspec for testing the MCP server.
+version: 1.0.0
+environment:
+  sdk: '>=3.0.0 <4.0.0'

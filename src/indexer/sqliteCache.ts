@@ -33,6 +33,7 @@ function getDatabase() {
 export class SqliteCache {
     private db: any = null;
     private available = false;
+    private readonlyMode = false;
     private jsonPath: string | null = null;
     private jsonCache: {
         dartFiles: Record<string, { hash: string; data: string }>;
@@ -40,7 +41,8 @@ export class SqliteCache {
         meta: Record<string, any>;
     } = { dartFiles: {}, arbFiles: {}, meta: {} };
 
-    constructor(workspaceRoot: string) {
+    constructor(workspaceRoot: string, options: { readonly?: boolean } = {}) {
+        this.readonlyMode = !!options.readonly;
         const DB = getDatabase();
         try {
             const dataDir = ProjectDetector.getDataDir(workspaceRoot);
@@ -70,14 +72,28 @@ export class SqliteCache {
                 // Optional: fs.unlinkSync(legacyDb); // Should we delete the old db? Keeping for now.
             }
             
+            // Legacy JSON cleanup: Remove flutter-explorer.json from .vscode if it exists
+            const legacyJson = path.join(legacyDir, 'flutter-explorer.json');
+            if (fs.existsSync(legacyJson)) {
+                try {
+                    console.log('[FlutterExplorer] Cleaning up legacy JSON cache from .vscode');
+                    fs.unlinkSync(legacyJson);
+                } catch (e) {
+                    console.warn('[FlutterExplorer] Could not delete legacy JSON cache:', e);
+                }
+            }
+
+            
             if (DB) {
                 try {
-                    this.db = new DB(dbPath);
-                    this.db.pragma('journal_mode = WAL');
-                    this.db.pragma('synchronous = NORMAL');
-                    this._createTables();
+                    this.db = new DB(dbPath, { readonly: this.readonlyMode });
+                    if (!this.readonlyMode) {
+                        this.db.pragma('journal_mode = WAL');
+                        this.db.pragma('synchronous = NORMAL');
+                        this._createTables();
+                    }
                     this.available = true;
-                    console.log('[FlutterExplorer] SQLite cache initialized.');
+                    console.log(`[FlutterExplorer] SQLite cache initialized (${this.readonlyMode ? 'READONLY' : 'READ/WRITE'}).`);
                 } catch (err: any) {
                     const msg = err.message || String(err);
                     if (msg.includes('NODE_MODULE_VERSION') || msg.includes('compiled against')) {
@@ -124,10 +140,25 @@ export class SqliteCache {
     `);
     }
 
+    /**
+     * Forces a checkpoint, moving data from the WAL file to the main database file.
+     * This ensures the .db file is up-to-date for external readers (like the MCP server).
+     */
+    checkpoint(): void {
+        if (this.available && !this.readonlyMode) {
+            try {
+                this.db.pragma('wal_checkpoint(TRUNCATE)');
+                console.log('[FlutterExplorer] SQLite checkpoint (TRUNCATE) completed.');
+            } catch (e) {
+                console.error('[FlutterExplorer] SQLite checkpoint error:', e);
+            }
+        }
+    }
+
     // ── Dart file operations ───────────────────────────────────────────────────
 
     /** Write or update a single dart file entry. O(1) — only touches one row. */
-    upsertDartFile(relPath: string, hash: string, info: DartFileInfo): void {
+    upsertDartFile(relPath: string, hash: string | undefined, info: DartFileInfo): void {
         if (this.available) {
             try {
                 this.db.prepare(`
@@ -137,8 +168,32 @@ export class SqliteCache {
             } catch (e) {
                 console.error('[FlutterExplorer] SQLite upsertDartFile error:', e);
             }
+        }
+    }
+
+    /** Batch update multiple dart files in a single transaction. */
+    batchUpsertDartFiles(files: Array<{ relPath: string; hash: string | undefined; info: DartFileInfo }>): void {
+        if (this.available && !this.readonlyMode) {
+            try {
+                const stmt = this.db.prepare(`
+                    INSERT OR REPLACE INTO dart_files (path, hash, data, updated_at)
+                    VALUES (?, ?, ?, ?)
+                `);
+                
+                const transaction = this.db.transaction((items: any[]) => {
+                    for (const item of items) {
+                        stmt.run(item.relPath, item.hash, JSON.stringify(item.info), Date.now());
+                    }
+                });
+                
+                transaction(files);
+            } catch (e) {
+                console.error('[FlutterExplorer] SQLite batchUpsertDartFiles error:', e);
+            }
         } else {
-            this.jsonCache.dartFiles[relPath] = { hash, data: JSON.stringify(info) };
+            for (const f of files) {
+                this.jsonCache.dartFiles[f.relPath] = { hash: f.hash ?? '', data: JSON.stringify(f.info) };
+            }
             this._saveJson();
         }
     }

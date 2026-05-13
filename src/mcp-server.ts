@@ -27,7 +27,7 @@ let sqliteCache: SqliteCache | null = null;
 
 function getSqliteCache() {
   if (!sqliteCache) {
-    sqliteCache = new SqliteCache(currentProjectPath);
+    sqliteCache = new SqliteCache(currentProjectPath, { readonly: true });
   }
   return sqliteCache;
 }
@@ -41,9 +41,11 @@ const server = new McpServer({
 function readIndex() {
   try {
     const cache = getSqliteCache();
+    console.error(`[MCP Debug] Cache available: ${cache.isAvailable}, Project path: ${currentProjectPath}`);
     if (cache.isAvailable) {
       const dartRows = cache.getAllDartFiles();
       const arbRows = cache.getAllArbFiles();
+      console.error(`[MCP Debug] Found ${dartRows.length} dart files, ${arbRows.length} arb files in SQLite`);
       
       if (dartRows.length > 0 || arbRows.length > 0) {
         const index: any = {
@@ -56,6 +58,24 @@ function readIndex() {
         for (const row of dartRows) index.dart[row.path] = row.info;
         for (const row of arbRows) index.arb[row.path] = row.translations;
 
+        return index;
+      }
+    } else {
+      console.error(`[MCP Debug] SQLite not available. Checking JSON fallback.`);
+      // The SqliteCache already handles JSON fallback internally if available is false
+      const dartRows = cache.getAllDartFiles();
+      const arbRows = cache.getAllArbFiles();
+      console.error(`[MCP Debug] Found ${dartRows.length} dart files, ${arbRows.length} arb files in fallback`);
+      
+      if (dartRows.length > 0 || arbRows.length > 0) {
+         const index: any = {
+          dart: {},
+          arb: {},
+          packages: cache.getMeta<any[]>('packages') ?? [],
+          diagnostics: cache.getMeta<any[]>('diagnostics') ?? []
+        };
+        for (const row of dartRows) index.dart[row.path] = row.info;
+        for (const row of arbRows) index.arb[row.path] = row.translations;
         return index;
       }
     }
@@ -785,6 +805,7 @@ server.registerTool(
       return { content: [{ type: "text", text: "Error: pubspec.yaml not found in the specified path. Please provide a valid Flutter project root." }] };
     }
     currentProjectPath = projectPath;
+    sqliteCache = null; // Force re-initialization with new path
     return { content: [{ type: "text", text: `Project path set to: ${projectPath}` }] };
   }
 );
@@ -1263,9 +1284,9 @@ server.registerTool(
     inputSchema: z.object({}),
   },
   async () => {
-    const dbPath = path.join(currentProjectPath, ".vscode", "flutter-explorer.db");
+    const dbPath = ProjectDetector.getDbPath(currentProjectPath);
     if (!fs.existsSync(dbPath)) {
-      return { content: [{ type: "text", text: "Index database not found. A full rebuild is required." }] };
+      return { content: [{ type: "text", text: `Index database not found at ${dbPath}. A full rebuild is required.` }] };
     }
 
     try {
@@ -1301,7 +1322,7 @@ server.registerTool(
     return {
       content: [{
         type: "text",
-        text: "Rebuild request received. Please ensure the Flutter Explorer VS Code extension is active to perform a full project re-indexing. The MCP server will automatically pick up the new index once completed."
+        text: `Rebuild request received for ${currentProjectPath}. Please ensure the Flutter Explorer VS Code extension is active to perform a full project re-indexing. The MCP server will automatically pick up the new index once completed.`
       }],
     };
   }

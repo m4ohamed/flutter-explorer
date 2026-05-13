@@ -24,6 +24,9 @@
 - [x] Update `mcp-server.ts` to query SQLite directly.
 - [x] Remove redundant JSON fallback from `mcp-server.ts`.
 - [x] Remove redundant JSON cache logic from `IndexManager.ts`.
+- [x] Fix MCP path synchronization bug (singleton reset).
+- [ ] Investigate/Fix SQLite ABI mismatch for MCP server runtime.
+- [ ] Bootstrap index for `sadara` project.
 - [x] Expand BM25 indexing to cover all Dart element types.
 - [x] Fix Widget classification in search results.
 
@@ -36,10 +39,21 @@
 - **Database Migration**: Added logic to safely move `.db`, `.db-wal`, and `.db-shm` files from `.vscode/` to the new `.flutter-explorer/` directory.
 - **AI Skills Generation Syntax**: Fixed `error TS1127: Invalid character` and `TS1160: Unterminated template literal` in `skillsGenerator.ts`.
     - **Fix**: Replaced backtick template construction for nested markdown content with `Array.join('\n')` to avoid double-escaping issues during code generation.
+- **Legacy JSON Cleanup**: Fixed issue where the old `flutter-explorer.json` file remained in `.vscode/` after migrating to SQLite and the new `.flutter-explorer/` directory.
+    - **Fix**: Added automated deletion of the legacy JSON file during `SqliteCache` initialization.
 
-
-## Pending Improvements
-- [ ] Performance testing with large codebases.
-- [x] Ensure `better-sqlite3` native binaries are correctly handled in extension packaging (Fixed by marking as external in esbuild and adding electron-rebuild script).
-- [x] Fix SQLite initialization error (ABI mismatch): Rebuilt `better-sqlite3` using `electron-rebuild -v 39.2.3`.
-- [ ] Add more granular indexing for method calls inside class methods.
+## Errors Encountered During Testing (2026-05-13)
+- **Index not found for new project path**: Encountered `Index not found` when trying to get a graph for `E:\New folder\sad\sadara\`.
+    - **Root Cause**: The project path was changed, but no index exists yet in the new path's `.flutter-explorer/` directory. The VS Code extension might not be active to trigger background indexing.
+    - **Planned Fix**: Manually trigger `rebuild_index` via MCP tool to bootstrap the SQLite database in the new location.
+- **Reverse Dependencies Missing in MCP**: Reverse dependency data (`usedInFiles`) is available in the extension but missing in the MCP server.
+    - **Root Cause**: `IndexManager.buildReverseDependencies()` updates the in-memory index but doesn't save the modified `DartFileInfo` objects back to the SQLite database.
+    - **Fix**: Update `buildReverseDependencies` to perform a bulk upsert to SQLite after calculation.
+- **MCP SQLite Access Reliability**: Doubt about whether MCP correctly handles `-wal` and `-shm` side-files.
+    - **Fix**: Open the database in `readonly` mode within the MCP server to improve compatibility and avoid lock contention with the extension's write operations. Also, restore the JSON fallback save for environments where `better-sqlite3` fails (ABI mismatch).
+- **TypeScript Type Mismatch (TS2345)**: `IndexManager.ts` failed to compile due to `string | undefined` hash being passed to `batchUpsertDartFiles`.
+    - **Fix**: Updated `SqliteCache` methods (`upsertDartFile` and `batchUpsertDartFiles`) to accept `string | undefined` for the hash parameter, as `DartFileInfo.contentHash` is optional.
+- **MCP Path Synchronization Bug**: `flutter_set_project_path` was not resetting the `sqliteCache` singleton, causing it to stick to the first project path it was initialized with.
+    - **Fix**: Added `sqliteCache = null` in the `flutter_set_project_path` tool handler.
+- **SQLite ABI Mismatch in MCP**: The MCP server fails to load `better-sqlite3` due to a Node.js version mismatch between the environment and the compiled binary.
+    - **Status**: Identified. Rebuild failed due to file locks (likely VS Code). Workaround: Inform user or ensure Node versions match.
