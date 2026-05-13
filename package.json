@@ -30,12 +30,6 @@
     "activationEvents": [
         "workspaceContains:**/pubspec.yaml"
     ],
-    "files": [
-        "out",
-        "resources",
-        "LICENSE",
-        "README.md"
-    ],
     "main": "./out/extension.js",
     "contributes": {
         "viewsContainers": {

@@ -33,7 +33,7 @@
 - [x] **Detailed Index Error Reporting**: MCP server now provides granular feedback on database existence, accessibility, and content state.
 - [x] **High-Accuracy Dart Indexing**: Integrated `package:analyzer` via a dedicated Dart tool and TypeScript wrapper for 100% accuracy in `lib/`.
 - [x] **Hybrid Indexing Strategy**: Real-time regex updates combined with periodic/initial high-accuracy Dart analysis.
-- [x] **Robust Tool Discovery**: Improved path resolution in `dartAnalyzerWrapper` to support various execution environments (Extension, CLI, Simulation).
+- [x] **Robust Tool Discovery**: Improved path resolution in `dartAnalyzerWrapper` using VS Code's `extensionPath` to support various execution environments.
 
 
 
