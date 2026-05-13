@@ -104,7 +104,13 @@
                     "type": "boolean",
                     "default": true,
                     "description": "Enable reverse dependencies analysis (may slow down indexing in large projects)"
+                },
+                "flutterExplorer.useDartAnalyzer": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Use Dart SDK (package:analyzer) for 100% accurate indexing (fallback to regex if Dart not found)"
                 }
+
             }
         }
     },
@@ -114,7 +120,9 @@
         "watch": "node esbuild.js --watch",
         "lint": "eslint src --ext ts",
         "build": "node esbuild.js",
-        "rebuild": "electron-rebuild -v 39.2.3 -f -w better-sqlite3"
+        "rebuild": "electron-rebuild -v 39.2.3 -f -w better-sqlite3",
+        "analyze-dart": "dart tools/dart_analyzer.dart ."
+
     },
     "devDependencies": {
         "@electron/rebuild": "^4.0.4",

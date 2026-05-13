@@ -12,6 +12,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { DartParser, DartFileInfo } from './dartParser';
+import { analyzeWithDart } from './dartAnalyzerWrapper';
+
 import { PackageIndexer } from './packageIndexer';
 import { PackageInfo } from '../providers/pubspecLockProvider';
 import { SqliteCache } from './sqliteCache';
@@ -77,21 +79,48 @@ export class IndexManager {
 
     const total = allFiles.length;
 
+    const useDartAnalyzer = vscode.workspace.getConfiguration('flutterExplorer').get<boolean>('useDartAnalyzer', true);
+    let dartFilesAnalyzed = false;
+
+    if (useDartAnalyzer) {
+      if (progress) progress.report({ message: 'Analyzing project with Dart SDK...' });
+      const dartResults = await analyzeWithDart(this.workspaceRoot);
+      if (dartResults && dartResults.length > 0) {
+        for (const info of dartResults) {
+          try {
+            const fullPath = path.join(this.workspaceRoot, info.filePath);
+            const content = fs.readFileSync(fullPath, 'utf8');
+            info.contentHash = this.computeHash(content);
+            this.index.set(info.filePath, info);
+            this.sqliteCache.upsertDartFile(info.filePath, info.contentHash, info);
+          } catch (e) {
+            console.error(`Failed to post-process analyzed file ${info.filePath}:`, e);
+          }
+        }
+        dartFilesAnalyzed = true;
+      }
+    }
+
     for (let i = 0; i < allFiles.length; i++) {
       const uri = allFiles[i];
       try {
-        const content = await this.readFile(uri);
         const relPath = this.relativePath(uri.fsPath);
 
         if (uri.fsPath.endsWith('.dart')) {
+          if (dartFilesAnalyzed) continue; // Skip if already done by analyzer
+          
+          const content = await this.readFile(uri);
           const info = this.parser.parse(relPath, content);
           info.contentHash = this.computeHash(content);
           this.index.set(relPath, info);
           this.sqliteCache.upsertDartFile(relPath, info.contentHash, info);
         } else if (uri.fsPath.endsWith('.arb')) {
+          const content = await this.readFile(uri);
           const translations = this.parseArb(content);
           this.arbIndex.set(relPath, translations);
           this.sqliteCache.upsertArbFile(relPath, translations);
+        } else if (uri.fsPath.endsWith('.kt') || uri.fsPath.endsWith('.java') || uri.fsPath.endsWith('.xml') || uri.fsPath.endsWith('.gradle')) {
+           // Basic indexing for android files if needed, currently buildFullIndex gathers them but doesn't do much
         }
       } catch {
         // skip unreadable files
@@ -104,6 +133,7 @@ export class IndexManager {
         });
       }
     }
+
 
     this.packages = PackageIndexer.indexPackages(this.workspaceRoot);
     this.sqliteCache.setMeta('packages', this.packages);

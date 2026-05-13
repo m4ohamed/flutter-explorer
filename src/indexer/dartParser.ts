@@ -236,7 +236,7 @@ export class DartParser {
     extension_: /^extension\s+(\w+)?\s+on\s+([\w<>\[\]?,\s]+?)\s*\{/,
     typedef_: /^typedef\s+(\w+)\s*=\s*([^;]+);/,
     annotation: /^@(\w+)/,
-    class_: /^(abstract\s+)?class\s+(\w+)(?:\s+extends\s+([\w<>,\s]+?))?(?:\s+with\s+([\w<>,\s]+?))?(?:\s+implements\s+([\w<>,\s]+?))?/,
+    class_: /^(abstract\s+)?class\s+(\w+)(?:\s+extends\s+([\w<>,\s\[\]]+))?(?:\s+with\s+([\w<>,\s\[\]]+))?(?:\s+implements\s+([\w<>,\s\[\]]+))?/,
     ctor: /^\s+(const\s+)?(factory\s+)?(\w+)\s*(\.\w+)?\s*\(([^)]*)\)\s*(:\s*[^{]+)?\{/,
     buildMethod: /(?:Widget|Route|PreferredSizeWidget|StatelessWidget|StatefulWidget)\s+(\w+)\s*\(([^)]*)\)/,
     method: /^\s+(static\s+)?([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(([^)]*)\)\s*(async\s*)?\{/,

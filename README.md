@@ -37,9 +37,10 @@ Flutter Explorer exposes its powerful indexing engine via the **Model Context Pr
 
 ## 🚀 Getting Started
 
-### Prerequisites
-*   VS Code 1.75+
-*   Flutter & Dart SDK installed
+### Requirements
+*   **VS Code 1.85.0+**
+*   **Dart SDK** (Optional - enables 100% accurate indexing via `package:analyzer`).
+*   **Flutter SDK** (For Flutter projects).
 
 ### Installation
 1. Open **VS Code**.

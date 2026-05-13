@@ -30,3 +30,9 @@ The MCP server tools often return a generic "Index not found" message when the S
 ## 📋 Lessons - Ensure all variables are typed before pushing.
 - Always provide actionable error messages when a resource (like a database) is unavailable.
 - capture the exact error message from the database driver to aid in environment-specific troubleshooting (like SQLite ABI mismatches).
+
+## [2026-05-13] Improving Regex Accuracy
+- **Problem**: `DartParser` regex was missing complex class headers (e.g., with brackets or multi-line extends).
+- **Solution**: Improved regex `([\w<>,\s]+?)` → `([\w<>,\s\[\]]+)` to handle generic types with arrays and ensure greedy matching.
+- **Result**: Better fallback accuracy when Dart SDK is unavailable.
+
