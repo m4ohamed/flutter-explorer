@@ -15,13 +15,15 @@ import { DartParser, DartFileInfo, ClassInfo, FunctionInfo } from './indexer/dar
  * Exposes indexed Dart/Flutter data to AI agents via stdio
  */
 
+import { ProjectDetector } from './utils/projectDetector.js';
 import { SqliteCache } from './indexer/sqliteCache.js';
 
-// Current project path, defaults to environment variable or current working directory
-let currentProjectPath = process.env.FLUTTER_PROJECT_PATH || process.cwd();
+// Current project path, resolved via ProjectDetector (looks for pubspec.yaml or .git)
+let currentProjectPath = ProjectDetector.findProjectRoot(process.cwd());
 const PUBSPEC_PATH = () => path.join(currentProjectPath, "pubspec.yaml");
 
 let sqliteCache: SqliteCache | null = null;
+
 
 function getSqliteCache() {
   if (!sqliteCache) {
@@ -103,6 +105,53 @@ function getDirectoryStructure(dirPath: string, relativePath: string = ""): any[
   return results;
 }
 
+/**
+ * Build a detailed graph from the SQLite index
+ */
+function buildDetailedGraph(index: any) {
+  const nodes: any[] = [];
+  const edges: any[] = [];
+  
+  if (!index || !index.dart) return { nodes, edges };
+
+  for (const [filePath, info] of Object.entries(index.dart as Record<string, any>)) {
+    // Add File Node
+    nodes.push({ id: filePath, name: path.basename(filePath), type: 'file' });
+
+    // Add Class Nodes & Inheritance Edges
+    for (const cls of info.classes || []) {
+      const classId = `${filePath}:${cls.name}`;
+      nodes.push({ id: classId, name: cls.name, type: 'class', file: filePath });
+      
+      // Edge: File -> Class
+      edges.push({ source: filePath, target: classId, type: 'contains' });
+
+      // Edge: Inheritance
+      if (cls.extendsClass) {
+        edges.push({ source: classId, target: cls.extendsClass, type: 'extends' });
+      }
+    }
+
+    // Add Function Nodes & Call Edges
+    for (const func of info.functions || []) {
+      const funcId = `${filePath}:${func.parentClass ? func.parentClass + '.' : ''}${func.name}`;
+      nodes.push({ id: funcId, name: func.name, type: 'function', file: filePath });
+
+      // Edge: File/Class -> Function
+      const parentId = func.parentClass ? `${filePath}:${func.parentClass}` : filePath;
+      edges.push({ source: parentId, target: funcId, type: 'contains' });
+    }
+
+    // Edge: Function Calls
+    for (const call of info.functionCalls || []) {
+      const sourceId = `${filePath}:${call.callerClass ? call.callerClass + '.' : ''}${call.callerFunction}`;
+      edges.push({ source: sourceId, target: call.name, type: 'calls' });
+    }
+  }
+
+  return { nodes, edges };
+}
+
 // --- Tools ---
 
 // 1. Search Tool
@@ -146,11 +195,11 @@ server.registerTool(
         if (!targetFilter || targetFilter === "class" || targetFilter === "widget") {
           if (mode === "definitions" || mode === "both") {
             for (const c of info.classes) {
-              if (c.name.toLowerCase().includes(q)) {
-                if (filter === "widget" && c.type === "plain") continue;
-                if (targetFilter === "widget" && c.type === "plain") continue;
-                results.push({ name: c.name, type: "class_definition", subtype: c.type, file, line: c.line });
-              }
+                if (c.name.toLowerCase().includes(q)) {
+                  if (filter === "widget" && c.type === "plain") continue;
+                  if (targetFilter === "widget" && c.type === "plain") continue;
+                  results.push({ name: c.name, type: "class_definition", subtype: c.type, file, line: c.line, lineEnd: c.lineEnd });
+                }
             }
           }
         }
@@ -159,7 +208,7 @@ server.registerTool(
           if (mode === "definitions" || mode === "both") {
             for (const f of info.functions) {
               if (f.name.toLowerCase().includes(q)) {
-                results.push({ name: f.name, type: "function_definition", parent: f.parentClass, file, line: f.line });
+                results.push({ name: f.name, type: "function_definition", parent: f.parentClass, file, line: f.line, lineEnd: f.lineEnd });
               }
             }
           }
@@ -505,37 +554,132 @@ server.registerTool(
     inputSchema: z.object({}),
   },
   async () => {
-    const index = readIndex();
-    if (!index || !index.arb) return { content: [{ type: "text", text: "Index not found." }] };
-
-    const allKeys = new Set<string>();
-    const fileKeys = new Map<string, Set<string>>();
-
-    for (const file in index.arb) {
-      const keys = new Set<string>();
-      for (const t of index.arb[file]) {
-        allKeys.add(t.key);
-        keys.add(t.key);
-      }
-      fileKeys.set(file, keys);
-    }
-
-    const results = [];
-    for (const [filePath, keys] of fileKeys.entries()) {
-      const missing = [];
-      for (const k of allKeys) {
-        if (!keys.has(k)) missing.push(k);
-      }
-      if (missing.length > 0) {
-        results.push({ filePath, missingKeys: missing });
-      }
-    }
-
-    return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+    const arbEditor = new ArbEditor(currentProjectPath);
+    const results = arbEditor.getAllTranslations();
+    return { 
+      content: [{ 
+        type: "text", 
+        text: JSON.stringify({
+          files: results.files,
+          totalKeys: results.keys.length,
+          missingKeys: results.missingKeys
+        }, null, 2) 
+      }] 
+    };
   }
 );
 
-// 7. Reverse Dependencies Tool
+// ── Impact Analysis Helpers (Blast Radius) moved to CodeAnalyzer ───────────────────
+
+// 6b. Update Translation Tool
+server.registerTool(
+  "flutter_update_translation",
+  {
+    description: "Update or add a translation key across all ARB files",
+    inputSchema: z.object({
+      key: z.string().describe("Translation key (e.g. loginButton)"),
+      arValue: z.string().describe("Arabic translation value"),
+      enValue: z.string().describe("English translation value"),
+      description: z.string().optional().describe("Optional description for the translation key"),
+    }),
+  },
+  async ({ key, arValue, enValue, description }) => {
+    const arbEditor = new ArbEditor(currentProjectPath);
+    const result = arbEditor.updateTranslation(key, arValue, enValue, description);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+// 6c. Delete Translation Tool
+server.registerTool(
+  "flutter_delete_translation",
+  {
+    description: "Delete a translation key from all ARB files",
+    inputSchema: z.object({
+      key: z.string().describe("Translation key to delete"),
+    }),
+  },
+  async ({ key }) => {
+    const arbEditor = new ArbEditor(currentProjectPath);
+    const result = arbEditor.deleteTranslation(key);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+// 6d. List Translations Tool
+server.registerTool(
+  "flutter_list_translations",
+  {
+    description: "List all translation keys and check for missing keys across ARB files",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    const arbEditor = new ArbEditor(currentProjectPath);
+    const result = arbEditor.getAllTranslations();
+    return { 
+      content: [{ 
+        type: "text", 
+        text: JSON.stringify(result, null, 2) 
+      }] 
+    };
+  }
+);
+
+// 7. Impact Analysis Tool
+server.registerTool(
+  "flutter_get_impact_analysis",
+  {
+    description: "Analyze the 'blast radius' of a file: find all application entry points that eventually call code in this file.",
+    inputSchema: z.object({
+      relativePath: z.string().describe("The relative path of the file to analyze (e.g. lib/core/utils.dart)"),
+    }),
+  },
+  async ({ relativePath }) => {
+    const index = readIndex();
+    if (!index || !index.dart) return { content: [{ type: "text", text: "Index not found." }] };
+
+    const analyzer = new CodeAnalyzer(currentProjectPath);
+    const fileInfo = index.dart[relativePath];
+    if (!fileInfo) return { content: [{ type: "text", text: `File not found in index: ${relativePath}` }] };
+
+    const targets = new Set<string>();
+    for (const cls of fileInfo.classes || []) targets.add(cls.name);
+    for (const func of fileInfo.functions || []) targets.add(func.name);
+
+    const affectedFlows: any[] = [];
+    const entryPoints = analyzer.findEntryPoints(index);
+
+    for (const ep of entryPoints) {
+      const pathFound = analyzer.findPathToTargets(index, ep, targets);
+      if (pathFound) {
+        affectedFlows.push({
+          entryPoint: ep.name,
+          entryFile: ep.filePath,
+          flowPath: pathFound.map(p => `${p.kind} ${p.name} (${p.filePath}:${p.line})`).join(" -> ")
+        });
+      }
+    }
+
+    const result = {
+      targetFile: relativePath,
+      entitiesFound: targets.size,
+      affectedFlows: affectedFlows,
+      summary: affectedFlows.length > 0 
+        ? `Found ${affectedFlows.length} execution flows from entry points reaching this file.`
+        : "No direct execution flows from entry points (main/build) found reaching this file. It might be dead code or used dynamically."
+    };
+
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+// 8. Reverse Dependencies Tool
 server.registerTool(
   "flutter_get_reverse_deps",
   {
@@ -657,69 +801,25 @@ server.registerTool(
   }
 );
 
-// 10. Translation Tools
+// 11. Get Node At Cursor Tool
 server.registerTool(
-  "flutter_update_translation",
+  "flutter_get_node_at_cursor",
   {
-    description: "Add or update a translation key in all ARB files",
+    description: "Find the Dart element (class/function) at a specific cursor position in a file.",
     inputSchema: z.object({
-      key: z.string().describe("Translation key (e.g., 'welcome_message')"),
-      arValue: z.string().describe("Arabic translation value"),
-      enValue: z.string().describe("English translation value"),
-      description: z.string().optional().describe("Optional description for translators"),
+      relativePath: z.string().describe("Relative path of the file"),
+      line: z.number().describe("Line number (1-indexed)"),
     }),
   },
-  async ({ key, arValue, enValue, description }: { 
-    key: string; 
-    arValue: string; 
-    enValue: string; 
-    description?: string;
-  }) => {
-    try {
-      const arbEditor = new ArbEditor(currentProjectPath);
-      const result = arbEditor.updateTranslation(key, arValue, enValue, description);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (error) {
-      return { content: [{ type: "text", text: `Error updating translation: ${error}` }] };
-    }
+  async ({ relativePath, line }) => {
+    const cache = getSqliteCache();
+    const node = cache.getNodeAtCursor(relativePath, line);
+    if (!node) return { content: [{ type: "text", text: "No specific Dart element found at this position." }] };
+    return { content: [{ type: "text", text: JSON.stringify(node, null, 2) }] };
   }
 );
 
-server.registerTool(
-  "flutter_list_translations",
-  {
-    description: "List all translation keys and check for missing keys across ARB files",
-    inputSchema: z.object({}),
-  },
-  async () => {
-    try {
-      const arbEditor = new ArbEditor(currentProjectPath);
-      const result = arbEditor.getAllTranslations();
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (error) {
-      return { content: [{ type: "text", text: `Error listing translations: ${error}` }] };
-    }
-  }
-);
-
-server.registerTool(
-  "flutter_delete_translation",
-  {
-    description: "Delete a translation key from all ARB files",
-    inputSchema: z.object({
-      key: z.string().describe("Translation key to delete"),
-    }),
-  },
-  async ({ key }: { key: string }) => {
-    try {
-      const arbEditor = new ArbEditor(currentProjectPath);
-      const result = arbEditor.deleteTranslation(key);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (error) {
-      return { content: [{ type: "text", text: `Error deleting translation: ${error}` }] };
-    }
-  }
-);
+// 11. Package Management Tools
 
 server.registerTool(
   "flutter_list_packages",
@@ -1198,12 +1298,106 @@ server.registerTool(
     inputSchema: z.object({}),
   },
   async () => {
-    // In a real scenario, we might trigger a message to the VS Code extension
-    // For the MCP standalone, we can only report that it needs the extension
     return {
       content: [{
         type: "text",
         text: "Rebuild request received. Please ensure the Flutter Explorer VS Code extension is active to perform a full project re-indexing. The MCP server will automatically pick up the new index once completed."
+      }],
+    };
+  }
+);
+
+// 17. Detailed Graph Tool
+server.registerTool(
+  "flutter_get_detailed_graph",
+  {
+    description: "Get a detailed relationship graph (inheritance, calls, imports) for the project or a specific file",
+    inputSchema: z.object({
+      focusFile: z.string().optional().describe("Optional: focus the graph on a specific file and its direct neighbors"),
+      depth: z.number().optional().describe("Traversal depth (default: 1)"),
+    }),
+  },
+  async ({ focusFile, depth = 1 }) => {
+    const index = readIndex();
+    if (!index) return { content: [{ type: "text", text: "Index not found." }] };
+
+    const graph = buildDetailedGraph(index);
+    
+    if (focusFile) {
+      // Filter graph to only show focusFile and its neighbors
+      const neighbors = new Set<string>([focusFile]);
+      let currentFrontier = new Set<string>([focusFile]);
+
+      for (let i = 0; i < depth; i++) {
+        const nextFrontier = new Set<string>();
+        for (const edge of graph.edges) {
+          if (currentFrontier.has(edge.source)) {
+            neighbors.add(edge.target);
+            nextFrontier.add(edge.target);
+          }
+          if (currentFrontier.has(edge.target)) {
+            neighbors.add(edge.source);
+            nextFrontier.add(edge.source);
+          }
+        }
+        currentFrontier = nextFrontier;
+      }
+
+      graph.nodes = graph.nodes.filter(n => neighbors.has(n.id) || neighbors.has(n.name));
+      graph.edges = graph.edges.filter(e => neighbors.has(e.source) && neighbors.has(e.target));
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          nodeCount: graph.nodes.length,
+          edgeCount: graph.edges.length,
+          graph
+        }, null, 2)
+      }],
+    };
+  }
+);
+
+// 18. Smart Hints Tool
+server.registerTool(
+  "flutter_get_hints",
+  {
+    description: "Get context-aware suggestions for the next steps based on recent analysis",
+    inputSchema: z.object({
+      lastToolUsed: z.string().describe("The name of the tool that was just called"),
+      lastResult: z.any().optional().describe("The result of the last tool call"),
+    }),
+  },
+  async ({ lastToolUsed, lastResult }) => {
+    const hints: any[] = [];
+    
+    // Workflow logic based on hints.py inspiration
+    switch (lastToolUsed) {
+      case "flutter_search":
+        hints.push({ tool: "flutter_get_code_block", reason: "Read the full body of a found element" });
+        hints.push({ tool: "flutter_get_detailed_graph", reason: "See how this element fits into the architecture" });
+        break;
+      case "flutter_get_code_block":
+        hints.push({ tool: "flutter_analyze_logic_flow", reason: "Understand the logical steps inside this code" });
+        hints.push({ tool: "flutter_get_impact_analysis", reason: "Check what might break if you change this code" });
+        break;
+      case "flutter_get_impact_analysis":
+        hints.push({ tool: "flutter_get_reverse_deps", reason: "Find all places that depend on this file" });
+        break;
+      case "flutter_get_missing_translations":
+        hints.push({ tool: "flutter_update_translation", reason: "Fix a missing translation key" });
+        break;
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          suggestions: hints,
+          note: "These hints are generated based on common development workflows."
+        }, null, 2)
       }],
     };
   }

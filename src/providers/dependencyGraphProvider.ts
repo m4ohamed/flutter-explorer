@@ -15,52 +15,27 @@ export interface GraphNode {
 export interface GraphEdge {
     from: string;
     to: string;
+    type: string; // 'imports', 'extends', 'with', 'calls', 'contains'
 }
 export class DependencyGraphProvider {
     constructor(private indexManager: IndexManager) { }
     /** Get full dependency graph data for webview */
     getGraphData(): GraphData {
-        const depNodes = this.indexManager.getDependencyGraph();
-        const nodes: GraphNode[] = [];
-        const edges: GraphEdge[] = [];
-        const seen = new Set<string>();
-        for (const dep of depNodes) {
-            if (!seen.has(dep.file)) {
-                seen.add(dep.file);
-                nodes.push({
-                    id: dep.file,
-                    label: this.getShortName(dep.file),
-                    group: this.getGroup(dep.file),
-                });
-            }
-            for (const imp of dep.imports) {
-                edges.push({ from: dep.file, to: imp });
-                if (!seen.has(imp)) {
-                    seen.add(imp);
-                    nodes.push({
-                        id: imp,
-                        label: this.getShortName(imp),
-                        group: this.getGroup(imp),
-                    });
-                }
-            }
-        }
-        // Find most imported file
-        let mostImported: string | null = null;
-        let maxImports = 0;
-        for (const dep of depNodes) {
-            if (dep.importedBy.length > maxImports) {
-                maxImports = dep.importedBy.length;
-                mostImported = dep.file;
-            }
-        }
+        const detailed = this.indexManager.getDetailedGraph();
+        const nodes: GraphNode[] = detailed.nodes.map(n => ({
+            id: n.id,
+            label: n.label,
+            group: n.type, // Group by type (file, class, function, etc.)
+        }));
+        const edges: GraphEdge[] = detailed.edges;
+
         return {
             nodes,
             edges,
             stats: {
-                totalFiles: nodes.length,
+                totalFiles: nodes.filter(n => n.group === 'file').length,
                 totalEdges: edges.length,
-                mostImported,
+                mostImported: null, // Could be calculated but skipping for now
             },
         };
     }
@@ -81,7 +56,8 @@ export class DependencyGraphProvider {
             const fromId = idMap.get(edge.from);
             const toId = idMap.get(edge.to);
             if (fromId && toId) {
-                mermaid += `  ${fromId} --> ${toId}\n`;
+                // Label the edge with the relationship type
+                mermaid += `  ${fromId} -- "${edge.type}" --> ${toId}\n`;
             }
         }
         return mermaid;

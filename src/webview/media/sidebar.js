@@ -72,6 +72,13 @@
     });
   }
 
+  var openInteractiveGraph = document.getElementById('openInteractiveGraph');
+  if (openInteractiveGraph) {
+    openInteractiveGraph.addEventListener('click', function () {
+      vscode.postMessage({ command: 'openGraph' });
+    });
+  }
+
   var refreshPubspec = document.getElementById('refreshPubspec');
   if (refreshPubspec) {
     refreshPubspec.addEventListener('click', function () {
@@ -165,9 +172,9 @@
   }
 
   function renderWidgetTree(data) {
-    var fileNameEl = document.getElementById('treeFileName');
-    var treeView = document.getElementById('treeView');
-    if (!fileNameEl || !treeView) { return; }
+    const fileNameEl = document.getElementById('treeFileName');
+    const treeView = document.getElementById('treeView');
+    if (!fileNameEl || !treeView) return;
 
     if (!data || !data.fileName) {
       fileNameEl.textContent = 'No Dart file open';
@@ -176,18 +183,16 @@
     }
 
     fileNameEl.textContent = data.fileName;
-
-    var html = '';
+    let html = '';
 
     // Render classes
     if (data.classNames && data.classNames.length > 0) {
       html += '<div class="class-list">';
-      for (var i = 0; i < data.classNames.length; i++) {
-        var cls = data.classNames[i];
-        html += '<div class="class-item" data-line="' + cls.line + '">';
-        html += '<span class="class-type-badge">' + cls.type + '</span>';
-        html += '<span>' + escapeHtml(cls.name) + '</span>';
-        html += '</div>';
+      for (const cls of data.classNames) {
+        html += `<div class="class-item" data-line="${cls.line}">
+          <span class="class-type-badge">${cls.type}</span>
+          <span>${escapeHtml(cls.name)}</span>
+        </div>`;
       }
       html += '</div>';
     }
@@ -202,34 +207,117 @@
     treeView.innerHTML = html;
 
     // Add click handlers for class items
-    treeView.querySelectorAll('.class-item').forEach(function (item) {
-      item.addEventListener('click', function () {
-        var line = parseInt(this.getAttribute('data-line') || '1', 10);
+    treeView.querySelectorAll('.class-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const line = parseInt(item.getAttribute('data-line') || '1', 10);
         vscode.postMessage({ command: 'openFile', file: data.fileName, line: line });
+      });
+    });
+
+    // Add handlers for widget nodes
+    treeView.querySelectorAll('.tree-node').forEach(node => {
+      node.addEventListener('click', (e) => {
+        const line = parseInt(node.getAttribute('data-line') || '1', 10);
+        vscode.postMessage({ command: 'openFile', file: data.fileName, line: line });
+        
+        // Visual selection
+        treeView.querySelectorAll('.tree-node').forEach(n => n.classList.remove('active'));
+        node.classList.add('active');
+      });
+    });
+
+    // Add handlers for toggles
+    treeView.querySelectorAll('.tree-toggle').forEach(toggle => {
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const nodeId = toggle.getAttribute('data-id');
+        const childrenContainer = document.getElementById(`children-${nodeId}`);
+        if (childrenContainer) {
+          const isCollapsed = childrenContainer.style.display === 'none';
+          childrenContainer.style.display = isCollapsed ? 'block' : 'none';
+          toggle.textContent = isCollapsed ? '▼' : '▶';
+          toggle.classList.toggle('collapsed', !isCollapsed);
+        }
       });
     });
   }
 
   function renderTreeNodes(nodes, depth) {
-    var html = '';
-    for (var i = 0; i < nodes.length; i++) {
-      var node = nodes[i];
-      var indentHtml = '';
-      for (var d = 0; d < depth; d++) {
+    let html = '';
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      const nodeId = Math.random().toString(36).substring(2, 9);
+      const hasChildren = node.children && node.children.length > 0;
+      
+      // Indentation vertical guides
+      let indentHtml = '';
+      for (let d = 0; d < depth; d++) {
         indentHtml += '<span class="tree-indent"></span>';
       }
-      var hasChildren = node.children && node.children.length > 0;
-      html += '<div class="tree-node">';
+
+      // Extract detail from properties if present
+      const detailProp = node.properties?.find(p => p.name === 'detail');
+      const detail = detailProp ? detailProp.value : '';
+
+      html += `<div class="tree-node" data-line="${node.line}">`;
       html += indentHtml;
-      html += '<span class="tree-icon">' + (hasChildren ? '▸' : '◦') + '</span>';
-      html += '<span class="tree-label">' + escapeHtml(node.name) + '</span>';
+      
+      // Toggle button
+      if (hasChildren) {
+        html += `<span class="tree-toggle" data-id="${nodeId}">▼</span>`;
+      } else {
+        html += '<span style="width: 18px;"></span>';
+      }
+
+      // Icon
+      html += `<span class="tree-icon">${getWidgetIcon(node.name)}</span>`;
+      
+      // Label & Detail
+      html += `<span class="tree-label">${escapeHtml(node.name)}</span>`;
+      if (detail) {
+        html += `<span class="tree-detail">${escapeHtml(detail)}</span>`;
+      }
+      
       html += '</div>';
 
       if (hasChildren) {
+        html += `<div id="children-${nodeId}" class="tree-children">`;
         html += renderTreeNodes(node.children, depth + 1);
+        html += '</div>';
       }
     }
     return html;
+  }
+
+  function getWidgetIcon(name) {
+    const icons = {
+      'Scaffold': '🏗️',
+      'AppBar': '🔝',
+      'Container': '📦',
+      'Column': '⬇️',
+      'Row': '➡️',
+      'Stack': '📚',
+      'Text': '📄',
+      'Icon': '🖼️',
+      'Image': '🖼️',
+      'Button': '🖱️',
+      'Padding': '↔️',
+      'Center': '🎯',
+      'SizedBox': '📏',
+      'ListView': '📜',
+      'GridView': '🔳',
+      'SingleChildScrollView': '📜',
+      'GestureDetector': '👆',
+      'InkWell': '👆',
+      'TextField': '⌨️',
+      'Navigator': '🧭',
+      'StreamBuilder': '🌊',
+      'FutureBuilder': '⏳',
+      'Provider': '💉',
+      'BlocBuilder': '🧱',
+      'Consumer': '🛒',
+    };
+    return icons[name] || '◦';
   }
 
   function renderDependencyGraph(data) {
@@ -519,4 +607,7 @@
   // ─── Initial Load ─────────────────────────────────────
 
   vscode.postMessage({ command: 'getStats' });
+  vscode.postMessage({ command: 'getWidgetTree' });
+  vscode.postMessage({ command: 'getDependencyGraph' });
+  vscode.postMessage({ command: 'getPubspec' });
 })();

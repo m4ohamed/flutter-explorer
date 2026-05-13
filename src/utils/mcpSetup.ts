@@ -2,9 +2,13 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { generateSkills } from './skillsGenerator';
 
 export async function setupMcpConfig(extensionPath: string, workspaceRoot: string): Promise<void> {
     try {
+        // Generate AI Skills instructions
+        await generateSkills(workspaceRoot);
+
         const username = os.userInfo().username;
         const mcpServerPath = path.join(extensionPath, 'out', 'mcp-server.js').replace(/\\/g, '/');
         

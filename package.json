@@ -30,6 +30,12 @@
     "activationEvents": [
         "workspaceContains:**/pubspec.yaml"
     ],
+    "files": [
+        "out",
+        "resources",
+        "LICENSE",
+        "README.md"
+    ],
     "main": "./out/extension.js",
     "contributes": {
         "viewsContainers": {
@@ -69,6 +75,11 @@
             {
                 "command": "flutterExplorer.setupMcp",
                 "title": "Flutter Explorer: Auto-Setup MCP Config"
+            },
+            {
+                "command": "flutterExplorer.openGraph",
+                "title": "Flutter Explorer: Open Interactive Dependency Graph",
+                "icon": "$(graph)"
             }
         ],
         "configuration": {
@@ -102,19 +113,23 @@
         "compile": "node esbuild.js --production",
         "watch": "node esbuild.js --watch",
         "lint": "eslint src --ext ts",
-        "build": "node esbuild.js"
+        "build": "node esbuild.js",
+        "rebuild": "electron-rebuild -v 39.2.3 -f -w better-sqlite3"
     },
     "devDependencies": {
+        "@electron/rebuild": "^4.0.4",
         "@types/better-sqlite3": "^7.6.13",
+        "@types/d3": "^7.4.3",
         "@types/node": "^20.11.0",
         "@types/vscode": "^1.85.0",
         "@vscode/vsce": "^2.22.0",
-        "esbuild": "^0.20.0",
+        "esbuild": "^0.28.0",
         "typescript": "^5.3.0"
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.29.0",
         "better-sqlite3": "^12.9.0",
+        "d3": "^7.9.0",
         "zod": "^4.4.3"
     }
 }

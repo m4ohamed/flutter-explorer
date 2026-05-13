@@ -1,26 +1,34 @@
 # Development Roadmap
 
-## Phase 1: Core Functionality (Completed)
-- [x] Basic Dart parsing (Classes, Functions, Widgets)
-- [x] Simple JSON-based caching
-- [x] Initial VS Code extension UI (Sidebar, Search)
-- [x] Basic MCP Server integration
+## Completed
+- [x] Initial Project Setup
+- [x] SQLite Cache Implementation
+- [x] BM25 Search v2
+- [x] Automated MCP Configuration (VS Code, Cursor, Claude, Gemini)
+- [x] **Blast Radius Analysis (Impact Analysis)**: Traces impact of changes back to `main` or Widgets.
+- [x] **Advanced Dart Call Detection**: Improved regex to capture receivers and handle dotted calls.
+- [x] **Interactive Visualization**: D3.js force-directed graph with search and zoom.
+- [x] **Performance Overhaul**: O(N) indexing with static RegExp caching and masking.
+- [x] **Professional Widget Tree**: Interactive expand/collapse, guide lines, and semantic details.
+- [x] **Blast Radius Analysis (Impact Analysis)**: Traces impact of changes back to `main` or Widgets via BFS traversal.
+- [x] Multi-line class and build method detection (Robustness)
+- [x] Riverpod/Hooks support in Widget Tree
+- [x] Consolidated file navigation logic (Windows Fix)
+- [x] Detailed Graph Edges (Inheritance, Calls, Imports) & MCP Integration
+- [x] Refactored Modular MCP Server (Arb, Logic, Search)
+- [x] New MCP Tools (Update/Delete Translation, Impact Analysis, Smart Hints)
+- [x] ABI Resilience & JSON Fallback: Stable persistence across different Node.js environments (Fully verified with electron-rebuild).
+- [x] **SQLite WAL Mode Support**: Confirmed stability of `.db-wal` and `.db-shm` files for concurrent access.
+- [x] **Robust Project Discovery**: Integrated VCS-aware root detection (looks for `pubspec.yaml` or `.git`).
+- [x] **Standardized Data Directory**: Moved database and index files to a dedicated `.flutter-explorer/` directory.
+- [x] **Automated DB Migration**: Safe migration of legacy databases and SQLite side-files from `.vscode/`.
+- [x] **AI Skills System**: Automated generation of AI instruction sets (skills) for project exploration, debugging, and impact analysis.
 
-## Phase 2: Performance & Depth (Completed/Ongoing)
-- [x] **SQLite Migration**: Replaced monolithic JSON cache with `better-sqlite3` for incremental, high-performance updates.
-- [x] **Advanced Indexing**: Added support for 12+ Dart elements (Enums, Mixins, Extensions, Typedefs, Variables, etc.).
-- [x] **Smart Search**: Integrated BM25 ranking algorithm for more relevant search results.
-- [x] **Reverse Dependencies**: Implementation of high-confidence usage analysis for classes and functions.
-- [x] **Incremental Updates**: Real-time indexing via file watchers without full project scans.
 
-## Phase 3: Developer Experience & Reliability (Current)
-- [x] **Standardized MCP Server**: Server now reads directly from SQLite, ensuring consistency between AI agents and the VS Code extension.
-- [x] **Type Safety**: Full TypeScript validation across the project.
-- [ ] **Data Integrity**: Implement periodic index validation and automatic repairs.
-- [ ] **UI Polish**: Enhance the sidebar with more interactive dependency visualizations.
 
-## Phase 4: Expansion & Integration (Next Steps)
-- [ ] **Advanced Code Analysis**: Logic flow visualization and automated refactoring suggestions.
-- [ ] **Performance Benchmarking**: Validate indexing speed on extremely large (1000+ files) projects.
-- [x] **Extension Marketplace**: Prepared for distribution via `vsce package`.
-- [ ] **Release**: Publish to VS Code Marketplace.
+## In Progress
+- [ ] Semantic Search (Vector Embeddings)
+
+## Future
+- [ ] Surprise Scoring: Detect unexpected coupling.
+- [ ] Hub & Bridge Detection: Identify architectural chokepoints.

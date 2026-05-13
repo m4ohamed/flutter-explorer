@@ -5,6 +5,7 @@
  * analysis for Flutter/Dart projects.
  */
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { IndexManager, DiagnosticInfo } from './indexer/indexManager';
 import { FileWatcher } from './indexer/fileWatcher';
 import { SearchProvider } from './providers/searchProvider';
@@ -78,17 +79,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
     context.subscriptions.push(
         vscode.commands.registerCommand('flutterExplorer.openFile', async (file: string, line: number) => {
-            const uri = vscode.Uri.file(file);
-            const doc = await vscode.workspace.openTextDocument(uri);
-            const editor = await vscode.window.showTextDocument(doc);
-            const position = new vscode.Position(Math.max(0, line - 1), 0);
-            editor.selection = new vscode.Selection(position, position);
-            editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+            try {
+                const absPath = path.isAbsolute(file) ? file : path.join(workspaceRoot, file);
+                const uri = vscode.Uri.file(absPath);
+                const doc = await vscode.workspace.openTextDocument(uri);
+                const editor = await vscode.window.showTextDocument(doc);
+                const position = new vscode.Position(Math.max(0, line - 1), 0);
+                editor.selection = new vscode.Selection(position, position);
+                editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+            } catch (err) {
+                vscode.window.showErrorMessage(`Could not open: ${file}`);
+            }
         }),
     );
     context.subscriptions.push(
         vscode.commands.registerCommand('flutterExplorer.setupMcp', async () => {
             await setupMcpConfig(context.extensionPath, workspaceRoot);
+        }),
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('flutterExplorer.openGraph', () => {
+            const { GraphWebviewPanel } = require('./views/graphWebview');
+            GraphWebviewPanel.createOrShow(context.extensionUri, indexManager);
         }),
     );
     // ─── Index Changed Listener ────────────────────────────
@@ -98,21 +110,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     // ─── Active Editor Change → Update Widget Tree ─────────
     context.subscriptions.push(
-        vscode.window.onDidChangeActiveTextEditor(() => {
+        vscode.window.onDidChangeActiveTextEditor(async () => {
             sidebarProvider.postMessage({
                 command: 'widgetTree',
-                data: widgetTreeProvider.getTreeDataForWebview(),
+                data: await widgetTreeProvider.getTreeDataForWebview(),
             });
         }),
     );
     // Listen for text changes to update widget tree in real time
     context.subscriptions.push(
-        vscode.workspace.onDidChangeTextDocument((e) => {
+        vscode.workspace.onDidChangeTextDocument(async (e) => {
             if (e.document === vscode.window.activeTextEditor?.document &&
                 e.document.fileName.endsWith('.dart')) {
                 sidebarProvider.postMessage({
                     command: 'widgetTree',
-                    data: widgetTreeProvider.getTreeDataForWebview(),
+                    data: await widgetTreeProvider.getTreeDataForWebview(),
                 });
             }
         }),
@@ -156,7 +168,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }),
     );
     // ─── Startup: Load Cache or Build Full Index ───────────
-    const cacheLoaded = indexManager.loadCache();
+    const cacheLoaded = await indexManager.loadCache();
     if (cacheLoaded) {
         updateStatusBar(indexManager);
         fileWatcher.start();

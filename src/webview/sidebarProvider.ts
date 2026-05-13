@@ -47,29 +47,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 }
                 case 'openFile': {
                     if (message.file && message.line !== undefined) {
-                        const absPath = path.isAbsolute(message.file)
-                            ? message.file
-                            : path.join(this.workspaceRoot, message.file); const uri = vscode.Uri.file(absPath);
-                        try {
-                            const doc = await vscode.workspace.openTextDocument(uri);
-                            const editor = await vscode.window.showTextDocument(doc);
-                            const pos = new vscode.Position(Math.max(0, message.line - 1), 0);
-                            editor.selection = new vscode.Selection(pos, pos);
-                            editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
-                        } catch {
-                            vscode.window.showErrorMessage(`Could not open: ${message.file}`);
-                        }
+                        vscode.commands.executeCommand('flutterExplorer.openFile', message.file, message.line);
                     }
                     break;
                 }
                 case 'getWidgetTree': {
-                    const treeData = this.widgetTreeProvider.getTreeDataForWebview();
+                    const treeData = await this.widgetTreeProvider.getTreeDataForWebview();
                     this.postMessage({ command: 'widgetTree', data: treeData });
                     break;
                 }
                 case 'getDependencyGraph': {
                     const graphData = this.depGraphProvider.getGraphData();
                     this.postMessage({ command: 'dependencyGraph', data: graphData });
+                    break;
+                }
+                case 'openGraph': {
+                    vscode.commands.executeCommand('flutterExplorer.openGraph');
                     break;
                 }
                 case 'getPubspec': {
@@ -176,7 +169,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <div class="tab-content" id="tab-graph">
       <div class="graph-header">
         <span>Dependency Graph</span>
-        <button class="icon-btn" id="refreshGraph" title="Refresh">⟳</button>
+        <div style="display: flex; gap: 4px;">
+          <button class="icon-btn" id="openInteractiveGraph" title="Open Interactive Graph">🌐</button>
+          <button class="icon-btn" id="refreshGraph" title="Refresh">⟳</button>
+        </div>
       </div>
       <div class="graph-stats" id="graphStats"></div>
       <div class="graph-container" id="graphContainer"></div>

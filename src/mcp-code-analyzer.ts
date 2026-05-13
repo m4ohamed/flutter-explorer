@@ -176,4 +176,83 @@ export class CodeAnalyzer {
 
     return dependencies;
   }
+
+  /**
+   * Find application entry points (main and build methods)
+   */
+  findEntryPoints(index: any): any[] {
+    const entryPoints: any[] = [];
+    if (!index || !index.dart) return entryPoints;
+
+    for (const [path, info] of Object.entries(index.dart as Record<string, any>)) {
+      for (const func of info.functions || []) {
+        if (func.name === 'main') {
+          entryPoints.push({ ...func, filePath: path, kind: 'Function' });
+        }
+      }
+      for (const cls of info.classes || []) {
+        if (cls.extendsClass && (cls.extendsClass.includes('Widget') || cls.extendsClass.includes('State'))) {
+          for (const method of (info.functions || []).filter((f: any) => f.parentClass === cls.name)) {
+            if (method.name === 'build') {
+              entryPoints.push({ ...method, filePath: path, kind: 'Method' });
+            }
+          }
+        }
+      }
+    }
+    return entryPoints;
+  }
+
+  /**
+   * Resolve a call to its target function or class
+   */
+  resolveCall(index: any, name: string): any | null {
+    if (!index || !index.dart) return null;
+    for (const [path, info] of Object.entries(index.dart as Record<string, any>)) {
+      for (const f of info.functions || []) {
+        if (f.name === name) return { ...f, filePath: path, kind: 'Function' };
+      }
+      for (const c of info.classes || []) {
+        if (c.name === name) return { ...c, filePath: path, kind: 'Class', name: c.name, line: c.line };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * BFS to find paths from a start node to any of the target entity names
+   */
+  findPathToTargets(index: any, start: any, targets: Set<string>, maxDepth = 5): any[] | null {
+    const queue: { node: any; path: any[] }[] = [{ node: start, path: [start] }];
+    const visited = new Set<string>();
+
+    while (queue.length > 0) {
+      const { node, path: currentPath } = queue.shift()!;
+      const qname = `${node.filePath}:${node.name}`;
+      if (visited.has(qname)) continue;
+      visited.add(qname);
+
+      if (targets.has(node.name)) {
+        return currentPath;
+      }
+
+      if (currentPath.length >= maxDepth) continue;
+
+      const fileInfo = index.dart?.[node.filePath];
+      if (fileInfo) {
+        const calls = (fileInfo.functionCalls || []).filter((c: any) => 
+          c.callerFunction === node.name && 
+          (!node.parentClass || c.callerClass === node.parentClass)
+        );
+
+        for (const call of calls) {
+          const targetNode = this.resolveCall(index, call.name);
+          if (targetNode) {
+            queue.push({ node: targetNode, path: [...currentPath, targetNode] });
+          }
+        }
+      }
+    }
+    return null;
+  }
 }
