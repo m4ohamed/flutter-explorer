@@ -171,6 +171,9 @@ export class SqliteCache {
             } catch (e) {
                 console.error('[FlutterExplorer] SQLite upsertDartFile error:', e);
             }
+        } else {
+            this.jsonCache.dartFiles[relPath] = { hash: hash ?? '', data: JSON.stringify(info) };
+            this._saveJson();
         }
     }
 
@@ -349,6 +352,9 @@ export class SqliteCache {
                 this.db.prepare('DELETE FROM dart_files').run();
                 this.db.prepare('DELETE FROM arb_files').run();
                 this.db.prepare('DELETE FROM metadata').run();
+                
+                // Ensure the wipe is visible to the MCP server immediately
+                this.db.pragma('wal_checkpoint(PASSIVE)');
             } catch (e) {
                 console.error('[FlutterExplorer] SQLite clearAll error:', e);
             }
