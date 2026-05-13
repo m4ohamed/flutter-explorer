@@ -7,6 +7,16 @@ node_modules/**
 src/**
 tsconfig.json
 esbuild.js
+code-review-graph-source/**
+scratch/**
+skills/**
+.cursor/**
+AGENTS
+analyzer_output.json
+development_roadmap.md
+errror.md
+lessons.md
+.flutter-explorer/**
 !out/**
 !resources/**
 !tools/**

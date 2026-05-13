@@ -25,6 +25,7 @@ void main(List<String> args) async {
   try {
     final collection = AnalysisContextCollection(includedPaths: [libPath]);
     final results = <Map<String, dynamic>>[];
+    int fileCount = 0;
 
     for (final context in collection.contexts) {
       for (final path in context.contextRoot.analyzedFiles()) {
@@ -164,6 +165,10 @@ void main(List<String> args) async {
             fileInfo['widgets'] = widgetVisitor.widgets;
 
             results.add(fileInfo);
+            fileCount++;
+            if (fileCount % 10 == 0) {
+              stderr.writeln('PROGRESS:$fileCount');
+            }
           }
         } catch (e) {
           // Skip files that fail to analyze
@@ -171,6 +176,7 @@ void main(List<String> args) async {
       }
     }
 
+    stderr.writeln('PROGRESS:$fileCount');
     stdout.write(jsonEncode(results));
   } catch (e, stack) {
     stderr.writeln('Analysis failed: $e');

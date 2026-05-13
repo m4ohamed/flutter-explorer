@@ -88,11 +88,17 @@ export class IndexManager {
 
     if (useDartAnalyzer) {
       if (progress) progress.report({ message: 'Analyzing project with Dart SDK...' });
-      const dartResults = await analyzeWithDart(this.workspaceRoot, this.extensionPath);
-      if (dartResults && dartResults.length > 0) {
+      const dartResults = await analyzeWithDart(this.workspaceRoot, this.extensionPath, (current) => {
+        if (progress) progress.report({ message: `Analyzed ${current} Dart files...` });
+      });
 
+      if (dartResults && dartResults.length > 0) {
+        let i = 0;
         for (const info of dartResults) {
           try {
+            if (progress && i % 10 === 0) {
+              progress.report({ message: `Processing ${info.filePath} (${i + 1}/${dartResults.length})` });
+            }
             const fullPath = path.join(this.workspaceRoot, info.filePath);
             const content = fs.readFileSync(fullPath, 'utf8');
             info.contentHash = this.computeHash(content);
@@ -101,6 +107,7 @@ export class IndexManager {
           } catch (e) {
             console.error(`Failed to post-process analyzed file ${info.filePath}:`, e);
           }
+          i++;
         }
         dartFilesAnalyzed = true;
       }

@@ -1,4 +1,4 @@
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { DartFileInfo } from './dartParser';
@@ -7,7 +7,11 @@ import { DartFileInfo } from './dartParser';
  * Wrapper for the Dart-based analyzer tool.
  * Uses package:analyzer for high-accuracy indexing.
  */
-export async function analyzeWithDart(projectPath: string, extensionPath?: string): Promise<DartFileInfo[] | null> {
+export async function analyzeWithDart(
+    projectPath: string, 
+    extensionPath?: string,
+    onProgress?: (current: number) => void
+): Promise<DartFileInfo[] | null> {
     try {
         const hasDart = await checkDartSdk();
         if (!hasDart) {
@@ -42,17 +46,34 @@ export async function analyzeWithDart(projectPath: string, extensionPath?: strin
 
 
         return new Promise((resolve) => {
-            // Increase buffer to 50MB for large projects
-            exec(`dart "${toolsPath}" "${projectPath}"`, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
-                if (error) {
-                    console.error(`Dart analyzer error: ${error.message}`);
+            const child = spawn('dart', [toolsPath, projectPath]);
+            let stdoutData = '';
+            let stderrData = '';
+
+            child.stdout.on('data', (data) => {
+                stdoutData += data.toString();
+            });
+
+            child.stderr.on('data', (data) => {
+                const message = data.toString();
+                stderrData += message;
+
+                // Check for progress messages
+                const progressMatch = message.match(/PROGRESS:(\d+)/);
+                if (progressMatch && onProgress) {
+                    onProgress(parseInt(progressMatch[1], 10));
+                }
+            });
+
+            child.on('close', (code) => {
+                if (code !== 0) {
+                    console.error(`Dart analyzer process exited with code ${code}`);
+                    console.error(`Stderr: ${stderrData}`);
                     return resolve(null);
                 }
-                if (stderr && !stderr.includes('Resolving dependencies')) {
-                    console.warn(`Dart analyzer stderr: ${stderr}`);
-                }
+
                 try {
-                    const results = JSON.parse(stdout);
+                    const results = JSON.parse(stdoutData);
                     // Map results to ensure they match DartFileInfo (some fields might be missing)
                     const mappedResults = (results as any[]).map(file => ({
                         ...file,
@@ -80,6 +101,11 @@ export async function analyzeWithDart(projectPath: string, extensionPath?: strin
                     console.error('Failed to parse Dart analyzer output:', e);
                     resolve(null);
                 }
+            });
+
+            child.on('error', (err) => {
+                console.error('Failed to start Dart analyzer:', err);
+                resolve(null);
             });
         });
     } catch (e) {
