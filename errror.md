@@ -45,3 +45,13 @@ The MCP server tools often return a generic "Index not found" message when the S
     3. Updated `IndexManager` to report progress to the VS Code UI.
 - **Result**: Users see real-time progress during indexing; Dart analyzer now starts correctly on Windows.
 - **Lessons**: Use `spawn` with `shell: true` on Windows for reliable command execution when streaming output. Always provide progress feedback for long-running operations.
+
+## [2026-05-14] RESOLVED: SQLite ABI Mismatch
+- **Problem**: `better-sqlite3` fails to load with an ABI mismatch error (`NODE_MODULE_VERSION`).
+- **Analysis**: The native module was compiled for a different Node.js/Electron version than the one running the extension.
+- **Solution**: 
+    1. Switched to `npx @electron/rebuild` for more reliable recompilation.
+    2. Updated `package.json` to use the newer rebuild command.
+    3. Enhanced `sqliteCache.ts` to log the full error message for better diagnostics.
+- **Result**: `better-sqlite3` recompiled successfully for Electron v39.2.3. Detailed logs will now show the exact version mismatch if it persists.
+- **Lessons**: Use `@electron/rebuild` instead of the legacy `electron-rebuild` for newer Electron versions. Always log the full exception message when catching ABI errors.

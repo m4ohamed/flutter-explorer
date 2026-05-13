@@ -114,7 +114,7 @@
         "watch": "node esbuild.js --watch",
         "lint": "eslint src --ext ts",
         "build": "node esbuild.js",
-        "rebuild": "electron-rebuild -v 39.2.3 -f -w better-sqlite3",
+        "rebuild": "npx @electron/rebuild -v 39.2.3 -f -w better-sqlite3",
         "analyze-dart": "dart tools/dart_analyzer.dart ."
 
     },

@@ -99,7 +99,8 @@ export class SqliteCache {
                 } catch (err: any) {
                     const msg = err.message || String(err);
                     if (msg.includes('NODE_MODULE_VERSION') || msg.includes('compiled against')) {
-                        console.error('[FlutterExplorer] SQLite ABI mismatch detected. Rebuild required.');
+                        console.error(`[FlutterExplorer] SQLite ABI mismatch detected: ${msg}`);
+                        console.error('[FlutterExplorer] Rebuild required.');
                         // Still fallback to JSON instead of crashing
                         this._loadJson();
                     } else {

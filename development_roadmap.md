@@ -33,9 +33,10 @@
 - [x] **Detailed Index Error Reporting**: MCP server now provides granular feedback on database existence, accessibility, and content state.
 - [x] **High-Accuracy Dart Indexing**: Integrated `package:analyzer` via a dedicated Dart tool and TypeScript wrapper for 100% accuracy in `lib/`.
 - [x] **Hybrid Indexing Strategy**: Real-time regex updates combined with periodic/initial high-accuracy Dart analysis.
-- [x] **Robust Tool Discovery**: Improved path resolution in `dartAnalyzerWrapper` using VS Code's `extensionPath` to support various execution environments.
+- [x] **Robust Tool Discovery**: Improved path resolution in `dartAnalyzerWrapper` using VS Code's `extensionPath` and system `where`/`which` search for Dart SDK.
 - [x] **Real-time Indexing Progress**: Added detailed progress updates for Dart analyzer indexing (file counts and current file processing).
 - [x] **Windows Spawn Fix**: Resolved `ENOENT` error when spawning the Dart analyzer by using `shell: true`.
+- [x] **SQLite ABI Resilience**: Resolved native module incompatibility by rebuilding `better-sqlite3` for Electron v39.2.3.
 
 
 
