@@ -36,3 +36,12 @@ The MCP server tools often return a generic "Index not found" message when the S
 - **Solution**: Improved regex `([\w<>,\s]+?)` → `([\w<>,\s\[\]]+)` to handle generic types with arrays and ensure greedy matching.
 - **Result**: Better fallback accuracy when Dart SDK is unavailable.
 
+
+## [2026-05-13] RESOLVED: Dart Analyzer Progress & Spawn Fix
+- **Problem**: Large projects gave no feedback during Dart analysis. Spawning `dart` on Windows failed with `ENOENT`.
+- **Solution**: 
+    1. Added `PROGRESS:` messages to `dart_analyzer.dart`.
+    2. Switched from `exec` to `spawn` with `shell: true` in `dartAnalyzerWrapper.ts` to support streaming and correct command discovery.
+    3. Updated `IndexManager` to report progress to the VS Code UI.
+- **Result**: Users see real-time progress during indexing; Dart analyzer now starts correctly on Windows.
+- **Lessons**: Use `spawn` with `shell: true` on Windows for reliable command execution when streaming output. Always provide progress feedback for long-running operations.

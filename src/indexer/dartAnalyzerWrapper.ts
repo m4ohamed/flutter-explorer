@@ -46,7 +46,7 @@ export async function analyzeWithDart(
 
 
         return new Promise((resolve) => {
-            const child = spawn('dart', [toolsPath, projectPath]);
+            const child = spawn('dart', [toolsPath, projectPath], { shell: true });
             let stdoutData = '';
             let stderrData = '';
 
