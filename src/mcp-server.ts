@@ -37,6 +37,25 @@ const server = new McpServer({
   version: "1.0.0",
 });
 
+function handleIndexError() {
+  const cache = getSqliteCache();
+  const diag = cache.getDiagnostics();
+  
+  let message = "Index not found. ";
+  
+  if (!diag.exists) {
+    message += `The database file was not found at: ${diag.dbPath}. Please ensure the Flutter Explorer VS Code extension is active and has finished indexing the project.`;
+  } else if (!diag.available) {
+    message += `The database file exists at ${diag.dbPath}, but the MCP server could not open it. Error: ${diag.error || 'Unknown access error'}. This might be due to a file lock or an incompatible SQLite library.`;
+  } else if (diag.counts.dart_files === 0 && diag.counts.arb_files === 0) {
+    message += `The database is connected but contains 0 indexed files. This usually means indexing is still in progress. Please wait for the VS Code extension to finish indexing or try the 'Rebuild Full Index' command in VS Code.`;
+  } else {
+    message += `The database is connected and contains ${diag.counts.dart_files} files, but the requested data could not be retrieved. Try re-indexing the project.`;
+  }
+  
+  return { content: [{ type: "text" as const, text: message }] };
+}
+
 // Helper to read the index file (Prioritizes SQLite)
 function readIndex() {
   try {
@@ -47,25 +66,25 @@ function readIndex() {
       const arbRows = cache.getAllArbFiles();
       console.error(`[MCP Debug] Found ${dartRows.length} dart files, ${arbRows.length} arb files in SQLite`);
       
-      if (dartRows.length > 0 || arbRows.length > 0) {
-        const index: any = {
-          dart: {},
-          arb: {},
-          packages: cache.getMeta<any[]>('packages') ?? [],
-          diagnostics: cache.getMeta<any[]>('diagnostics') ?? []
-        };
+      const index: any = {
+        dart: {},
+        arb: {},
+        packages: cache.getMeta<any[]>('packages') ?? [],
+        diagnostics: cache.getMeta<any[]>('diagnostics') ?? []
+      };
 
+      if (dartRows.length > 0 || arbRows.length > 0) {
         for (const row of dartRows) index.dart[row.path] = row.info;
         for (const row of arbRows) index.arb[row.path] = row.translations;
-
         return index;
       }
+      
+      // If we are here, we have a connection but no data
+      return null;
     } else {
       console.error(`[MCP Debug] SQLite not available. Checking JSON fallback.`);
-      // The SqliteCache already handles JSON fallback internally if available is false
       const dartRows = cache.getAllDartFiles();
       const arbRows = cache.getAllArbFiles();
-      console.error(`[MCP Debug] Found ${dartRows.length} dart files, ${arbRows.length} arb files in fallback`);
       
       if (dartRows.length > 0 || arbRows.length > 0) {
          const index: any = {
@@ -380,13 +399,24 @@ server.registerTool(
       }
     }
   
+    const indexStatus = () => {
+      const dbPath = ProjectDetector.getDbPath(currentProjectPath);
+      const exists = fs.existsSync(dbPath);
+      const cache = getSqliteCache();
+      const available = cache.isAvailable;
+      
+      if (!exists) return `Index not found (DB missing at ${dbPath}). Using direct search.`;
+      if (!available) return `Index exists but inaccessible. Using direct search.`;
+      return "Index empty. Using direct search.";
+    };
+
     return {
       content: [{ 
-        type: "text", 
+        type: "text" as const, 
         text: JSON.stringify({
           results: results.slice(0, 50),
           source: !index || useDirectSearch ? "direct_search" : "index",
-          note: !index ? "Index not found. Using direct file search (slower)." : "",
+          note: !index ? indexStatus() : "",
         }, null, 2) 
       }],
     };
@@ -402,7 +432,7 @@ server.registerTool(
   },
   async () => {
     const index = readIndex();
-    if (!index) return { content: [{ type: "text", text: "Index not found." }] };
+    if (!index) return handleIndexError();
 
     let files = 0, classes = 0, functions = 0, widgets = 0, enums = 0, mixins = 0;
     let extensions = 0, typedefs = 0, variables = 0, constructors = 0, properties = 0, annotations = 0;
@@ -445,7 +475,7 @@ server.registerTool(
     ].join(", ");
 
     return {
-      content: [{ type: "text", text: stats }],
+      content: [{ type: "text" as const, text: stats }],
     };
   }
 );
@@ -462,7 +492,7 @@ server.registerTool(
   async ({ targetPath = "lib" }) => {
     const fullPath = path.join(currentProjectPath, targetPath);
     if (!fs.existsSync(fullPath)) {
-      return { content: [{ type: "text", text: `Path not found: ${targetPath}` }] };
+      return { content: [{ type: "text" as const, text: `Path not found: ${targetPath}` }] };
     }
     
     const structure = getDirectoryStructure(fullPath, targetPath);
@@ -483,7 +513,7 @@ server.registerTool(
 
     const formatted = formatStructure(structure);
     return {
-      content: [{ type: "text", text: formatted || "Directory is empty." }],
+      content: [{ type: "text" as const, text: formatted || "Directory is empty." }],
     };
   }
 );
@@ -499,13 +529,13 @@ server.registerTool(
   },
   async ({ relativePath }: { relativePath: string }) => {
     const index = readIndex();
-    if (!index) return { content: [{ type: "text", text: "Index not found." }] };
+    if (!index) return handleIndexError();
 
     const info = index.dart?.[relativePath];
-    if (!info) return { content: [{ type: "text", text: `File not found in index: ${relativePath}` }] };
+    if (!info) return { content: [{ type: "text" as const, text: `File not found in index: ${relativePath}` }] };
 
     return {
-      content: [{ type: "text", text: JSON.stringify(info, null, 2) }],
+      content: [{ type: "text" as const, text: JSON.stringify(info, null, 2) }],
     };
   }
 );
@@ -522,11 +552,11 @@ server.registerTool(
       const pubspecPath = PUBSPEC_PATH();
       if (fs.existsSync(pubspecPath)) {
         const content = fs.readFileSync(pubspecPath, "utf-8");
-        return { content: [{ type: "text", text: content }] };
+        return { content: [{ type: "text" as const, text: content }] };
       }
-      return { content: [{ type: "text", text: `pubspec.yaml not found at: ${pubspecPath}` }] };
+      return { content: [{ type: "text" as const, text: `pubspec.yaml not found at: ${pubspecPath}` }] };
     } catch (error) {
-      return { content: [{ type: "text", text: `Error reading pubspec: ${error}` }] };
+      return { content: [{ type: "text" as const, text: `Error reading pubspec: ${error}` }] };
     }
   }
 );
@@ -540,7 +570,7 @@ server.registerTool(
   },
   async () => {
     const index = readIndex();
-    if (!index || !index.dart) return { content: [{ type: "text", text: "Index not found." }] };
+    if (!index || !index.dart) return handleIndexError();
 
     const warnings = [];
     for (const file in index.dart) {
@@ -548,7 +578,7 @@ server.registerTool(
         warnings.push({ filePath: file, warnings: index.dart[file].warnings });
       }
     }
-    return { content: [{ type: "text", text: JSON.stringify(warnings, null, 2) }] };
+    return { content: [{ type: "text" as const, text: JSON.stringify(warnings, null, 2) }] };
   }
 );
 
@@ -561,8 +591,8 @@ server.registerTool(
   },
   async () => {
     const index = readIndex();
-    if (!index || !index.diagnostics) return { content: [{ type: "text", text: "No diagnostics found in index." }] };
-    return { content: [{ type: "text", text: JSON.stringify(index.diagnostics, null, 2) }] };
+    if (!index || !index.diagnostics) return { content: [{ type: "text" as const, text: "No diagnostics found in index." }] };
+    return { content: [{ type: "text" as const, text: JSON.stringify(index.diagnostics, null, 2) }] };
   }
 );
 
@@ -578,7 +608,7 @@ server.registerTool(
     const results = arbEditor.getAllTranslations();
     return { 
       content: [{ 
-        type: "text", 
+        type: "text" as const, 
         text: JSON.stringify({
           files: results.files,
           totalKeys: results.keys.length,
@@ -607,7 +637,7 @@ server.registerTool(
     const arbEditor = new ArbEditor(currentProjectPath);
     const result = arbEditor.updateTranslation(key, arValue, enValue, description);
     return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
     };
   }
 );
@@ -625,7 +655,7 @@ server.registerTool(
     const arbEditor = new ArbEditor(currentProjectPath);
     const result = arbEditor.deleteTranslation(key);
     return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
     };
   }
 );
@@ -642,7 +672,7 @@ server.registerTool(
     const result = arbEditor.getAllTranslations();
     return { 
       content: [{ 
-        type: "text", 
+        type: "text" as const, 
         text: JSON.stringify(result, null, 2) 
       }] 
     };
@@ -660,11 +690,11 @@ server.registerTool(
   },
   async ({ relativePath }) => {
     const index = readIndex();
-    if (!index || !index.dart) return { content: [{ type: "text", text: "Index not found." }] };
+    if (!index || !index.dart) return handleIndexError();
 
     const analyzer = new CodeAnalyzer(currentProjectPath);
     const fileInfo = index.dart[relativePath];
-    if (!fileInfo) return { content: [{ type: "text", text: `File not found in index: ${relativePath}` }] };
+    if (!fileInfo) return { content: [{ type: "text" as const, text: `File not found in index: ${relativePath}` }] };
 
     const targets = new Set<string>();
     for (const cls of fileInfo.classes || []) targets.add(cls.name);
@@ -716,7 +746,7 @@ server.registerTool(
     parentClass?: string;
   }) => {
     const index = readIndex();
-    if (!index || !index.dart) return { content: [{ type: "text", text: "Index not found." }] };
+    if (!index || !index.dart) return handleIndexError();
       
     const results: any[] = [];
       
@@ -786,7 +816,7 @@ server.registerTool(
     }
       
     return {
-      content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
+      content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }],
     };
   }
 );
@@ -802,11 +832,11 @@ server.registerTool(
   },
   async ({ projectPath }: { projectPath: string }) => {
     if (!fs.existsSync(path.join(projectPath, "pubspec.yaml"))) {
-      return { content: [{ type: "text", text: "Error: pubspec.yaml not found in the specified path. Please provide a valid Flutter project root." }] };
+      return { content: [{ type: "text" as const, text: "Error: pubspec.yaml not found in the specified path. Please provide a valid Flutter project root." }] };
     }
     currentProjectPath = projectPath;
     sqliteCache = null; // Force re-initialization with new path
-    return { content: [{ type: "text", text: `Project path set to: ${projectPath}` }] };
+    return { content: [{ type: "text" as const, text: `Project path set to: ${projectPath}` }] };
   }
 );
 
@@ -818,7 +848,7 @@ server.registerTool(
     inputSchema: z.object({}),
   },
   async () => {
-    return { content: [{ type: "text", text: `Current project path: ${currentProjectPath}` }] };
+    return { content: [{ type: "text" as const, text: `Current project path: ${currentProjectPath}` }] };
   }
 );
 
@@ -835,8 +865,8 @@ server.registerTool(
   async ({ relativePath, line }) => {
     const cache = getSqliteCache();
     const node = cache.getNodeAtCursor(relativePath, line);
-    if (!node) return { content: [{ type: "text", text: "No specific Dart element found at this position." }] };
-    return { content: [{ type: "text", text: JSON.stringify(node, null, 2) }] };
+    if (!node) return { content: [{ type: "text" as const, text: "No specific Dart element found at this position." }] };
+    return { content: [{ type: "text" as const, text: JSON.stringify(node, null, 2) }] };
   }
 );
 
@@ -854,7 +884,7 @@ server.registerTool(
   async ({ filter = "all", source = "all" }) => {
     const index = readIndex();
     if (!index || !index.packages) {
-      return { content: [{ type: "text", text: "No packages found in index. Try rebuilding the index." }] };
+      return handleIndexError();
     }
 
     let packages = index.packages;
@@ -866,7 +896,7 @@ server.registerTool(
       packages = packages.filter((p: any) => p.source === source);
     }
 
-    return { content: [{ type: "text", text: JSON.stringify(packages, null, 2) }] };
+    return { content: [{ type: "text" as const, text: JSON.stringify(packages, null, 2) }] };
   }
 );
 
@@ -926,7 +956,7 @@ server.registerTool(
     }
 
     if (!targetFile) {
-      return { content: [{ type: "text", text: `Element not found: ${elementType} ${name}` }] };
+      return { content: [{ type: "text" as const, text: `Element not found: ${elementType} ${name}` }] };
     }
 
     // Read the file content
@@ -941,7 +971,7 @@ server.registerTool(
     const result = parser.extractCodeBlock(targetContent, elementType, name, parentClass);
 
     if (!result) {
-      return { content: [{ type: "text", text: `Could not extract code block for ${elementType} ${name}` }] };
+      return { content: [{ type: "text" as const, text: `Could not extract code block for ${elementType} ${name}` }] };
     }
 
     return {
@@ -1005,7 +1035,7 @@ server.registerTool(
     }
 
     if (!targetFile) {
-      return { content: [{ type: "text", text: `Function not found: ${functionName}` }] };
+      return { content: [{ type: "text" as const, text: `Function not found: ${functionName}` }] };
     }
 
     // Read the file content
@@ -1021,7 +1051,7 @@ server.registerTool(
     const result = parser.extractCodeBlock(targetContent, elementType, functionName, parentClass);
 
     if (!result) {
-      return { content: [{ type: "text", text: `Could not extract function body for ${functionName}` }] };
+      return { content: [{ type: "text" as const, text: `Could not extract function body for ${functionName}` }] };
     }
 
     // Analyze the logic flow
@@ -1029,7 +1059,7 @@ server.registerTool(
 
     return {
       content: [{
-        type: "text",
+        type: "text" as const,
         text: JSON.stringify({
           functionName,
           filePath: targetFile,
@@ -1058,7 +1088,7 @@ server.registerTool(
   async ({ className, filePath }: { className: string; filePath?: string }) => {
     const index = readIndex();
     if (!index || !index.dart) {
-      return { content: [{ type: "text", text: "Index not found." }] };
+      return handleIndexError();
     }
 
     const parser = new DartParser();
@@ -1079,7 +1109,7 @@ server.registerTool(
 
 
     if (!targetFile) {
-      return { content: [{ type: "text", text: `Class not found: ${className}` }] };
+      return { content: [{ type: "text" as const, text: `Class not found: ${className}` }] };
     }
 
     // Read the file content
@@ -1094,7 +1124,7 @@ server.registerTool(
     const result = parser.extractCodeBlock(targetContent, 'class', className);
 
     if (!result) {
-      return { content: [{ type: "text", text: `Could not extract class body for ${className}` }] };
+      return { content: [{ type: "text" as const, text: `Could not extract class body for ${className}` }] };
     }
 
     // Extract constructor dependencies
@@ -1115,7 +1145,7 @@ server.registerTool(
 
     return {
       content: [{
-        type: "text",
+        type: "text" as const,
         text: JSON.stringify({
           className,
           filePath: targetFile,
@@ -1194,7 +1224,7 @@ server.registerTool(
     }
 
     if (!targetFile) {
-      return { content: [{ type: "text", text: `Element not found: ${name}` }] };
+      return { content: [{ type: "text" as const, text: `Element not found: ${name}` }] };
     }
 
     // Read the file content
@@ -1209,7 +1239,7 @@ server.registerTool(
     const result = parser.extractCodeBlock(targetContent, detectedType || 'function', name, parentClass);
 
     if (!result) {
-      return { content: [{ type: "text", text: `Could not extract code block for ${name}` }] };
+      return { content: [{ type: "text" as const, text: `Could not extract code block for ${name}` }] };
     }
 
     let finalBody = result.body;
@@ -1224,7 +1254,7 @@ server.registerTool(
 
     return {
       content: [{
-        type: "text",
+        type: "text" as const,
         text: JSON.stringify({
           name,
           elementType: detectedType,
@@ -1265,7 +1295,7 @@ server.registerTool(
 
     return {
       content: [{
-        type: "text",
+        type: "text" as const,
         text: JSON.stringify({
           results,
           totalResults: results.length,
@@ -1286,7 +1316,7 @@ server.registerTool(
   async () => {
     const dbPath = ProjectDetector.getDbPath(currentProjectPath);
     if (!fs.existsSync(dbPath)) {
-      return { content: [{ type: "text", text: `Index database not found at ${dbPath}. A full rebuild is required.` }] };
+      return { content: [{ type: "text" as const, text: `Index database not found at ${dbPath}. A full rebuild is required.` }] };
     }
 
     try {
@@ -1296,7 +1326,7 @@ server.registerTool(
 
       return {
         content: [{
-          type: "text",
+          type: "text" as const,
           text: JSON.stringify({
             exists: true,
             lastModified: stats.mtime,
@@ -1307,7 +1337,7 @@ server.registerTool(
         }],
       };
     } catch (error) {
-      return { content: [{ type: "text", text: `Error checking index status: ${error}` }] };
+      return { content: [{ type: "text" as const, text: `Error checking index status: ${error}` }] };
     }
   }
 );
@@ -1321,7 +1351,7 @@ server.registerTool(
   async () => {
     return {
       content: [{
-        type: "text",
+        type: "text" as const,
         text: `Rebuild request received for ${currentProjectPath}. Please ensure the Flutter Explorer VS Code extension is active to perform a full project re-indexing. The MCP server will automatically pick up the new index once completed.`
       }],
     };
@@ -1340,7 +1370,7 @@ server.registerTool(
   },
   async ({ focusFile, depth = 1 }) => {
     const index = readIndex();
-    if (!index) return { content: [{ type: "text", text: "Index not found." }] };
+    if (!index) return handleIndexError();
 
     const graph = buildDetailedGraph(index);
     
@@ -1370,7 +1400,7 @@ server.registerTool(
 
     return {
       content: [{
-        type: "text",
+        type: "text" as const,
         text: JSON.stringify({
           nodeCount: graph.nodes.length,
           edgeCount: graph.edges.length,
@@ -1414,7 +1444,7 @@ server.registerTool(
 
     return {
       content: [{
-        type: "text",
+        type: "text" as const,
         text: JSON.stringify({
           suggestions: hints,
           note: "These hints are generated based on common development workflows."

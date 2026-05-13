@@ -34,6 +34,7 @@ export class SqliteCache {
     private db: any = null;
     private available = false;
     private readonlyMode = false;
+    private workspaceRoot: string;
     private jsonPath: string | null = null;
     private jsonCache: {
         dartFiles: Record<string, { hash: string; data: string }>;
@@ -42,6 +43,7 @@ export class SqliteCache {
     } = { dartFiles: {}, arbFiles: {}, meta: {} };
 
     constructor(workspaceRoot: string, options: { readonly?: boolean } = {}) {
+        this.workspaceRoot = workspaceRoot;
         this.readonlyMode = !!options.readonly;
         const DB = getDatabase();
         try {
@@ -117,6 +119,48 @@ export class SqliteCache {
 
     get isAvailable(): boolean {
         return this.available;
+    }
+
+    /**
+     * Returns granular diagnostic information about the cache status.
+     */
+    getDiagnostics(): any {
+        const dbPath = ProjectDetector.getDbPath(this.workspaceRoot);
+        const stats = {
+            available: this.available,
+            readonly: this.readonlyMode,
+            dbPath: dbPath,
+            exists: fs.existsSync(dbPath),
+            counts: {
+                dart_files: 0,
+                arb_files: 0,
+                metadata: 0
+            },
+            error: null as string | null
+        };
+
+        if (this.available && this.db) {
+            try {
+                stats.counts.dart_files = this.db.prepare('SELECT COUNT(*) as count FROM dart_files').get().count;
+                stats.counts.arb_files = this.db.prepare('SELECT COUNT(*) as count FROM arb_files').get().count;
+                stats.counts.metadata = this.db.prepare('SELECT COUNT(*) as count FROM metadata').get().count;
+            } catch (e: any) {
+                stats.error = e.message || String(e);
+            }
+        } else if (stats.exists) {
+            // Attempt to open just for a quick check if it's locked or corrupt
+            const DB = getDatabase();
+            if (DB) {
+                try {
+                    const tempDb = new DB(dbPath, { readonly: true, timeout: 500 });
+                    tempDb.close();
+                } catch (e: any) {
+                    stats.error = `Could not open database file: ${e.message || String(e)}`;
+                }
+            }
+        }
+
+        return stats;
     }
 
     private _createTables(): void {

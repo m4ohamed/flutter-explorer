@@ -30,6 +30,7 @@
 - [x] **MCP Path Synchronization**: Fixed singleton cache reset bug in `flutter_set_project_path`.
 - [x] **Automated SQLite Proactive Checkpointing**: Implemented `PASSIVE` checkpoints after every write for immediate MCP visibility.
 - [x] **Manual SQLite Maintenance**: Added `checkpoint()` (TRUNCATE) for major indexing operations.
+- [x] **Detailed Index Error Reporting**: MCP server now provides granular feedback on database existence, accessibility, and content state.
 
 
 
