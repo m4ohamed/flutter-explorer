@@ -48,14 +48,14 @@ export class SqliteCache {
             const dataDir = ProjectDetector.getDataDir(workspaceRoot);
             this.jsonPath = path.join(dataDir, 'flutter-explorer.json');
             const dbPath = path.join(dataDir, 'flutter-explorer.db');
-            
+
             // Legacy check: Move from .vscode if exists
             const legacyDir = path.join(workspaceRoot, '.vscode');
             const legacyDb = path.join(legacyDir, 'flutter-explorer.db');
             if (fs.existsSync(legacyDb) && !fs.existsSync(dbPath)) {
                 console.log('[FlutterExplorer] Migrating legacy database from .vscode to .flutter-explorer');
                 fs.copyFileSync(legacyDb, dbPath);
-                
+
                 // Clean up or move side files
                 for (const suffix of ['-wal', '-shm', '-journal']) {
                     const sideFile = legacyDb + suffix;
@@ -71,7 +71,7 @@ export class SqliteCache {
                 }
                 // Optional: fs.unlinkSync(legacyDb); // Should we delete the old db? Keeping for now.
             }
-            
+
             // Legacy JSON cleanup: Remove flutter-explorer.json from .vscode if it exists
             const legacyJson = path.join(legacyDir, 'flutter-explorer.json');
             if (fs.existsSync(legacyJson)) {
@@ -83,7 +83,7 @@ export class SqliteCache {
                 }
             }
 
-            
+
             if (DB) {
                 try {
                     this.db = new DB(dbPath, { readonly: this.readonlyMode });
@@ -165,6 +165,9 @@ export class SqliteCache {
           INSERT OR REPLACE INTO dart_files (path, hash, data, updated_at)
           VALUES (?, ?, ?, ?)
         `).run(relPath, hash, JSON.stringify(info), Date.now());
+
+                // PASSIVE checkpoint: flushes WAL to .db without blocking writers/readers
+                this.db.pragma('wal_checkpoint(PASSIVE)');
             } catch (e) {
                 console.error('[FlutterExplorer] SQLite upsertDartFile error:', e);
             }
@@ -179,14 +182,17 @@ export class SqliteCache {
                     INSERT OR REPLACE INTO dart_files (path, hash, data, updated_at)
                     VALUES (?, ?, ?, ?)
                 `);
-                
+
                 const transaction = this.db.transaction((items: any[]) => {
                     for (const item of items) {
                         stmt.run(item.relPath, item.hash, JSON.stringify(item.info), Date.now());
                     }
                 });
-                
+
                 transaction(files);
+
+                // PASSIVE checkpoint: flushes WAL to .db without blocking writers/readers
+                this.db.pragma('wal_checkpoint(PASSIVE)');
             } catch (e) {
                 console.error('[FlutterExplorer] SQLite batchUpsertDartFiles error:', e);
             }
@@ -258,6 +264,9 @@ export class SqliteCache {
           INSERT OR REPLACE INTO arb_files (path, data, updated_at)
           VALUES (?, ?, ?)
         `).run(relPath, JSON.stringify(translations), Date.now());
+
+                // PASSIVE checkpoint: flushes WAL to .db without blocking writers/readers
+                this.db.pragma('wal_checkpoint(PASSIVE)');
             } catch (e) {
                 console.error('[FlutterExplorer] SQLite upsertArbFile error:', e);
             }
@@ -306,6 +315,9 @@ export class SqliteCache {
           INSERT OR REPLACE INTO metadata (key, data, updated_at)
           VALUES (?, ?, ?)
         `).run(key, JSON.stringify(value), Date.now());
+
+                // PASSIVE checkpoint: flushes WAL to .db without blocking writers/readers
+                this.db.pragma('wal_checkpoint(PASSIVE)');
             } catch (e) {
                 console.error('[FlutterExplorer] SQLite setMeta error:', e);
             }
@@ -365,7 +377,7 @@ export class SqliteCache {
                 smallestSpan = 50;
             }
         }
-        
+
         // Check functions
         for (const func of fileInfo.info.functions) {
             if (func.line <= line && line <= func.line + 20) {
@@ -384,7 +396,7 @@ export class SqliteCache {
     getImpactRadius(changedFiles: string[], maxDepth: number = 2): any {
         const allFiles = this.getAllDartFiles();
         const seeds = new Set<string>();
-        
+
         // 1. Initial seeds: all nodes in changed files
         for (const relPath of changedFiles) {
             const file = allFiles.find(f => f.path === relPath);
@@ -398,7 +410,7 @@ export class SqliteCache {
         const visited = new Set<string>(seeds);
         let frontier = new Set<string>(seeds);
         const impacted = new Set<string>();
-        
+
         for (let depth = 0; depth < maxDepth; depth++) {
             const nextFrontier = new Set<string>();
             for (const name of frontier) {
@@ -417,7 +429,7 @@ export class SqliteCache {
                             }
                         });
                     }
-                    
+
                     // Check inheritance
                     file.info.classes.forEach(c => {
                         if (c.extendsClass === name && !visited.has(c.name)) {

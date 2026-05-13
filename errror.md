@@ -49,7 +49,8 @@
 - **Reverse Dependencies Missing in MCP**: Reverse dependency data (`usedInFiles`) is available in the extension but missing in the MCP server.
     - **Fix**: Updated `buildReverseDependencies` to perform a bulk upsert to SQLite after calculation and automated checkpointing.
 - **MCP SQLite Access Reliability**: Resolved data visibility issues where updates were trapped in WAL files.
-    - **Fix**: Implemented automated `SqliteCache.checkpoint()` (using `PRAGMA wal_checkpoint(TRUNCATE)`) at the end of major indexing tasks. The MCP server now reads a fully updated `.db` file in `readonly` mode.
+    - **Fix**: Implemented proactive `PRAGMA wal_checkpoint(PASSIVE)` after every write operation (upsert/delete). This ensures immediate visibility for the MCP server without blocking writers.
+    - **Maintenance**: Added `sqliteCache.checkpoint()` (TRUNCATE) for major operations (full index, global reverse dependency updates) as an extra safety measure.
 - **TypeScript Type Mismatch (TS2345)**: `IndexManager.ts` failed to compile due to `string | undefined` hash being passed to `batchUpsertDartFiles`.
     - **Fix**: Updated `SqliteCache` methods (`upsertDartFile` and `batchUpsertDartFiles`) to accept `string | undefined` for the hash parameter, as `DartFileInfo.contentHash` is optional.
 - **MCP Path Synchronization Bug**: `flutter_set_project_path` was not resetting the `sqliteCache` singleton, causing it to stick to the first project path it was initialized with.
