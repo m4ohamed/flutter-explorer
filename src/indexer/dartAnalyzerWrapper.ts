@@ -7,7 +7,7 @@ import { DartFileInfo } from './dartParser';
  * Wrapper for the Dart-based analyzer tool.
  * Uses package:analyzer for high-accuracy indexing.
  */
-export async function analyzeWithDart(projectPath: string): Promise<DartFileInfo[] | null> {
+export async function analyzeWithDart(projectPath: string, extensionPath?: string): Promise<DartFileInfo[] | null> {
     try {
         const hasDart = await checkDartSdk();
         if (!hasDart) {
@@ -18,11 +18,13 @@ export async function analyzeWithDart(projectPath: string): Promise<DartFileInfo
         // Adjust path based on where the extension is running (src vs out vs simulation)
         const searchPaths = [
             path.join(projectPath, 'tools', 'dart_analyzer.dart'), // Project local tools
+            ...(extensionPath ? [path.join(extensionPath, 'tools', 'dart_analyzer.dart')] : []), // Extension tools
             path.join(__dirname, '..', '..', 'tools', 'dart_analyzer.dart'),
             path.join(__dirname, '..', '..', '..', 'tools', 'dart_analyzer.dart'),
             path.join(process.cwd(), 'tools', 'dart_analyzer.dart'),
             path.join(process.cwd(), '..', 'tools', 'dart_analyzer.dart'),
         ];
+
 
 
         let toolsPath = '';

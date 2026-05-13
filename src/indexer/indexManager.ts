@@ -58,10 +58,14 @@ export class IndexManager {
   private reverseDepsTimeout: NodeJS.Timeout | null = null;
   private projectName: string | null = null;
 
-  constructor(workspaceRoot: string) {
+  private extensionPath?: string;
+
+  constructor(workspaceRoot: string, extensionPath?: string) {
     this.workspaceRoot = workspaceRoot;
+    this.extensionPath = extensionPath;
     this.sqliteCache = new SqliteCache(workspaceRoot);
   }
+
 
   // ── Full index ──────────────────────────────────────────────────────────────
 
@@ -84,8 +88,9 @@ export class IndexManager {
 
     if (useDartAnalyzer) {
       if (progress) progress.report({ message: 'Analyzing project with Dart SDK...' });
-      const dartResults = await analyzeWithDart(this.workspaceRoot);
+      const dartResults = await analyzeWithDart(this.workspaceRoot, this.extensionPath);
       if (dartResults && dartResults.length > 0) {
+
         for (const info of dartResults) {
           try {
             const fullPath = path.join(this.workspaceRoot, info.filePath);

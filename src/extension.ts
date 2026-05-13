@@ -23,7 +23,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     const workspaceRoot = workspaceFolder.uri.fsPath;
     // ─── Initialize Components ─────────────────────────────
-    const indexManager = new IndexManager(workspaceRoot);
+    const indexManager = new IndexManager(workspaceRoot, context.extensionPath);
+
     const config = vscode.workspace.getConfiguration('flutterExplorer');
     const debounceMs = config.get<number>('debounceMs', 300);
     const fileWatcher = new FileWatcher(indexManager, debounceMs);
