@@ -8,7 +8,11 @@ import { ArbEditor } from './mcp-arb-editor.js';
 import { CodeAnalyzer } from './mcp-code-analyzer.js';
 import { DartParser, DartFileInfo, ClassInfo, FunctionInfo } from './indexer/dartParser.js';
 
-
+// Redirect console.log to console.error to prevent corrupting MCP stdio JSON-RPC protocol
+const originalConsoleLog = console.log;
+console.log = function(...args) {
+  console.error(...args);
+};
 
 /**
  * Flutter Explorer MCP Server
@@ -40,9 +44,9 @@ const server = new McpServer({
 function handleIndexError() {
   const cache = getSqliteCache();
   const diag = cache.getDiagnostics();
-  
+
   let message = "Index not found. ";
-  
+
   if (!diag.exists) {
     message += `The database file was not found at: ${diag.dbPath}. Please ensure the Flutter Explorer VS Code extension is active and has finished indexing the project.`;
   } else if (!diag.available) {
@@ -52,7 +56,7 @@ function handleIndexError() {
   } else {
     message += `The database is connected and contains ${diag.counts.dart_files} files, but the requested data could not be retrieved. Try re-indexing the project.`;
   }
-  
+
   return { content: [{ type: "text" as const, text: message }] };
 }
 
@@ -65,7 +69,7 @@ function readIndex() {
       const dartRows = cache.getAllDartFiles();
       const arbRows = cache.getAllArbFiles();
       console.error(`[MCP Debug] Found ${dartRows.length} dart files, ${arbRows.length} arb files in SQLite`);
-      
+
       const index: any = {
         dart: {},
         arb: {},
@@ -78,16 +82,16 @@ function readIndex() {
         for (const row of arbRows) index.arb[row.path] = row.translations;
         return index;
       }
-      
+
       // If we are here, we have a connection but no data
       return null;
     } else {
       console.error(`[MCP Debug] SQLite not available. Checking JSON fallback.`);
       const dartRows = cache.getAllDartFiles();
       const arbRows = cache.getAllArbFiles();
-      
+
       if (dartRows.length > 0 || arbRows.length > 0) {
-         const index: any = {
+        const index: any = {
           dart: {},
           arb: {},
           packages: cache.getMeta<any[]>('packages') ?? [],
@@ -110,13 +114,13 @@ function getDirectoryStructure(dirPath: string, relativePath: string = ""): any[
   const results: any[] = [];
   try {
     if (!fs.existsSync(dirPath)) return [];
-    
+
     const items = fs.readdirSync(dirPath);
     for (const item of items) {
       // Skip hidden files and common ignore folders
-      if (item.startsWith('.') || item === 'node_modules' || item === 'build' || 
-          item === 'ios' || item === 'android' || item === 'windows' || 
-          item === 'macos' || item === 'linux') continue;
+      if (item.startsWith('.') || item === 'node_modules' || item === 'build' ||
+        item === 'ios' || item === 'android' || item === 'windows' ||
+        item === 'macos' || item === 'linux') continue;
 
       const fullPath = path.join(dirPath, item);
       const relItemPath = path.join(relativePath, item);
@@ -150,7 +154,7 @@ function getDirectoryStructure(dirPath: string, relativePath: string = ""): any[
 function buildDetailedGraph(index: any) {
   const nodes: any[] = [];
   const edges: any[] = [];
-  
+
   if (!index || !index.dart) return { nodes, edges };
 
   for (const [filePath, info] of Object.entries(index.dart as Record<string, any>)) {
@@ -161,7 +165,7 @@ function buildDetailedGraph(index: any) {
     for (const cls of info.classes || []) {
       const classId = `${filePath}:${cls.name}`;
       nodes.push({ id: classId, name: cls.name, type: 'class', file: filePath });
-      
+
       // Edge: File -> Class
       edges.push({ source: filePath, target: classId, type: 'contains' });
 
@@ -206,8 +210,8 @@ server.registerTool(
       useDirectSearch: z.boolean().optional().describe("Force direct file search even if index exists (default: false)"),
     }),
   },
-  async ({ query, filter, searchMode = "both", useDirectSearch = false }: { 
-    query: string; 
+  async ({ query, filter, searchMode = "both", useDirectSearch = false }: {
+    query: string;
     filter?: "class" | "function" | "widget" | "enum" | "mixin" | "extension" | "ext" | "typedef" | "type" | "variable" | "vars" | "constructor" | "property" | "annotation" | "file" | "call" | "translation";
     searchMode?: "definitions" | "calls" | "both";
     useDirectSearch?: boolean;
@@ -216,33 +220,33 @@ server.registerTool(
     const results: any[] = [];
     const q = query.toLowerCase();
     const mode = searchMode || "both";
-  
+
     // Normalize filter aliases
     let normalizedFilter = filter;
     if (filter === "ext") normalizedFilter = "extension";
     else if (filter === "type") normalizedFilter = "typedef";
     else if (filter === "vars") normalizedFilter = "variable";
     else if (filter === "call") normalizedFilter = "function"; // calls are handled in function block
-    
+
     const targetFilter = normalizedFilter;
-  
+
     // Try indexed search first  
     if (index && !useDirectSearch) {
       for (const file in index.dart) {
         const info = index.dart[file];
-          
+
         if (!targetFilter || targetFilter === "class" || targetFilter === "widget") {
           if (mode === "definitions" || mode === "both") {
             for (const c of info.classes) {
-                if (c.name.toLowerCase().includes(q)) {
-                  if (filter === "widget" && c.type === "plain") continue;
-                  if (targetFilter === "widget" && c.type === "plain") continue;
-                  results.push({ name: c.name, type: "class_definition", subtype: c.type, file, line: c.line, lineEnd: c.lineEnd });
-                }
+              if (c.name.toLowerCase().includes(q)) {
+                if (filter === "widget" && c.type === "plain") continue;
+                if (targetFilter === "widget" && c.type === "plain") continue;
+                results.push({ name: c.name, type: "class_definition", subtype: c.type, file, line: c.line, lineEnd: c.lineEnd });
+              }
             }
           }
         }
-  
+
         if (!targetFilter || targetFilter === "function") {
           if (mode === "definitions" || mode === "both") {
             for (const f of info.functions) {
@@ -251,16 +255,16 @@ server.registerTool(
               }
             }
           }
-            
+
           if ((mode === "calls" || mode === "both") && info.functionCalls) {
             for (const call of info.functionCalls) {
               if (call.name.toLowerCase().includes(q)) {
-                results.push({ 
-                  name: call.name, 
-                  type: "function_call", 
-                  callerClass: call.callerClass, 
+                results.push({
+                  name: call.name,
+                  type: "function_call",
+                  callerClass: call.callerClass,
                   callerFunction: call.callerFunction,
-                  file, 
+                  file,
                   line: call.line,
                   context: call.context,
                 });
@@ -358,7 +362,7 @@ server.registerTool(
           }
         }
       }
-      
+
       // Search Files
       if (!targetFilter || targetFilter === "file") {
         for (const file in index.dart) {
@@ -384,12 +388,12 @@ server.registerTool(
         }
       }
     }
-  
+
     // Fallback to direct search if no results or index not found  
     if (results.length === 0 || !index || useDirectSearch) {
       const directSearch = new DirectSearch(currentProjectPath);
       const directResults = directSearch.search(query, filter, mode);
-        
+
       // Add source indicator  
       for (const result of directResults) {
         results.push({
@@ -398,26 +402,26 @@ server.registerTool(
         });
       }
     }
-  
+
     const indexStatus = () => {
       const dbPath = ProjectDetector.getDbPath(currentProjectPath);
       const exists = fs.existsSync(dbPath);
       const cache = getSqliteCache();
       const available = cache.isAvailable;
-      
+
       if (!exists) return `Index not found (DB missing at ${dbPath}). Using direct search.`;
       if (!available) return `Index exists but inaccessible. Using direct search.`;
       return "Index empty. Using direct search.";
     };
 
     return {
-      content: [{ 
-        type: "text" as const, 
+      content: [{
+        type: "text" as const,
         text: JSON.stringify({
           results: results.slice(0, 50),
           source: !index || useDirectSearch ? "direct_search" : "index",
           note: !index ? indexStatus() : "",
-        }, null, 2) 
+        }, null, 2)
       }],
     };
   }
@@ -494,9 +498,9 @@ server.registerTool(
     if (!fs.existsSync(fullPath)) {
       return { content: [{ type: "text" as const, text: `Path not found: ${targetPath}` }] };
     }
-    
+
     const structure = getDirectoryStructure(fullPath, targetPath);
-    
+
     // Return as a formatted string for better readability by AI
     const formatStructure = (items: any[], indent: string = ""): string => {
       let output = "";
@@ -606,15 +610,15 @@ server.registerTool(
   async () => {
     const arbEditor = new ArbEditor(currentProjectPath);
     const results = arbEditor.getAllTranslations();
-    return { 
-      content: [{ 
-        type: "text" as const, 
+    return {
+      content: [{
+        type: "text" as const,
         text: JSON.stringify({
           files: results.files,
           totalKeys: results.keys.length,
           missingKeys: results.missingKeys
-        }, null, 2) 
-      }] 
+        }, null, 2)
+      }]
     };
   }
 );
@@ -670,11 +674,11 @@ server.registerTool(
   async () => {
     const arbEditor = new ArbEditor(currentProjectPath);
     const result = arbEditor.getAllTranslations();
-    return { 
-      content: [{ 
-        type: "text" as const, 
-        text: JSON.stringify(result, null, 2) 
-      }] 
+    return {
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify(result, null, 2)
+      }]
     };
   }
 );
@@ -683,44 +687,25 @@ server.registerTool(
 server.registerTool(
   "flutter_get_impact_analysis",
   {
-    description: "Analyze the 'blast radius' of a file: find all application entry points that eventually call code in this file.",
+    description: "Analyze the 'blast radius' of a file: find all application entry points (UI/Main/Events) that eventually call code in this file.",
     inputSchema: z.object({
       relativePath: z.string().describe("The relative path of the file to analyze (e.g. lib/core/utils.dart)"),
+      maxDepth: z.number().optional().describe("Maximum search depth (default: 25)"),
     }),
   },
-  async ({ relativePath }) => {
+  async ({ relativePath, maxDepth = 25 }) => {
     const index = readIndex();
     if (!index || !index.dart) return handleIndexError();
 
     const analyzer = new CodeAnalyzer(currentProjectPath);
-    const fileInfo = index.dart[relativePath];
-    if (!fileInfo) return { content: [{ type: "text" as const, text: `File not found in index: ${relativePath}` }] };
-
-    const targets = new Set<string>();
-    for (const cls of fileInfo.classes || []) targets.add(cls.name);
-    for (const func of fileInfo.functions || []) targets.add(func.name);
-
-    const affectedFlows: any[] = [];
-    const entryPoints = analyzer.findEntryPoints(index);
-
-    for (const ep of entryPoints) {
-      const pathFound = analyzer.findPathToTargets(index, ep, targets);
-      if (pathFound) {
-        affectedFlows.push({
-          entryPoint: ep.name,
-          entryFile: ep.filePath,
-          flowPath: pathFound.map(p => `${p.kind} ${p.name} (${p.filePath}:${p.line})`).join(" -> ")
-        });
-      }
-    }
+    const affectedFlows = analyzer.findImpactBackwards(index, relativePath, maxDepth);
 
     const result = {
       targetFile: relativePath,
-      entitiesFound: targets.size,
       affectedFlows: affectedFlows,
-      summary: affectedFlows.length > 0 
+      summary: affectedFlows.length > 0
         ? `Found ${affectedFlows.length} execution flows from entry points reaching this file.`
-        : "No direct execution flows from entry points (main/build) found reaching this file. It might be dead code or used dynamically."
+        : "No direct execution flows from entry points (main/build/events) found reaching this file. It might be dead code, used dynamically, or reached via a path deeper than the current limit."
     };
 
     return {
@@ -740,16 +725,16 @@ server.registerTool(
       parentClass: z.string().optional().describe("Parent class name (required for properties/functions inside classes)"),
     }),
   },
-  async ({ name, type, parentClass }: { 
-    name: string; 
+  async ({ name, type, parentClass }: {
+    name: string;
     type: "class" | "function" | "extension" | "typedef" | "variable" | "constructor" | "property" | "annotation" | "enum" | "mixin";
     parentClass?: string;
   }) => {
     const index = readIndex();
     if (!index || !index.dart) return handleIndexError();
-      
+
     const results: any[] = [];
-      
+
     for (const [filePath, info] of Object.entries(index.dart as Record<string, any>)) {
       let usages: any[] = [];
       let matchField = "";
@@ -814,7 +799,7 @@ server.registerTool(
         });
       }
     }
-      
+
     return {
       content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }],
     };
@@ -827,13 +812,17 @@ server.registerTool(
   {
     description: "Set the Flutter project root path for the MCP server",
     inputSchema: z.object({
-      projectPath: z.string().describe("Absolute path to the Flutter project root (directory containing pubspec.yaml)"),
+      projectPath: z.string().describe("Absolute path to the Flutter project root (directory containing pubspec.yaml or .git)"),
     }),
   },
   async ({ projectPath }: { projectPath: string }) => {
-    if (!fs.existsSync(path.join(projectPath, "pubspec.yaml"))) {
-      return { content: [{ type: "text" as const, text: "Error: pubspec.yaml not found in the specified path. Please provide a valid Flutter project root." }] };
+    const hasPubspec = fs.existsSync(path.join(projectPath, "pubspec.yaml"));
+    const hasGit = fs.existsSync(path.join(projectPath, ".git"));
+    
+    if (!hasPubspec && !hasGit) {
+      return { content: [{ type: "text" as const, text: "Error: No Flutter project (pubspec.yaml) or repository root (.git) found in the specified path. Please provide a valid project root." }] };
     }
+    
     currentProjectPath = projectPath;
     sqliteCache = null; // Force re-initialization with new path
     return { content: [{ type: "text" as const, text: `Project path set to: ${projectPath}` }] };
@@ -913,7 +902,7 @@ server.registerTool(
       parentClass: z.string().optional().describe("Parent class name (required for methods)"),
     }),
   },
-  async ({ elementType, name, filePath, parentClass }: { 
+  async ({ elementType, name, filePath, parentClass }: {
     elementType: "class" | "function" | "method" | "enum" | "mixin" | "extension";
     name: string;
     filePath?: string;
@@ -961,14 +950,16 @@ server.registerTool(
 
     // Read the file content
     const fullPath = path.join(currentProjectPath, targetFile);
+
     try {
       targetContent = fs.readFileSync(fullPath, 'utf-8');
     } catch (error) {
       return { content: [{ type: "text", text: `Error reading file: ${error}` }] };
     }
 
-    // Extract the code block
-    const result = parser.extractCodeBlock(targetContent, elementType, name, parentClass);
+    // استخدم الـ parsed data الموجودة في الـ index بدل إعادة الـ parse
+    const existingParsed = index.dart[targetFile] as DartFileInfo | undefined;
+    const result = parser.extractCodeBlock(targetContent, elementType, name, parentClass, existingParsed);
 
     if (!result) {
       return { content: [{ type: "text" as const, text: `Could not extract code block for ${elementType} ${name}` }] };
@@ -1021,8 +1012,8 @@ server.registerTool(
     if (!targetFile) {
       for (const file in index.dart) {
         const info = index.dart[file] as DartFileInfo;
-        const found = info.functions.some((f: FunctionInfo) => 
-          f.name === functionName && 
+        const found = info.functions.some((f: FunctionInfo) =>
+          f.name === functionName &&
           (parentClass ? f.parentClass === parentClass : !f.parentClass)
         );
 
@@ -1048,7 +1039,8 @@ server.registerTool(
 
     // Extract the function body
     const elementType = parentClass ? 'method' : 'function';
-    const result = parser.extractCodeBlock(targetContent, elementType, functionName, parentClass);
+    const existingParsed = index.dart[targetFile] as DartFileInfo | undefined;
+    const result = parser.extractCodeBlock(targetContent, elementType, functionName, parentClass, existingParsed);
 
     if (!result) {
       return { content: [{ type: "text" as const, text: `Could not extract function body for ${functionName}` }] };
@@ -1066,7 +1058,7 @@ server.registerTool(
           startLine: result.startLine,
           endLine: result.endLine,
           logicSteps,
-          summary: logicSteps.length > 0 
+          summary: logicSteps.length > 0
             ? `Function has ${logicSteps.length} logical steps: ` + logicSteps.map(s => s.description).join(', ')
             : 'No clear logical steps detected'
         }, null, 2)
@@ -1121,8 +1113,9 @@ server.registerTool(
     }
 
     // Extract the class body
-    const result = parser.extractCodeBlock(targetContent, 'class', className);
-
+    const existingParsed = index.dart[targetFile] as DartFileInfo | undefined;
+    // صح
+    const result = parser.extractCodeBlock(targetContent, 'class', className, undefined, existingParsed);
     if (!result) {
       return { content: [{ type: "text" as const, text: `Could not extract class body for ${className}` }] };
     }
@@ -1194,7 +1187,7 @@ server.registerTool(
     if (!targetFile) {
       for (const file in index.dart) {
         const info = index.dart[file] as DartFileInfo;
-        
+
         if (!detectedType) {
           // Auto-detect type
           if (info.classes.some((c: ClassInfo) => c.name === name)) {
@@ -1236,7 +1229,8 @@ server.registerTool(
     }
 
     // Extract the code block
-    const result = parser.extractCodeBlock(targetContent, detectedType || 'function', name, parentClass);
+    const existingParsed = index.dart[targetFile] as DartFileInfo | undefined;
+    const result = parser.extractCodeBlock(targetContent, detectedType || 'function', name, parentClass, existingParsed);
 
     if (!result) {
       return { content: [{ type: "text" as const, text: `Could not extract code block for ${name}` }] };
@@ -1373,7 +1367,7 @@ server.registerTool(
     if (!index) return handleIndexError();
 
     const graph = buildDetailedGraph(index);
-    
+
     if (focusFile) {
       // Filter graph to only show focusFile and its neighbors
       const neighbors = new Set<string>([focusFile]);
@@ -1423,7 +1417,7 @@ server.registerTool(
   },
   async ({ lastToolUsed, lastResult }) => {
     const hints: any[] = [];
-    
+
     // Workflow logic based on hints.py inspiration
     switch (lastToolUsed) {
       case "flutter_search":
@@ -1459,10 +1453,9 @@ server.registerTool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Flutter Explorer MCP Server running on stdio");
 }
 
 main().catch((error) => {
-  console.error("Fatal error in MCP server:", error);
+  // It's safer to not log to console at all, or ensure it's completely silent
   process.exit(1);
 });

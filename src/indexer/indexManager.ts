@@ -68,6 +68,26 @@ export class IndexManager {
   }
 
 
+  // ── Concurrency Helper ──────────────────────────────────────────────────────
+  private async runConcurrent<T>(
+    items: T[],
+    concurrency: number,
+    worker: (item: T, index: number) => Promise<void>
+  ): Promise<void> {
+    let index = 0;
+    const execWorker = async (): Promise<void> => {
+      while (index < items.length) {
+        const currentIndex = index++;
+        await worker(items[currentIndex], currentIndex);
+      }
+    };
+    const workers: Promise<void>[] = [];
+    for (let i = 0; i < Math.min(concurrency, items.length); i++) {
+      workers.push(execWorker());
+    }
+    await Promise.all(workers);
+  }
+
   // ── Full index ──────────────────────────────────────────────────────────────
 
   /** Build full index by scanning all Dart files */
@@ -115,6 +135,7 @@ export class IndexManager {
       const total = allFiles.length;
 
       const useDartAnalyzer = vscode.workspace.getConfiguration('flutterExplorer').get<boolean>('useDartAnalyzer', true);
+      const concurrency = vscode.workspace.getConfiguration('flutterExplorer').get<number>('indexingConcurrency', 3);
       let dartFilesAnalyzed = false;
 
       if (useDartAnalyzer) {
@@ -126,41 +147,47 @@ export class IndexManager {
         if (token.isCancellationRequested) return;
 
         if (dartResults && dartResults.length > 0) {
-          let i = 0;
-          for (const info of dartResults) {
+          const filesToUpsert: Array<{ relPath: string; hash: string | undefined; info: DartFileInfo }> = [];
+          
+          await this.runConcurrent(dartResults, concurrency, async (info, i) => {
             if (token.isCancellationRequested) return;
             try {
               if (progress && i % 10 === 0) {
                 progress.report({ message: `Processing ${info.filePath} (${i + 1}/${dartResults.length})` });
               }
               const fullPath = path.join(this.workspaceRoot, info.filePath);
-              const content = fs.readFileSync(fullPath, 'utf8');
+              const content = await fs.promises.readFile(fullPath, 'utf8');
               info.contentHash = this.computeHash(content);
               this.index.set(info.filePath, info);
-              this.sqliteCache.upsertDartFile(info.filePath, info.contentHash, info);
+              filesToUpsert.push({ relPath: info.filePath, hash: info.contentHash, info });
             } catch (e) {
               console.error(`Failed to post-process analyzed file ${info.filePath}:`, e);
             }
-            i++;
+          });
+
+          if (token.isCancellationRequested) return;
+          if (filesToUpsert.length > 0) {
+            this.sqliteCache.batchUpsertDartFiles(filesToUpsert);
           }
           dartFilesAnalyzed = true;
         }
       }
 
-      for (let i = 0; i < allFiles.length; i++) {
+      const dartFilesToUpsert: Array<{ relPath: string; hash: string | undefined; info: DartFileInfo }> = [];
+
+      await this.runConcurrent(allFiles, concurrency, async (uri, i) => {
         if (token.isCancellationRequested) return;
-        const uri = allFiles[i];
         try {
           const relPath = this.relativePath(uri.fsPath);
 
           if (uri.fsPath.endsWith('.dart')) {
-            if (dartFilesAnalyzed) continue; // Skip if already done by analyzer
-
-            const content = await this.readFile(uri);
-            const info = this.parser.parse(relPath, content);
-            info.contentHash = this.computeHash(content);
-            this.index.set(relPath, info);
-            this.sqliteCache.upsertDartFile(relPath, info.contentHash, info);
+            if (!dartFilesAnalyzed) {
+              const content = await this.readFile(uri);
+              const info = this.parser.parse(relPath, content);
+              info.contentHash = this.computeHash(content);
+              this.index.set(relPath, info);
+              dartFilesToUpsert.push({ relPath, hash: info.contentHash, info });
+            }
           } else if (uri.fsPath.endsWith('.arb')) {
             const content = await this.readFile(uri);
             const translations = this.parseArb(content);
@@ -179,6 +206,11 @@ export class IndexManager {
             increment: 100 / total,
           });
         }
+      });
+
+      if (token.isCancellationRequested) return;
+      if (dartFilesToUpsert.length > 0) {
+        this.sqliteCache.batchUpsertDartFiles(dartFilesToUpsert);
       }
 
 

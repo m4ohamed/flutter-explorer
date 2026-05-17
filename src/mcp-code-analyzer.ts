@@ -185,16 +185,40 @@ export class CodeAnalyzer {
     if (!index || !index.dart) return entryPoints;
 
     for (const [path, info] of Object.entries(index.dart as Record<string, any>)) {
+      // 1. Top-level main()
       for (const func of info.functions || []) {
         if (func.name === 'main') {
-          entryPoints.push({ ...func, filePath: path, kind: 'Function' });
+          entryPoints.push({ ...func, filePath: path, kind: 'Function', qname: this.getQName(path, null, func.name) });
         }
       }
+      // 2. Class methods (build, initState, etc. in Widgets/Controllers)
       for (const cls of info.classes || []) {
-        if (cls.extendsClass && (cls.extendsClass.includes('Widget') || cls.extendsClass.includes('State'))) {
-          for (const method of (info.functions || []).filter((f: any) => f.parentClass === cls.name)) {
-            if (method.name === 'build') {
-              entryPoints.push({ ...method, filePath: path, kind: 'Method' });
+        const isEntryPointClass = cls.extendsClass && (
+          cls.extendsClass.includes('Widget') || 
+          cls.extendsClass.includes('State') ||
+          cls.extendsClass.includes('Consumer') ||
+          cls.extendsClass.includes('Hook') ||
+          cls.extendsClass.includes('Controller') ||
+          cls.extendsClass.includes('ViewModel') ||
+          cls.extendsClass.includes('Bloc') ||
+          cls.extendsClass.includes('Cubit') ||
+          cls.extendsClass.includes('Notifier')
+        );
+        
+        if (isEntryPointClass) {
+          for (const method of cls.methods || []) {
+            const entryPointMethods = [
+              'build', 'initState', 'dispose', 'didUpdateWidget', 'didChangeDependencies',
+              'onInit', 'onReady', 'onClose', 'mapEventToState', 'onEvent'
+            ];
+            if (entryPointMethods.includes(method.name) || method.name.startsWith('on')) {
+              entryPoints.push({ 
+                ...method, 
+                filePath: path, 
+                kind: 'Method', 
+                parentClass: cls.name, 
+                qname: this.getQName(path, cls.name, method.name) 
+              });
             }
           }
         }
@@ -203,56 +227,147 @@ export class CodeAnalyzer {
     return entryPoints;
   }
 
-  /**
-   * Resolve a call to its target function or class
-   */
-  resolveCall(index: any, name: string): any | null {
-    if (!index || !index.dart) return null;
-    for (const [path, info] of Object.entries(index.dart as Record<string, any>)) {
-      for (const f of info.functions || []) {
-        if (f.name === name) return { ...f, filePath: path, kind: 'Function' };
-      }
-      for (const c of info.classes || []) {
-        if (c.name === name) return { ...c, filePath: path, kind: 'Class', name: c.name, line: c.line };
-      }
-    }
-    return null;
+  private getQName(filePath: string, className: string | null, entityName: string): string {
+    return `${filePath}:${className ? className + '.' : ''}${entityName}`;
   }
 
   /**
-   * BFS to find paths from a start node to any of the target entity names
+   * Resolve a call to its target function or class
    */
-  findPathToTargets(index: any, start: any, targets: Set<string>, maxDepth = 5): any[] | null {
-    const queue: { node: any; path: any[] }[] = [{ node: start, path: [start] }];
-    const visited = new Set<string>();
+  resolveCall(index: any, name: string, receiver?: string): any | null {
+    if (!index || !index.dart) return null;
 
-    while (queue.length > 0) {
-      const { node, path: currentPath } = queue.shift()!;
-      const qname = `${node.filePath}:${node.name}`;
-      if (visited.has(qname)) continue;
-      visited.add(qname);
+    // Fast lookup using pre-calculated entity map if possible
+    // For now, we optimize the search by checking names directly
 
-      if (targets.has(node.name)) {
-        return currentPath;
+    // Handle Class.method or instance.method
+    const dotIdx = name.indexOf('.');
+    let searchClass = receiver;
+    let searchMethod = name;
+
+    if (dotIdx !== -1) {
+      searchClass = name.substring(0, dotIdx);
+      searchMethod = name.substring(dotIdx + 1);
+    }
+
+    for (const [path, info] of Object.entries(index.dart as Record<string, any>)) {
+      // 1. Check classes if searching for a class (e.g. constructor call)
+      if (!searchMethod || searchMethod === name) {
+        for (const c of info.classes || []) {
+          if (c.name === name) return { ...c, filePath: path, kind: 'Class', name: c.name, line: c.line, qname: this.getQName(path, null, c.name) };
+        }
       }
 
-      if (currentPath.length >= maxDepth) continue;
+      // 2. Check functions (top-level)
+      if (!searchClass) {
+        for (const f of info.functions || []) {
+          if (f.name === name) return { ...f, filePath: path, kind: 'Function', qname: this.getQName(path, null, f.name) };
+        }
+      }
 
-      const fileInfo = index.dart?.[node.filePath];
-      if (fileInfo) {
-        const calls = (fileInfo.functionCalls || []).filter((c: any) => 
-          c.callerFunction === node.name && 
-          (!node.parentClass || c.callerClass === node.parentClass)
-        );
-
-        for (const call of calls) {
-          const targetNode = this.resolveCall(index, call.name);
-          if (targetNode) {
-            queue.push({ node: targetNode, path: [...currentPath, targetNode] });
-          }
+      // 3. Check methods in classes
+      for (const c of info.classes || []) {
+        // If we have a receiver, check if it matches the class name
+        // This is a basic heuristic as receiver might be an instance variable
+        if (searchClass && c.name !== searchClass) continue;
+        
+        for (const m of (c.methods || [])) {
+          if (m.name === searchMethod) return { ...m, filePath: path, kind: 'Method', parentClass: c.name, qname: this.getQName(path, c.name, m.name) };
         }
       }
     }
     return null;
   }
+
+  /**
+   * Build a reverse call graph: target -> Set of callers
+   */
+  private buildReverseCallGraph(index: any): Map<string, Set<string>> {
+    const reverseGraph = new Map<string, Set<string>>();
+
+    if (!index || !index.dart) return reverseGraph;
+
+    for (const [filePath, info] of Object.entries(index.dart as Record<string, any>)) {
+      const calls = info.functionCalls || [];
+      for (const call of calls) {
+        const callerQName = this.getQName(filePath, call.callerClass, call.callerFunction);
+        const targetNode = this.resolveCall(index, call.name, call.receiver);
+        
+        if (targetNode) {
+          const targetQName = targetNode.qname;
+          if (!reverseGraph.has(targetQName)) {
+            reverseGraph.set(targetQName, new Set());
+          }
+          reverseGraph.get(targetQName)!.add(callerQName);
+        }
+      }
+    }
+
+    return reverseGraph;
+  }
+
+  /**
+   * Find impact using a true backward BFS from target entities to entry points
+   */
+  findImpactBackwards(index: any, targetFilePath: string, maxDepth = 25): any[] {
+    const fileInfo = index.dart?.[targetFilePath];
+    if (!fileInfo) return [];
+
+    const targetEntities = new Set<string>();
+    for (const cls of fileInfo.classes || []) targetEntities.add(this.getQName(targetFilePath, null, cls.name));
+    for (const func of fileInfo.functions || []) targetEntities.add(this.getQName(targetFilePath, null, func.name));
+    // Also include methods
+    for (const cls of fileInfo.classes || []) {
+      for (const m of cls.methods || []) {
+        targetEntities.add(this.getQName(targetFilePath, cls.name, m.name));
+      }
+    }
+
+    const reverseGraph = this.buildReverseCallGraph(index);
+    const entryPoints = this.findEntryPoints(index);
+    const entryPointQNames = new Set(entryPoints.map(ep => ep.qname));
+    const entryPointMap = new Map(entryPoints.map(ep => [ep.qname, ep]));
+
+    const affectedFlows: any[] = [];
+    const queue: { qname: string; path: string[] }[] = [];
+    const visited = new Map<string, number>(); // qname -> shortest distance
+
+    for (const target of targetEntities) {
+      queue.push({ qname: target, path: [target] });
+      visited.set(target, 0);
+    }
+
+    while (queue.length > 0) {
+      const { qname, path: currentPath } = queue.shift()!;
+      
+      // If this node is an entry point, we found a flow!
+      if (entryPointQNames.has(qname)) {
+        const ep = entryPointMap.get(qname)!;
+        affectedFlows.push({
+          entryPoint: ep.name,
+          entryFile: ep.filePath,
+          kind: ep.kind,
+          parentClass: ep.parentClass,
+          flowPath: [...currentPath].reverse().join(" -> ")
+        });
+        // Limit total flows to avoid overwhelming the output
+        if (affectedFlows.length >= 50) break;
+      }
+
+      if (currentPath.length >= maxDepth) continue;
+
+      const callers = reverseGraph.get(qname);
+      if (callers) {
+        for (const caller of callers) {
+          if (!visited.has(caller) || visited.get(caller)! > currentPath.length + 1) {
+            visited.set(caller, currentPath.length + 1);
+            queue.push({ qname: caller, path: [...currentPath, caller] });
+          }
+        }
+      }
+    }
+
+    return affectedFlows;
+  }
 }
+

@@ -1,12 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-export interface ArbEntry {
-  key: string;
-  value: string;
-  [key: string]: any;
-}
-
 export class ArbEditor {
   private projectRoot: string;
 
@@ -20,13 +14,13 @@ export class ArbEditor {
     
     if (!fs.existsSync(libPath)) return [];
     
-    const walkDir = (dir: string, baseDir: string = dir): void => {
+    const walkDir = (dir: string): void => {
       const files = fs.readdirSync(dir);
       for (const file of files) {
         const fullPath = path.join(dir, file);
         const stat = fs.statSync(fullPath);
         if (stat.isDirectory()) {
-          walkDir(fullPath, baseDir);
+          walkDir(fullPath);
         } else if (file.endsWith('.arb')) {
           arbFiles.push(path.relative(this.projectRoot, fullPath));
         }
@@ -37,57 +31,19 @@ export class ArbEditor {
     return arbFiles;
   }
 
-  private readArb(filePath: string): Record<string, ArbEntry> {
+  private readArb(filePath: string): any {
     const fullPath = path.join(this.projectRoot, filePath);
+    if (!fs.existsSync(fullPath)) return {};
     const content = fs.readFileSync(fullPath, 'utf-8');
-    const data = JSON.parse(content);
-    
-    const entries: Record<string, ArbEntry> = {};
-    for (const [key, value] of Object.entries(data)) {
-      if (!key.startsWith('@')) {
-        entries[key] = {
-          key,
-          value: value as string,
-          ...this.getMetadata(data, key),
-        };
-      }
+    try {
+      return JSON.parse(content);
+    } catch (e) {
+      return {};
     }
-    
-    return entries;
   }
 
-  private getMetadata(data: any, key: string): any {
-    const metadata: any = {};
-    const metaKeys = ['@description', '@context', '@source_text'];
-    for (const metaKey of metaKeys) {
-      const fullKey = `@${key}${metaKey.replace('@', '')}`;
-      if (data[fullKey]) {
-        metadata[metaKey] = data[fullKey];
-      }
-    }
-    return metadata;
-  }
-
-  private writeArb(filePath: string, entries: Record<string, ArbEntry>): void {
+  private writeArb(filePath: string, data: any): void {
     const fullPath = path.join(this.projectRoot, filePath);
-    
-    const data: any = {};
-    const sortedKeys = Object.keys(entries).sort();
-    
-    for (const key of sortedKeys) {
-      const entry = entries[key];
-      data[key] = entry.value;
-      
-      for (const [metaKey, metaValue] of Object.entries(entry)) {
-        if (metaKey !== 'key' && metaKey !== 'value') {
-          // Metadata keys are already formatted as '@description' etc in ArbEntry
-          // We need to write them as '@key_description' in the JSON
-          const jsonMetaKey = `@${key}${metaKey.replace('@', '')}`;
-          data[jsonMetaKey] = metaValue;
-        }
-      }
-    }
-    
     fs.writeFileSync(fullPath, JSON.stringify(data, null, 2), 'utf-8');
   }
 
@@ -100,25 +56,25 @@ export class ArbEditor {
     }
     
     for (const arbFile of arbFiles) {
-      const entries = this.readArb(arbFile);
+      const data = this.readArb(arbFile);
       
       let value = '';
       if (arbFile.toLowerCase().includes('_ar.arb') || arbFile.toLowerCase().includes('ar.arb')) {
         value = arValue;
-      } else if (arbFile.toLowerCase().includes('_en.arb') || arbFile.toLowerCase().includes('en.arb')) {
-        value = enValue;
       } else {
-        // Default to English if indeterminate
         value = enValue;
       }
       
-      entries[key] = {
-        key,
-        value,
-        ...(description && { '@description': description }),
-      };
+      data[key] = value;
+      if (description) {
+        const metaKey = `@${key}`;
+        if (!data[metaKey]) {
+          data[metaKey] = {};
+        }
+        data[metaKey].description = description;
+      }
       
-      this.writeArb(arbFile, entries);
+      this.writeArb(arbFile, data);
       updatedFiles.push(arbFile);
     }
     
@@ -135,12 +91,14 @@ export class ArbEditor {
     const fileKeys = new Map<string, Set<string>>();
     
     for (const arbFile of arbFiles) {
-      const entries = this.readArb(arbFile);
+      const data = this.readArb(arbFile);
       const keys = new Set<string>();
       
-      for (const key of Object.keys(entries)) {
-        allKeys.add(key);
-        keys.add(key);
+      for (const key of Object.keys(data)) {
+        if (!key.startsWith('@')) {
+          allKeys.add(key);
+          keys.add(key);
+        }
       }
       
       fileKeys.set(arbFile, keys);
@@ -171,11 +129,20 @@ export class ArbEditor {
     const deletedFrom: string[] = [];
     
     for (const arbFile of arbFiles) {
-      const entries = this.readArb(arbFile);
+      const data = this.readArb(arbFile);
+      let changed = false;
       
-      if (entries[key]) {
-        delete entries[key];
-        this.writeArb(arbFile, entries);
+      if (data[key] !== undefined) {
+        delete data[key];
+        changed = true;
+      }
+      if (data[`@${key}`] !== undefined) {
+        delete data[`@${key}`];
+        changed = true;
+      }
+      
+      if (changed) {
+        this.writeArb(arbFile, data);
         deletedFrom.push(arbFile);
       }
     }
@@ -191,3 +158,4 @@ export class ArbEditor {
     };
   }
 }
+

@@ -251,7 +251,7 @@ export class DartParser {
     typedef_: /^typedef\s+(\w+)\s*=\s*([^;]+);/,
     typedefOld_: /^typedef\s+([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(([^)]*)\);/,
     annotation: /^@(\w+)/,
-    class_: /^(abstract\s+|sealed\s+|base\s+|interface\s+|final\s+)?(mixin\s+)?class\s+(\w+)(?:\s+extends\s+([\w<>,\s\[\]]+))?(?:\s+with\s+([\w<>,\s\[\]]+))?(?:\s+implements\s+([\w<>,\s\[\]]+))?/,
+    class_: /^((?:abstract\s+|sealed\s+|base\s+|interface\s+|final\s+)*)(mixin\s+)?class\s+(\w+)(?:\s+extends\s+([\w<>,\s\[\]]+))?(?:\s+with\s+([\w<>,\s\[\]]+))?(?:\s+implements\s+([\w<>,\s\[\]]+))?/,
     ctor: /^\s*(const\s+)?(factory\s+)?(\w+)(?:\.(\w+))?\s*\(([\s\S]*?)\)\s*(?::\s*[\s\S]*?)?[\{;]/,
     buildMethod: /(?:Widget|Route|PreferredSizeWidget|StatelessWidget|StatefulWidget)\s+(\w+)\s*\(([^)]*)\)/,
     method: /^\s*(static\s+)?([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(([\s\S]*?)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
@@ -334,6 +334,60 @@ export class DartParser {
     let buildLines: string[] = [];
 
     const P = DartParser.P; // shorthand
+    
+    // Helper to sync braces and pop scopes — handles current line or multiple lines
+    const syncBraces = (lineIdx: number, count: number = 1) => {
+      for (let k = 0; k < count; k++) {
+        const idx = lineIdx + k;
+        if (idx >= maskedLines.length) break;
+        const mLine = maskedLines[idx];
+        for (const ch of mLine) {
+          if (ch === '{') {
+            braceDepth++;
+          } else if (ch === '}') {
+            braceDepth--;
+            while (scopeStack.length > 0 && scopeStack[scopeStack.length - 1].braceDepth >= braceDepth) {
+              const popped = scopeStack.pop();
+              if (popped) {
+                const lineNum_ = idx + 1;
+                if (popped.type === 'class') {
+                  const cls = result.classes.find(c => c.name === popped.name && c.lineEnd === undefined);
+                  if (cls) cls.lineEnd = lineNum_;
+                  else {
+                    const et = result.extensionTypes.find(e => e.name === popped.name && e.lineEnd === undefined);
+                    if (et) et.lineEnd = lineNum_;
+                  }
+                } else if (popped.type === 'function') {
+                  const func = result.functions.find(f => f.name === popped.name && f.lineEnd === undefined);
+                  if (func) { func.lineEnd = lineNum_; }
+                  else {
+                    for (const cls of result.classes) {
+                      const m = cls.methods.find(f => f.name === popped.name && f.lineEnd === undefined);
+                      if (m) { m.lineEnd = lineNum_; break; }
+                    }
+                    for (const ext of result.extensions) {
+                      const m = ext.methods.find(f => f.name === popped.name && f.lineEnd === undefined);
+                      if (m) { m.lineEnd = lineNum_; break; }
+                    }
+                    for (const et of result.extensionTypes) {
+                      const m = et.methods.find(f => f.name === popped.name && f.lineEnd === undefined);
+                      if (m) { m.lineEnd = lineNum_; break; }
+                    }
+                  }
+                }
+              }
+            }
+            if (inBuildMethod && braceDepth <= buildBraceStart) {
+              inBuildMethod = false;
+              const wt = this.parseWidgetTree(buildLines.join('\n'), true);
+              if (wt.length > 0) result.widgets.push(...wt);
+              buildLines = [];
+            }
+          }
+        }
+      }
+    };
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];        // original (for display / warnings)
       const maskedLine = maskedLines[i];  // masked (for all regex matching)
@@ -353,13 +407,13 @@ export class DartParser {
           hideNames: imp[4] ? imp[4].split(',').map(s => s.trim()) : [],
           line: lineNum,
         });
-        continue;
+        syncBraces(i); continue;
       }
 
       const exp = trimmed.match(P.export_);
-      if (exp) { result.exports.push(exp[1]); continue; }
+      if (exp) { result.exports.push(exp[1]); syncBraces(i); continue; }
 
-      if (trimmed.startsWith('import ') || trimmed.startsWith('export ')) continue;
+      if (trimmed.startsWith('import ') || trimmed.startsWith('export ')) { syncBraces(i); continue; }
 
       // Hardcoded text/color — use ORIGINAL line (we want real content for message)
       // but only if it isn't inside a string/comment (maskedLine won't match)
@@ -376,14 +430,14 @@ export class DartParser {
       const enm = trimmed.match(P.enum_);
       if (enm) {
         result.enums.push({ name: enm[1], values: this.extractEnumValues(lines, i), line: lineNum, isPrivate: enm[1].startsWith('_') });
-        continue;
+        syncBraces(i); continue;
       }
 
       // Mixins
       const mix = trimmed.match(P.mixin_);
       if (mix) {
         result.mixins.push({ name: mix[1], on: mix[2] || null, line: lineNum, isPrivate: mix[1].startsWith('_') });
-        continue;
+        syncBraces(i); continue;
       }
 
       // Extensions
@@ -392,7 +446,7 @@ export class DartParser {
         const name = extMatch[1] || `UnnamedExtension_${lineNum}`;
         result.extensions.push({ name, onType: extMatch[2].trim(), methods: [], properties: [], line: lineNum, isPrivate: name.startsWith('_') });
         scopeStack.push({ type: 'class', name, braceDepth });
-        continue;
+        syncBraces(i); continue;
       }
 
       // Typedefs (new and old)
@@ -403,7 +457,7 @@ export class DartParser {
             name: td[1], signature: td[2].trim(),
             line: lineNum, isPrivate: td[1].startsWith('_'),
           });
-          continue;
+          syncBraces(i); continue;
         }
         const tdOld = trimmed.match(P.typedefOld_);
         if (tdOld) {
@@ -411,7 +465,7 @@ export class DartParser {
             name: tdOld[2], signature: `${tdOld[1].trim()} Function(${tdOld[3].trim()})`,
             line: lineNum, isPrivate: tdOld[2].startsWith('_'),
           });
-          continue;
+          syncBraces(i); continue;
         }
       }
 
@@ -442,7 +496,9 @@ export class DartParser {
             line: lineNum, methods: [], properties: [],
           });
           scopeStack.push({ type: 'class', name, braceDepth });
-          i += extType[0].split('\n').length - 1;
+          const hLines = extType[0].split('\n').length;
+          syncBraces(i, hLines);
+          i += hLines - 1;
           continue;
         }
       }
@@ -469,24 +525,19 @@ export class DartParser {
         });
         scopeStack.push({ type: 'class', name, braceDepth });
 
-        // Skip lines that were part of the multi-line class definition header
-        const headerLines = cls[0].split('\n').length - 1;
-        i += headerLines;
+        const headerLines = cls[0].split('\n').length;
+        syncBraces(i, headerLines);
+        i += headerLines - 1;
 
-        // Constructor lookahead
+        // Constructor lookahead (keep existing logic but it doesn't call syncBraces because it doesn't skip i yet)
         for (let j = i + 1; j < Math.min(i + 100, lines.length); j++) {
           const mContent = maskedLines.slice(j, j + 5).join('\n');
           const ctorMatch = mContent.match(P.ctor);
           if (ctorMatch && ctorMatch[3] === name) {
             result.constructors.push({
-              name: ctorMatch[4] || name,
-              className: name,
-              isFactory: !!ctorMatch[2],
-              isConst: !!ctorMatch[1],
-              params: ctorMatch[5] ? ctorMatch[5].replace(/\n/g, ' ').trim() : '',
-              line: j + 1,
+              name: ctorMatch[4] || name, className: name, isFactory: !!ctorMatch[2], isConst: !!ctorMatch[1],
+              params: ctorMatch[5] ? ctorMatch[5].replace(/\n/g, ' ').trim() : '', line: j + 1,
             });
-            // We don't increment j here because we still need to process braces in the main loop
           }
           if (maskedLines[j].trim().match(/^(abstract\s+|sealed\s+|base\s+|interface\s+|final\s+)?class\s+/)) break;
         }
@@ -508,44 +559,14 @@ export class DartParser {
         }
       }
 
-      // Track braces — using maskedLine avoids counting braces inside strings
-      for (const ch of maskedLine) {
-        if (ch === '{') {
-          braceDepth++;
-        } else if (ch === '}') {
-          braceDepth--;
-          // pop scope frames whose opening depth now exceeds current depth
-          while (scopeStack.length > 0 && scopeStack[scopeStack.length - 1].braceDepth >= braceDepth) {
-            const popped = scopeStack.pop();
-            if (popped) {
-              if (popped.type === 'class') {
-                const cls = result.classes.find(c => c.name === popped.name && c.lineEnd === undefined);
-                if (cls) cls.lineEnd = lineNum;
-                else {
-                  const et = result.extensionTypes.find(e => e.name === popped.name && e.lineEnd === undefined);
-                  if (et) et.lineEnd = lineNum;
-                }
-              } else if (popped.type === 'function') {
-                const func = result.functions.find(f => f.name === popped.name && f.lineEnd === undefined);
-                if (func) func.lineEnd = lineNum;
-              }
-            }
-          }
-          if (inBuildMethod && braceDepth <= buildBraceStart) {
-            inBuildMethod = false;
-            const wt = this.parseWidgetTree(buildLines.join('\n'), true); // use masked content
-            if (wt.length > 0) result.widgets.push(...wt);
-            buildLines = [];
-          }
-        }
-      }
+      // Track braces — syncBraces handles current line AND scope popping
+      syncBraces(i);
 
       // Widget-returning method detection
       if (currentClass() && P.buildMethod.test(trimmed)) {
         inBuildMethod = true;
         buildBraceStart = braceDepth - 1;
         buildLines = [];
-        // If there's content after the opening brace on the same line, include it
         const braceIdx = line.indexOf('{');
         if (braceIdx !== -1 && braceIdx < line.length - 1) {
           buildLines.push(maskedLine.substring(braceIdx + 1));
@@ -557,7 +578,6 @@ export class DartParser {
       // Methods and Properties inside a class/extension
       const cc = currentClass();
       if (cc) {
-        // Methods and Properties inside a class/extension - use lookahead (8 lines)
         const mLookahead = maskedLines.slice(i, i + 8).join('\n');
         const methodMatch = mLookahead.match(P.method);
         if (methodMatch && !SKIP_METHODS.has(methodMatch[3])) {
@@ -577,15 +597,13 @@ export class DartParser {
             }
           }
 
-          const hLines = methodMatch[0].split('\n').length - 1;
-          // We need to account for braces in the lines we skip - start from k=0
-          for (let k = 0; k <= hLines; k++) {
-            for (const ch of maskedLines[i + k]) {
-              if (ch === '{') braceDepth++; else if (ch === '}') braceDepth--;
-            }
-          }
+          const hLines = methodMatch[0].split('\n').length;
+          // We already called syncBraces(i) for the first line, but hLines might be > 1
+          // Actually, let's just re-sync if hLines > 1
+          if (hLines > 1) syncBraces(i + 1, hLines - 1);
+          
           scopeStack.push({ type: 'function', name: methodMatch[3], braceDepth: braceDepth - 1 });
-          i += hLines;
+          i += hLines - 1;
           continue;
         }
 
@@ -663,14 +681,12 @@ export class DartParser {
             isAsync: !!f[4], isStatic: false, parentClass: null,
           });
 
-          const hLines = f[0].split('\n').length - 1;
-          for (let k = 0; k <= hLines; k++) {
-            for (const ch of maskedLines[i + k]) {
-              if (ch === '{') braceDepth++; else if (ch === '}') braceDepth--;
-            }
-          }
+          const hLines = f[0].split('\n').length;
+          // syncBraces(i) already called
+          if (hLines > 1) syncBraces(i + 1, hLines - 1);
+          
           scopeStack.push({ type: 'function', name: f[2], braceDepth: braceDepth - 1 });
-          i += hLines;
+          i += hLines - 1;
         } else {
           const varMatch = trimmed.match(P.topVar);
           if (varMatch && !RESERVED.has(varMatch[4])) {
@@ -988,102 +1004,113 @@ export class DartParser {
   /**
    * Extract the full body of a class, function, or method from the source code
    */
-  extractCodeBlock(content: string, elementType: 'class' | 'function' | 'method' | 'enum' | 'mixin' | 'extension', name: string, parentClass?: string): { body: string; startLine: number; endLine: number; comments: string[] } | null {
+  extractCodeBlock(
+    content: string,
+    elementType: 'class' | 'function' | 'method' | 'enum' | 'mixin' | 'extension',
+    name: string,
+    parentClass?: string,
+    parsedInfo?: DartFileInfo
+  ): { body: string; startLine: number; endLine: number; comments: string[] } | null {
+
+    const parsed = parsedInfo ?? this.parse('__extract__', content);
     const lines = content.split('\n');
+
     let startLine = -1;
     let endLine = -1;
-    let braceDepth = 0;
-    let found = false;
-    let comments: string[] = [];
 
-    // Search for the element definition
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const trimmed = line.trim();
-
-      // Collect comments before the definition
-      if (trimmed.startsWith('//') && !found) {
-        comments.push(trimmed);
-        continue;
-      }
-
-      const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      // Match definition based on elementType
-      if (elementType === 'class' && trimmed.match(new RegExp(`^class\\s+${escapedName}\\s*`))) {
-        startLine = i;
-        found = true;
-      } else if (elementType === 'enum' && trimmed.match(new RegExp(`^enum\\s+${escapedName}\\s*`))) {
-        startLine = i;
-        found = true;
-      } else if (elementType === 'mixin' && trimmed.match(new RegExp(`^mixin\\s+${escapedName}\\s*`))) {
-        startLine = i;
-        found = true;
-      } else if (elementType === 'extension' && trimmed.match(new RegExp(`^extension\\s+${escapedName}\\s*`))) {
-        startLine = i;
-        found = true;
-      } else if (elementType === 'extension' && name === 'unnamed extension' && trimmed.match(/^extension\s+on\s+/)) {
-        startLine = i;
-        found = true;
-      }
-      // Match function/method definition
-      else if ((elementType === 'function' || elementType === 'method') && trimmed.match(new RegExp(`\\b${escapedName}\\s*\\(`))) {
-        // Check if it's a method inside the correct parent class
-        if (parentClass) {
-          // Search backwards for the class definition
-          let inCorrectClass = false;
-          for (let j = i; j >= 0; j--) {
-            if (lines[j].match(new RegExp(`^(class|mixin|extension|enum)\\s+${parentClass}\\s*`))) {
-              inCorrectClass = true;
-              break;
-            }
-            if (lines[j].match(/^(class|mixin|extension|enum)\s+\w+/)) {
-              break; // Found a different class/container
-            }
-          }
-          if (!inCorrectClass) continue;
-        }
-        startLine = i;
-        found = true;
-      }
-
-      if (found) {
-        // If it's a single line arrow function/method
-        if (trimmed.includes('=>') && trimmed.endsWith(';')) {
-          endLine = i;
-          break;
-        }
-
-        // Track braces to find the end - USE MASKING to avoid strings/comments
-        const maskedContent = this.preprocessSource(lines.slice(i).join('\n'));
-        const mLines = maskedContent.split('\n');
-
-        for (let j = 0; j < mLines.length; j++) {
-          const globalIdx = i + j;
-          for (const ch of mLines[j]) {
-            if (ch === '{') braceDepth++;
-            else if (ch === '}') {
-              braceDepth--;
-              if (braceDepth === 0) {
-                endLine = globalIdx;
-                break;
-              }
-            }
-          }
-          if (endLine !== -1) break;
+    switch (elementType) {
+      case 'class': {
+        const cls = parsed.classes.find(c => c.name === name);
+        if (cls) { startLine = cls.line; endLine = cls.lineEnd ?? -1; }
+        if (endLine === -1) {
+          const ext = parsed.extensions.find(e => e.name === name);
+          if (ext) { startLine = ext.line; endLine = -1; }
+          const et = parsed.extensionTypes.find(e => e.name === name);
+          if (et) { startLine = et.line; endLine = et.lineEnd ?? -1; }
         }
         break;
-      } else {
-        // Reset comments if we haven't found the element yet and it's not a comment line
-        if (!trimmed.startsWith('//')) {
-          comments = [];
+      }
+      case 'enum': {
+        const enm = parsed.enums.find(e => e.name === name);
+        if (enm) { startLine = enm.line; endLine = -1; }
+        break;
+      }
+      case 'mixin': {
+        const mix = parsed.mixins.find(m => m.name === name);
+        if (mix) { startLine = mix.line; endLine = -1; }
+        break;
+      }
+      case 'extension': {
+        const ext = parsed.extensions.find(e =>
+          name === 'unnamed extension' ? !e.name.startsWith('Unnamed') === false : e.name === name
+        );
+        if (ext) { startLine = ext.line; endLine = -1; }
+        break;
+      }
+      case 'function': {
+        const fn = parsed.functions.find(f => f.name === name && !f.parentClass);
+        if (fn) { startLine = fn.line; endLine = fn.lineEnd ?? -1; }
+        break;
+      }
+      case 'method': {
+        // ابحث في classes + extensions + extensionTypes
+        let fn = parsed.functions.find(f => f.name === name && f.parentClass === parentClass);
+        if (!fn) {
+          for (const cls of parsed.classes) {
+            const m = cls.methods.find(m => m.name === name);
+            if (m && (!parentClass || cls.name === parentClass)) { fn = m; break; }
+          }
         }
+        if (fn) { startLine = fn.line; endLine = fn.lineEnd ?? -1; }
+        break;
       }
     }
 
-    if (startLine === -1 || endLine === -1) return null;
+    if (startLine === -1) return null;
 
-    const body = lines.slice(startLine, endLine + 1).join('\n');
-    return { body, startLine: startLine + 1, endLine: endLine + 1, comments };
+    // لو lineEnd مش موجود في الـ parse (enum/mixin/extension)، احسبه بـ brace tracking بسيط
+    if (endLine === -1) {
+      const masked = this.preprocessSource(content);
+      const maskedLines = masked.split('\n');
+      let depth = 0;
+      let started = false;
+      for (let i = startLine - 1; i < maskedLines.length; i++) {
+        for (const ch of maskedLines[i]) {
+          if (ch === '{') { depth++; started = true; }
+          else if (ch === '}') {
+            depth--;
+            if (started && depth === 0) { endLine = i + 1; break; }
+          }
+        }
+        if (endLine !== -1) break;
+      }
+    }
+
+    if (endLine === -1) return null;
+
+    // استخرج الـ comments اللي قبل السطر
+    const comments: string[] = [];
+    for (let i = startLine - 2; i >= 0; i--) {
+      const t = lines[i].trim();
+      if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) {
+        comments.unshift(t);
+      } else {
+        break;
+      }
+    }
+
+    const body = lines.slice(startLine - 1, endLine).join('\n');
+    return { body, startLine, endLine, comments };
   }
+
+  private _countNetBraces(line: string): number {
+    let net = 0;
+    for (const ch of line) {
+      if (ch === '{') net++;
+      else if (ch === '}') net--;
+    }
+    return net;
+  }
+
 }
 

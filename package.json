@@ -101,10 +101,14 @@
                 },
                 "flutterExplorer.useDartAnalyzer": {
                     "type": "boolean",
-                    "default": true,
+                    "default": false,
                     "description": "Use Dart SDK (package:analyzer) for 100% accurate indexing (fallback to regex if Dart not found)"
+                },
+                "flutterExplorer.indexingConcurrency": {
+                    "type": "number",
+                    "default": 3,
+                    "description": "Number of files to analyze concurrently during indexing (default: 3)"
                 }
-
             }
         }
     },
@@ -114,9 +118,8 @@
         "watch": "node esbuild.js --watch",
         "lint": "eslint src --ext ts",
         "build": "node esbuild.js",
-        "rebuild": "npx @electron/rebuild -v 39.2.3 -f -w better-sqlite3",
+        "rebuild": "node .\\node_modules\\@electron\\rebuild\\lib\\cli.js -v 39.2.3 -w better-sqlite3",
         "analyze-dart": "dart tools/dart_analyzer.dart ."
-
     },
     "devDependencies": {
         "@electron/rebuild": "^4.0.4",
@@ -125,7 +128,6 @@
         "@types/node": "^20.11.0",
         "@types/vscode": "^1.85.0",
         "@vscode/vsce": "^2.22.0",
-        "electron-rebuild": "^3.2.9",
         "esbuild": "^0.28.0",
         "typescript": "^5.3.0"
     },

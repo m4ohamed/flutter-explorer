@@ -1,4 +1,8 @@
-## 📋 Lessons
+# 📋 Lessons
+
 - Ensure all variables are typed before pushing.
-- **Improved Error Reporting**: When a resource (like an index or database) is missing, don't just say "Not found". Check if the file exists, if it's accessible, and if it's empty, and provide specific instructions for each case to help the user/agent troubleshoot.
-- **Regex Precision**: In Dart parsing, use greedy matching `+` instead of non-greedy `+?` for headers like `extends` or `with` if you want to capture the entire list across multiple lines or including brackets, and ensure `[` and `]` are included in the character class for generic types.
+- When editing ARB files, preserve global metadata (`@@`) and per-key metadata (`@key`) entirely.
+- Avoid side effects like re-sorting keys unless explicitly requested, to minimize diffs and preserve user formatting.
+- For high-performance I/O operations (like file indexing), always use a bounded worker pool (`runConcurrent`) and batch database operations within a single transaction (`batchUpsertDartFiles`) to prevent WAL commit bottlenecks.
+- **better-sqlite3 ABI rebuild**: When NODE_MODULE_VERSION mismatch occurs, you MUST stop `npm run watch` first (it locks the `.node` file with EBUSY). Only after stopping the watcher can you run `npm rebuild better-sqlite3` successfully. If node-gyp fails, use `npx @mapbox/node-pre-gyp install --fallback-to-build` as a fallback.
+- **flutter-explorer-mcp project path**: Always call `flutter_set_project_path` with the target Flutter project path (e.g. `E:\New folder\sad\sadara`) before any tool calls — the MCP server defaults to the wrong path (Antigravity app dir).
