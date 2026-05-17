@@ -1,5 +1,13 @@
 # Error Log & Fixes
 
+## [2026-05-17] RESOLVED: better-sqlite3 ABI Mismatch & Hardcoded Electron Version
+- **Problem**: `better-sqlite3` native module rebuilding was hardcoded to `-v 39.2.3` in `package.json`. When VS Code updates its internal Electron/Node version (e.g. NODE_MODULE_VERSION 140), the rebuild script fails to match the new ABI, requiring manual version updates.
+- **Solution**:
+    1. Added `"electron": "32.2.6"` to `devDependencies` in `package.json` so `@electron/rebuild` automatically detects the correct target version matching VS Code.
+    2. Updated `"rebuild"` script to `"electron-rebuild -f -w better-sqlite3"`.
+    3. Added `"postinstall": "npm run rebuild"` to automatically rebuild native modules on every `npm install`.
+- **Lessons**: Never hardcode Electron versions in rebuild scripts. Provide the matching `electron` package in `devDependencies` and use `postinstall` to automate ABI matching.
+
 ## [2026-05-17] RESOLVED: MCP stdio Protocol Corruption
 - **Problem**: `flutter-explorer-mcp` tools failed with `invalid character 'F' looking for beginning of value`.
 - **Cause**: The MCP server initialization code called `console.error("Flutter Explorer MCP Server running on stdio");` and `sqliteCache` called `console.log("[FlutterExplorer] ...")`. Some MCP clients (or environments) merge `stdout` and `stderr` or get corrupted when any non-JSON string is printed to `stdout`.

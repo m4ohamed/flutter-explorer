@@ -118,7 +118,8 @@
         "watch": "node esbuild.js --watch",
         "lint": "eslint src --ext ts",
         "build": "node esbuild.js",
-        "rebuild": "node .\\node_modules\\@electron\\rebuild\\lib\\cli.js -v 39.2.3 -w better-sqlite3",
+        "rebuild": "electron-rebuild -f -w better-sqlite3",
+        "postinstall": "npm run rebuild",
         "analyze-dart": "dart tools/dart_analyzer.dart ."
     },
     "devDependencies": {
@@ -128,6 +129,7 @@
         "@types/node": "^20.11.0",
         "@types/vscode": "^1.85.0",
         "@vscode/vsce": "^2.22.0",
+        "electron": "32.2.6",
         "esbuild": "^0.28.0",
         "typescript": "^5.3.0"
     },
