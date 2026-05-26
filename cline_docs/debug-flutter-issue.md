@@ -1,7 +1,6 @@
----
-name: Debug Flutter Issue
-description: Systematically debug Flutter issues using diagnostics, logs, and logic analysis
----
+# Debug Flutter Issue
+
+*Description: Systematically debug Flutter issues using diagnostics, logs, and logic analysis*
 
 ## Debug Flutter Issue
 

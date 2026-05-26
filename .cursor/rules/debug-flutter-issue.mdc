@@ -1,7 +1,9 @@
 ---
-name: Debug Flutter Issue
 description: Systematically debug Flutter issues using diagnostics, logs, and logic analysis
+globs: *.dart, *.kt, *.java, *.ts, *.tsx, *.js, *.jsx
 ---
+
+# Debug Flutter Issue
 
 ## Debug Flutter Issue
 

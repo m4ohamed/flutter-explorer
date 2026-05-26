@@ -1,7 +1,9 @@
 ---
-name: Explore Flutter Project
 description: Navigate and understand Flutter codebase structure, widget trees, and dependencies
+globs: *.dart, *.kt, *.java, *.ts, *.tsx, *.js, *.jsx
 ---
+
+# Explore Flutter Project
 
 ## Explore Flutter Project
 

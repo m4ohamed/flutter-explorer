@@ -1,7 +1,6 @@
----
-name: Explore Flutter Project
-description: Navigate and understand Flutter codebase structure, widget trees, and dependencies
----
+# Explore Flutter Project
+
+*Description: Navigate and understand Flutter codebase structure, widget trees, and dependencies*
 
 ## Explore Flutter Project
 

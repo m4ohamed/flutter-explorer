@@ -1,7 +1,9 @@
 ---
-name: Impact Analysis
 description: Analyze the blast radius of changes to prevent regressions in Flutter apps
+globs: *.dart, *.kt, *.java, *.ts, *.tsx, *.js, *.jsx
 ---
+
+# Impact Analysis
 
 ## Impact Analysis
 
