@@ -73,13 +73,13 @@ export class FileWatcher implements vscode.Disposable {
         }, this.debounceMs);
         this.debounceTimers.set(key, timer);
     }
-    private handleDelete(uri: vscode.Uri): void {
+    private async handleDelete(uri: vscode.Uri): Promise<void> {
         if (this.shouldExclude(uri)) return;
         const key = uri.fsPath;
         const existing = this.debounceTimers.get(key);
         if (existing) { clearTimeout(existing); }
         this.debounceTimers.delete(key);
-        this.indexManager.removeFile(uri);
+        await this.indexManager.removeFile(uri);
     }
     /** Update debounce delay */
     setDebounceMs(ms: number): void {

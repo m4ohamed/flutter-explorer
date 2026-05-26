@@ -389,13 +389,13 @@ export class IndexManager {
   }
 
   /** Remove a file from the index */
-  removeFile(uri: vscode.Uri): void {
+  async removeFile(uri: vscode.Uri): Promise<void> {
     const relPath = this.relativePath(uri.fsPath);
     this.index.delete(relPath);
     this.arbIndex.delete(relPath);
 
-    this.sqliteCache.deleteDartFile(relPath);
-    this.sqliteCache.deleteArbFile(relPath);
+    await this.sqliteCache.deleteDartFile(relPath);
+    await this.sqliteCache.deleteArbFile(relPath);
 
     this._removeBM25ForFile(relPath);
 
