@@ -51,6 +51,10 @@ export class FileWatcher implements vscode.Disposable {
             this.watchers.push(packageJsonWatcher);
         }
     }
+    private static readonly EXCLUDED_DIRS = /[\/\\](node_modules|out|dist|build|\.git|\.next)[\/\\]/;
+    private shouldExclude(uri: vscode.Uri): boolean {
+        return FileWatcher.EXCLUDED_DIRS.test(uri.fsPath);
+    }
     private setupWatcher(watcher: vscode.FileSystemWatcher): void {
         this.disposables.push(
             watcher.onDidChange(uri => this.debouncedUpdate(uri)),
@@ -59,6 +63,7 @@ export class FileWatcher implements vscode.Disposable {
         );
     }
     private debouncedUpdate(uri: vscode.Uri): void {
+        if (this.shouldExclude(uri)) return;
         const key = uri.fsPath;
         const existing = this.debounceTimers.get(key);
         if (existing) { clearTimeout(existing); }
@@ -69,6 +74,7 @@ export class FileWatcher implements vscode.Disposable {
         this.debounceTimers.set(key, timer);
     }
     private handleDelete(uri: vscode.Uri): void {
+        if (this.shouldExclude(uri)) return;
         const key = uri.fsPath;
         const existing = this.debounceTimers.get(key);
         if (existing) { clearTimeout(existing); }

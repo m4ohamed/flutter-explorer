@@ -22,7 +22,12 @@ export class WidgetTreeProvider {
             return null;
         }
         const fileName = editor.document.fileName;
-        const isSupported = fileName.endsWith('.dart') || fileName.endsWith('.ts') || fileName.endsWith('.tsx') || fileName.endsWith('.js') || fileName.endsWith('.jsx');
+        const isSupported = fileName.endsWith('.dart') ||
+                            fileName.endsWith('.ts') || fileName.endsWith('.tsx') ||
+                            fileName.endsWith('.js') || fileName.endsWith('.jsx') ||
+                            fileName.endsWith('.kt') || fileName.endsWith('.java') ||
+                            fileName.endsWith('.xml') || fileName.endsWith('.gradle') ||
+                            fileName.endsWith('.gradle.kts');
         if (!isSupported) {
             return null;
         }
@@ -60,7 +65,12 @@ export class WidgetTreeProvider {
             return { fileName: null, tree: [], classNames: [] };
         }
         const filePath = editor.document.fileName;
-        const isSupported = filePath.endsWith('.dart') || filePath.endsWith('.ts') || filePath.endsWith('.tsx') || filePath.endsWith('.js') || filePath.endsWith('.jsx');
+        const isSupported = filePath.endsWith('.dart') ||
+                            filePath.endsWith('.ts') || filePath.endsWith('.tsx') ||
+                            filePath.endsWith('.js') || filePath.endsWith('.jsx') ||
+                            filePath.endsWith('.kt') || filePath.endsWith('.java') ||
+                            filePath.endsWith('.xml') || filePath.endsWith('.gradle') ||
+                            filePath.endsWith('.gradle.kts');
         if (!isSupported) {
             return { fileName: null, tree: [], classNames: [] };
         }

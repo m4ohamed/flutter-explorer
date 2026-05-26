@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { DartParser, DartFileInfo } from './dartParser';
 import { JsTsParser } from './jsTsParser';
+import { AndroidParser } from './androidParser';
 import { analyzeWithDart } from './dartAnalyzerWrapper';
 
 import { PackageIndexer } from './packageIndexer';
@@ -43,6 +44,7 @@ export class IndexManager {
   private packages: PackageInfo[] = [];
   private parser: DartParser = new DartParser();
   private jsTsParser: JsTsParser = new JsTsParser();
+  private androidParser: AndroidParser = new AndroidParser();
   private workspaceRoot: string;
   private onIndexChanged: vscode.EventEmitter<void> = new vscode.EventEmitter<void>();
   public readonly onDidChangeIndex: vscode.Event<void> = this.onIndexChanged.event;
@@ -169,7 +171,7 @@ export class IndexManager {
         if (token.isCancellationRequested) return;
         allFiles = [...dartFiles, ...androidFiles, ...arbFiles];
       } else {
-        const excludePattern = '**/node_modules/**,**/out/**,**/dist/**,**/build/**,**/.git/**,**/.next/**';
+        const excludePattern = '**/{node_modules,out,dist,build,.git,.next}/**';
         allFiles = await vscode.workspace.findFiles('**/*.{ts,tsx,js,jsx}', excludePattern, 10000, token);
       }
 
@@ -216,7 +218,7 @@ export class IndexManager {
               const fullPath = path.join(this.workspaceRoot, info.filePath);
               const content = await fs.promises.readFile(fullPath, 'utf8');
               info.contentHash = this.computeHash(content);
-              
+
               // Extract warnings (hardcoded text and colors) using custom parser rules
               const parsedInfo = this.parser.parse(info.filePath, content);
               info.warnings = parsedInfo.warnings;
@@ -280,8 +282,12 @@ export class IndexManager {
             const translations = this.parseArb(content);
             this.arbIndex.set(relPath, translations);
             await this.sqliteCache.upsertArbFile(relPath, translations);
-          } else if (uri.fsPath.endsWith('.kt') || uri.fsPath.endsWith('.java') || uri.fsPath.endsWith('.xml') || uri.fsPath.endsWith('.gradle')) {
-            // Basic indexing for android files if needed
+          } else if (uri.fsPath.endsWith('.kt') || uri.fsPath.endsWith('.java') || uri.fsPath.endsWith('.xml') || uri.fsPath.endsWith('.gradle') || uri.fsPath.endsWith('.gradle.kts')) {
+            const content = await this.readFile(uri);
+            const info = this.androidParser.parse(relPath, content);
+            info.contentHash = this.computeHash(content);
+            this.index.set(relPath, info);
+            dartFilesToUpsert.push({ relPath, hash: info.contentHash, info });
           }
         } catch {
           // skip unreadable files
@@ -349,6 +355,17 @@ export class IndexManager {
         if (cached && cached.hash === newHash) return;
 
         const info = this.jsTsParser.parse(relPath, content);
+        info.contentHash = newHash;
+        this.index.set(relPath, info);
+
+        await this.sqliteCache.upsertDartFile(relPath, newHash, info);
+        this._upsertBM25ForFile(relPath, info);
+
+      } else if (uri.fsPath.endsWith('.kt') || uri.fsPath.endsWith('.java') || uri.fsPath.endsWith('.xml') || uri.fsPath.endsWith('.gradle') || uri.fsPath.endsWith('.gradle.kts')) {
+        const cached = await this.sqliteCache.getDartFile(relPath);
+        if (cached && cached.hash === newHash) return;
+
+        const info = this.androidParser.parse(relPath, content);
         info.contentHash = newHash;
         this.index.set(relPath, info);
 
@@ -933,6 +950,9 @@ export class IndexManager {
   parseWidgetTreeForContent(filePath: string, content: string): DartFileInfo {
     if (filePath.endsWith('.ts') || filePath.endsWith('.tsx') || filePath.endsWith('.js') || filePath.endsWith('.jsx')) {
       return this.jsTsParser.parse(filePath, content);
+    }
+    if (filePath.endsWith('.kt') || filePath.endsWith('.java') || filePath.endsWith('.xml') || filePath.endsWith('.gradle') || filePath.endsWith('.gradle.kts')) {
+      return this.androidParser.parse(filePath, content);
     }
     return this.parser.parse(filePath, content);
   }

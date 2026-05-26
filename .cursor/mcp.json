@@ -3,7 +3,7 @@
     "flutter-explorer-mcp": {
       "command": "node",
       "args": [
-        "c:/Users/m4oha/.antigravity/extensions/flutter-explorer.flutter-explorer-0.1.0/out/mcp-server.js"
+        "c:/Users/m4oha/.antigravity-ide/extensions/flutter-explorer.flutter-explorer-0.1.0/out/mcp-server.js"
       ]
     }
   }

@@ -154,7 +154,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(
         vscode.workspace.onDidChangeTextDocument(async (e) => {
             if (e.document === vscode.window.activeTextEditor?.document &&
-                (e.document.fileName.endsWith('.dart') || e.document.fileName.endsWith('.ts') || e.document.fileName.endsWith('.tsx') || e.document.fileName.endsWith('.js') || e.document.fileName.endsWith('.jsx'))) {
+                (e.document.fileName.match(/\.(dart|ts|tsx|js|jsx|kt|java|xml|gradle)$/))) {
                 sidebarProvider.postMessage({
                     command: 'widgetTree',
                     data: await widgetTreeProvider.getTreeDataForWebview(),
@@ -169,9 +169,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const allDiagnostics = vscode.languages.getDiagnostics();
 
         for (const [uri, diags] of allDiagnostics) {
-            // Only care about project files (lib/)
-            const relPath = indexManager.relativePath(uri.fsPath);
-            if (!relPath.startsWith('lib/') && !relPath.startsWith('test/')) continue;
+            // Care about Dart (lib/, test/), Android (android/), and JS/TS (src/, app/)
+            const relPath = indexManager.relativePath(uri.fsPath).replace(/\\/g, '/');
+            if (!relPath.startsWith('lib/') && !relPath.startsWith('test/') && !relPath.startsWith('android/') && !relPath.startsWith('src/') && !relPath.startsWith('app/')) continue;
 
             for (const d of diags) {
                 diagnostics.push({

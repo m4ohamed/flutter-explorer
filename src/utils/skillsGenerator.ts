@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 
 interface SkillDef {
     name: string;
@@ -21,7 +22,7 @@ Use the flutter-explorer-mcp tools to explore and understand the codebase.
 2. Run \`flutter_get_project_structure\` to explore the directory layout and key files.
 3. Use \`flutter_get_detailed_graph\` to visualize inheritance, calls, and imports.
 4. Use \`flutter_search\` to find specific widgets, classes, or functions by name.
-5. Use \`flutter_get_file_info\` for a deep dive into a specific Dart file.
+5. Use \`flutter_get_file_info\` for a deep dive into a specific file.
 
 ### Tips
 
@@ -97,19 +98,31 @@ Efficiently manage Flutter localization (ARB files) and ensure all keys are tran
 
 export async function generateSkills(workspaceRoot: string): Promise<void> {
     try {
-        const skillsDir = path.join(workspaceRoot, 'skills');
-        if (!fs.existsSync(skillsDir)) {
-            fs.mkdirSync(skillsDir, { recursive: true });
-        }
+        const username = os.userInfo().username;
+        const homedir = os.homedir();
+        
+        // 1. Generic workspace fallback (skills/ folder)
+        const genericSkillsDir = path.join(workspaceRoot, 'skills');
+        ensureDir(genericSkillsDir);
+
+        // 2. Cursor AI (.cursor/rules/)
+        const cursorRulesDir = path.join(workspaceRoot, '.cursor', 'rules');
+        ensureDir(cursorRulesDir);
+
+        // 3. Claude/Roo (cline_docs/)
+        const clineDocsDir = path.join(workspaceRoot, 'cline_docs');
+        ensureDir(clineDocsDir);
+
+        // 4. Antigravity Global Config (~/.gemini/config/plugins/flutter-explorer-plugin/skills/)
+        // We will put it in ~/.gemini/config/skills/ to be universally available
+        const antigravitySkillsDir = path.join(homedir, '.gemini', 'config', 'skills');
+        ensureDir(antigravitySkillsDir);
 
         for (const [id, skill] of Object.entries(SKILLS)) {
-            const skillSubdir = path.join(skillsDir, id);
-            if (!fs.existsSync(skillSubdir)) {
-                fs.mkdirSync(skillSubdir, { recursive: true });
-            }
-
-            const skillFilePath = path.join(skillSubdir, 'SKILL.md');
-            const content = [
+            // --- A. Generate for Generic/Workspace (Standard Markdown) ---
+            const genericSkillSubdir = path.join(genericSkillsDir, id);
+            ensureDir(genericSkillSubdir);
+            const standardContent = [
                 '---',
                 `name: ${skill.name}`,
                 `description: ${skill.description}`,
@@ -117,12 +130,45 @@ export async function generateSkills(workspaceRoot: string): Promise<void> {
                 '',
                 skill.body
             ].join('\n');
+            fs.writeFileSync(path.join(genericSkillSubdir, 'SKILL.md'), standardContent, 'utf8');
 
-            fs.writeFileSync(skillFilePath, content, 'utf8');
+            // --- B. Generate for Cursor (.mdc format) ---
+            const cursorContent = [
+                '---',
+                `description: ${skill.description}`,
+                'globs: *.dart, *.kt, *.java, *.ts, *.tsx, *.js, *.jsx',
+                '---',
+                '',
+                `# ${skill.name}`,
+                '',
+                skill.body
+            ].join('\n');
+            fs.writeFileSync(path.join(cursorRulesDir, `${id}.mdc`), cursorContent, 'utf8');
+
+            // --- C. Generate for Claude/Roo (cline_docs folder) ---
+            const clineContent = [
+                `# ${skill.name}`,
+                '',
+                `*Description: ${skill.description}*`,
+                '',
+                skill.body
+            ].join('\n');
+            fs.writeFileSync(path.join(clineDocsDir, `${id}.md`), clineContent, 'utf8');
+
+            // --- D. Generate for Antigravity (Global SKILL.md) ---
+            const agSkillSubdir = path.join(antigravitySkillsDir, `flutter-explorer-${id}`);
+            ensureDir(agSkillSubdir);
+            fs.writeFileSync(path.join(agSkillSubdir, 'SKILL.md'), standardContent, 'utf8');
         }
 
-        console.log('Skills generated successfully in:', skillsDir);
+        console.log('AI Skills distributed successfully to Gemini, Cursor, and Roo/Claude!');
     } catch (error) {
-        console.error('Error generating skills:', error);
+        console.error('Error generating AI skills:', error);
+    }
+}
+
+function ensureDir(dirPath: string) {
+    if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
     }
 }
