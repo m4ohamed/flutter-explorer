@@ -8,6 +8,8 @@ import { DirectSearch } from './mcp-direct-search.js';
 import { ArbEditor } from './mcp-arb-editor.js';
 import { CodeAnalyzer } from './mcp-code-analyzer.js';
 import { DartParser, DartFileInfo, ClassInfo, FunctionInfo } from './indexer/dartParser.js';
+import { JsTsParser } from './indexer/jsTsParser.js';
+import { AndroidParser } from './indexer/androidParser.js';
 import { BM25Search, BM25Document } from './indexer/bm25Search.js';
 import { spawn } from 'child_process';
 
@@ -86,6 +88,17 @@ function readJsonFallback(): any | null {
     console.error('[MCP] Error reading JSON fallback:', error);
     return null;
   }
+}
+
+function getParserForFile(filePath: string) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
+    return new JsTsParser() as any;
+  }
+  if (['.kt', '.java'].includes(ext)) {
+    return new AndroidParser() as any;
+  }
+  return new DartParser();
 }
 
 const server = new McpServer({
@@ -357,7 +370,18 @@ function resolveImportPath(importPath: string, fromFile: string, index?: any): s
     return importPath;
   }
   const dir = path.dirname(fromFile);
-  return path.posix.normalize(path.posix.join(dir.replace(/\\/g, '/'), importPath));
+  const resolved = path.posix.normalize(path.posix.join(dir.replace(/\\/g, '/'), importPath));
+
+  if (index && index.dart) {
+    if (index.dart[resolved]) return resolved;
+    const exts = ['.ts', '.tsx', '.js', '.jsx', '.dart', '.kt', '.java'];
+    for (const ext of exts) {
+      if (index.dart[resolved + ext]) return resolved + ext;
+      if (index.dart[resolved + '/index' + ext]) return resolved + '/index' + ext;
+    }
+  }
+
+  return resolved;
 }
 
 /**
@@ -1251,7 +1275,6 @@ server.registerTool(
     const index = await readIndex();
     if (!index || !index.dart) return { content: [{ type: "text", text: "Index not found." }] };
 
-    const parser = new DartParser();
     let targetFile = filePath;
 
     if (!targetFile) {
@@ -1281,6 +1304,7 @@ server.registerTool(
     }
 
     const existingParsed = index.dart[targetFile] as DartFileInfo | undefined;
+    const parser = getParserForFile(targetFile);
     const result = parser.extractCodeBlock(targetContent, elementType, name, parentClass, existingParsed);
 
     if (!result) return { content: [{ type: "text" as const, text: `Could not extract code block for ${elementType} ${name}` }] };
@@ -1307,8 +1331,6 @@ server.registerTool(
   async ({ functionName, filePath, parentClass }: { functionName: string; filePath?: string; parentClass?: string }) => {
     const index = await readIndex();
     if (!index || !index.dart) return { content: [{ type: "text", text: "Index not found." }] };
-
-    const parser = new DartParser();
     const analyzer = new CodeAnalyzer(currentProjectPath);
     let targetFile = filePath;
 
@@ -1334,6 +1356,7 @@ server.registerTool(
 
     const elementType = parentClass ? 'method' : 'function';
     const existingParsed = index.dart[targetFile] as DartFileInfo | undefined;
+    const parser = getParserForFile(targetFile);
     const result = parser.extractCodeBlock(targetContent, elementType, functionName, parentClass, existingParsed);
 
     if (!result) return { content: [{ type: "text" as const, text: `Could not extract function body for ${functionName}` }] };
@@ -1366,8 +1389,6 @@ server.registerTool(
   async ({ className, filePath }: { className: string; filePath?: string }) => {
     const index = await readIndex();
     if (!index || !index.dart) return await handleIndexError();
-
-    const parser = new DartParser();
     const analyzer = new CodeAnalyzer(currentProjectPath);
     let targetFile = filePath;
 
@@ -1389,6 +1410,7 @@ server.registerTool(
     }
 
     const existingParsed = index.dart[targetFile] as DartFileInfo | undefined;
+    const parser = getParserForFile(targetFile);
     const result = parser.extractCodeBlock(targetContent, 'class', className, undefined, existingParsed);
     if (!result) return { content: [{ type: "text" as const, text: `Could not extract class body for ${className}` }] };
 
@@ -1496,7 +1518,6 @@ server.registerTool(
     const index = await readIndex();
     if (!index || !index.dart) return { content: [{ type: "text", text: "Index not found." }] };
 
-    const parser = new DartParser();
     let targetFile = filePath;
     let detectedType = elementType;
 
@@ -1530,6 +1551,7 @@ server.registerTool(
     }
 
     const existingParsed = index.dart[targetFile] as DartFileInfo | undefined;
+    const parser = getParserForFile(targetFile);
     const result = parser.extractCodeBlock(targetContent, detectedType || 'function', name, parentClass, existingParsed);
 
     if (!result) return { content: [{ type: "text" as const, text: `Could not extract code block for ${name}` }] };

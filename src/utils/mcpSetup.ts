@@ -12,27 +12,41 @@ export async function setupMcpConfig(extensionPath: string, workspaceRoot: strin
         const username = os.userInfo().username;
         const mcpServerPath = path.join(extensionPath, 'out', 'mcp-server.js').replace(/\\/g, '/');
         
-        const mcpEntry = {
+        const mcpEntryDynamic = {
             command: "node",
-            args: [mcpServerPath]
+            args: [mcpServerPath],
+            env: {
+                FLUTTER_PROJECT_PATH: "${workspaceFolder}"
+            }
         };
 
-        // 1. Target: Global Gemini Config
-        const geminiConfigPath = `C:/Users/${username}/.gemini/antigravity/mcp_config.json`;
-        await updateJsonFile(geminiConfigPath, "flutter-explorer-mcp", mcpEntry, false);
+        const mcpEntryStatic = {
+            command: "node",
+            args: [mcpServerPath],
+            env: {
+                FLUTTER_PROJECT_PATH: workspaceRoot
+            }
+        };
+
+        // 1. Target: Global Gemini Configs
+        const geminiConfigPath1 = `C:/Users/${username}/.gemini/config/mcp_config.json`;
+        const geminiConfigPath2 = `C:/Users/${username}/.gemini/antigravity/mcp_config.json`;
+        await updateJsonFile(geminiConfigPath1, "flutter-explorer-mcp", mcpEntryDynamic, false);
+        await updateJsonFile(geminiConfigPath2, "flutter-explorer-mcp", mcpEntryDynamic, false);
 
         // 2. Target: Workspace .vscode/mcp.json (Uses 'servers' to satisfy VS Code validation)
         const vscodeMcpPath = path.join(workspaceRoot, '.vscode', 'mcp.json');
-        await updateJsonFile(vscodeMcpPath, "flutter-explorer-mcp", mcpEntry, true);
+        await updateJsonFile(vscodeMcpPath, "flutter-explorer-mcp", mcpEntryDynamic, true);
 
         // 3. Target: Workspace .cursor/mcp.json
         const cursorMcpPath = path.join(workspaceRoot, '.cursor', 'mcp.json');
-        await updateJsonFile(cursorMcpPath, "flutter-explorer-mcp", mcpEntry, false);
+        await updateJsonFile(cursorMcpPath, "flutter-explorer-mcp", mcpEntryDynamic, false);
 
         // 4. Target: Claude Desktop Global Config
         const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
         const claudeConfigPath = path.join(appData, 'Claude', 'claude_desktop_config.json').replace(/\\/g, '/');
-        await updateJsonFile(claudeConfigPath, "flutter-explorer-mcp", mcpEntry, false);
+        // Claude Desktop doesn't support ${workspaceFolder}, so we use the static workspaceRoot
+        await updateJsonFile(claudeConfigPath, "flutter-explorer-mcp", mcpEntryStatic, false);
 
         vscode.window.showInformationMessage(`MCP Configured for user: ${username} (Gemini, Claude, Cursor, VS Code) 🚀`);
     } catch (error) {
