@@ -10,7 +10,7 @@ import { DartFileInfo } from './dartParser';
 export async function analyzeWithDart(
     projectPath: string, 
     extensionPath?: string,
-    onProgress?: (current: number) => void
+    onProgress?: (message: string, current?: number, total?: number) => void
 ): Promise<DartFileInfo[] | null> {
     try {
         const hasDart = await checkDartSdk();
@@ -54,14 +54,43 @@ export async function analyzeWithDart(
                 stdoutData += data.toString();
             });
 
+            let totalFiles: number | undefined = undefined;
+            let currentFileCount = 0;
             child.stderr.on('data', (data) => {
                 const message = data.toString();
                 stderrData += message;
 
-                // Check for progress messages
-                const progressMatch = message.match(/PROGRESS:(\d+)/);
-                if (progressMatch && onProgress) {
-                    onProgress(parseInt(progressMatch[1], 10));
+                const lines = message.split(/\r?\n/);
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+
+                    if (line.startsWith('START_ANALYSIS:')) {
+                        if (onProgress) {
+                            onProgress(line.substring('START_ANALYSIS:'.length));
+                        }
+                    } else if (line.startsWith('TOTAL:')) {
+                        const totalMatch = line.match(/TOTAL:(\d+)/);
+                        if (totalMatch) {
+                            totalFiles = parseInt(totalMatch[1], 10);
+                        }
+                    } else if (line.startsWith('ANALYZING:')) {
+                        const fileName = line.substring('ANALYZING:'.length).trim();
+                        if (onProgress) {
+                            const remaining = totalFiles !== undefined ? totalFiles - currentFileCount : '?';
+                            const totalStr = totalFiles !== undefined ? totalFiles : '?';
+                            onProgress(`Analyzing Dart SDK: [${fileName}] (${currentFileCount}/${totalStr} done, ${remaining} remaining)...`);
+                        }
+                    } else if (line.startsWith('PROGRESS:')) {
+                        const progressMatch = line.match(/PROGRESS:(\d+)/);
+                        if (progressMatch) {
+                            currentFileCount = parseInt(progressMatch[1], 10);
+                            if (onProgress) {
+                                const remaining = totalFiles !== undefined ? totalFiles - currentFileCount : '?';
+                                const totalStr = totalFiles !== undefined ? totalFiles : '?';
+                                onProgress(`Completed Dart SDK analysis (${currentFileCount}/${totalStr} done, ${remaining} remaining)...`, currentFileCount, totalFiles);
+                            }
+                        }
+                    }
                 }
             });
 

@@ -17,26 +17,39 @@ export class FileWatcher implements vscode.Disposable {
     }
     /** Start watching for file changes */
     start(): void {
-        // Watch Dart files in lib/
-        const dartWatcher = vscode.workspace.createFileSystemWatcher('**/lib/**/*.dart');
-        this.setupWatcher(dartWatcher);
-        this.watchers.push(dartWatcher);
-        // Watch android/app/ files
-        const config = vscode.workspace.getConfiguration('flutterExplorer');
-        if (config.get<boolean>('watchAndroidApp', true)) {
-            const androidWatcher = vscode.workspace.createFileSystemWatcher('**/android/app/**/*.{dart,kt,java,xml,gradle}');
-            this.setupWatcher(androidWatcher);
-            this.watchers.push(androidWatcher);
+        const mode = this.indexManager.getProjectMode();
+        if (mode === 'flutter') {
+            // Watch Dart files in lib/
+            const dartWatcher = vscode.workspace.createFileSystemWatcher('**/lib/**/*.dart');
+            this.setupWatcher(dartWatcher);
+            this.watchers.push(dartWatcher);
+            // Watch android/app/ files
+            const config = vscode.workspace.getConfiguration('flutterExplorer');
+            if (config.get<boolean>('watchAndroidApp', true)) {
+                const androidWatcher = vscode.workspace.createFileSystemWatcher('**/android/app/**/*.{dart,kt,java,xml,gradle}');
+                this.setupWatcher(androidWatcher);
+                this.watchers.push(androidWatcher);
+            }
+            // Watch ARB files
+            const arbWatcher = vscode.workspace.createFileSystemWatcher('**/lib/**/*.arb');
+            this.setupWatcher(arbWatcher);
+            this.watchers.push(arbWatcher);
+            // Watch pubspec.yaml
+            const pubspecWatcher = vscode.workspace.createFileSystemWatcher('**/pubspec.yaml');
+            pubspecWatcher.onDidChange(() => this.indexManager['onIndexChanged'].fire());
+            pubspecWatcher.onDidCreate(() => this.indexManager['onIndexChanged'].fire());
+            this.watchers.push(pubspecWatcher);
+        } else {
+            // Watch TS/JS files
+            const jsTsWatcher = vscode.workspace.createFileSystemWatcher('**/*.{ts,tsx,js,jsx}');
+            this.setupWatcher(jsTsWatcher);
+            this.watchers.push(jsTsWatcher);
+            // Watch package.json
+            const packageJsonWatcher = vscode.workspace.createFileSystemWatcher('**/package.json');
+            packageJsonWatcher.onDidChange(() => this.indexManager['onIndexChanged'].fire());
+            packageJsonWatcher.onDidCreate(() => this.indexManager['onIndexChanged'].fire());
+            this.watchers.push(packageJsonWatcher);
         }
-        // Watch ARB files
-        const arbWatcher = vscode.workspace.createFileSystemWatcher('**/lib/**/*.arb');
-        this.setupWatcher(arbWatcher);
-        this.watchers.push(arbWatcher);
-        // Watch pubspec.yaml
-        const pubspecWatcher = vscode.workspace.createFileSystemWatcher('**/pubspec.yaml');
-        pubspecWatcher.onDidChange(() => this.indexManager['onIndexChanged'].fire());
-        pubspecWatcher.onDidCreate(() => this.indexManager['onIndexChanged'].fire());
-        this.watchers.push(pubspecWatcher);
     }
     private setupWatcher(watcher: vscode.FileSystemWatcher): void {
         this.disposables.push(

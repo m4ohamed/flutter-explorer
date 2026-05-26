@@ -16,7 +16,7 @@ async function main() {
         sourcesContent: false,
         platform: 'node',
         outdir: 'out',
-        external: ['vscode', 'better-sqlite3'],
+        external: ['vscode', 'sqlite3'],
         logLevel: 'info',
         target: 'es2020',
     };

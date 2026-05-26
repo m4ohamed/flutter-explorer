@@ -28,7 +28,8 @@
         "dependency"
     ],
     "activationEvents": [
-        "workspaceContains:**/pubspec.yaml"
+        "workspaceContains:**/pubspec.yaml",
+        "workspaceContains:**/package.json"
     ],
     "main": "./out/extension.js",
     "contributes": {
@@ -106,8 +107,13 @@
                 },
                 "flutterExplorer.indexingConcurrency": {
                     "type": "number",
-                    "default": 3,
-                    "description": "Number of files to analyze concurrently during indexing (default: 3)"
+                    "default": 2,
+                    "description": "Number of files to analyze concurrently during indexing (default: 1)"
+                },
+                "flutterExplorer.enableJsonIndex": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable legacy JSON index cache (bypasses SQLite writes to test performance)"
                 }
             }
         }
@@ -118,15 +124,12 @@
         "watch": "node esbuild.js --watch",
         "lint": "eslint src --ext ts",
         "build": "node esbuild.js",
-        "rebuild": "electron-rebuild -f -w better-sqlite3",
-        "postinstall": "npm run rebuild",
         "analyze-dart": "dart tools/dart_analyzer.dart ."
     },
     "devDependencies": {
-        "@electron/rebuild": "^4.0.4",
-        "@types/better-sqlite3": "^7.6.13",
         "@types/d3": "^7.4.3",
         "@types/node": "^20.11.0",
+        "@types/sqlite3": "^3.1.3",
         "@types/vscode": "^1.85.0",
         "@vscode/vsce": "^2.22.0",
         "electron": "32.2.6",
@@ -135,8 +138,8 @@
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.29.0",
-        "better-sqlite3": "^12.10.0",
         "d3": "^7.9.0",
+        "sqlite3": "^5.1.7",
         "zod": "^4.4.3"
     }
 }

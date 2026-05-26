@@ -20,6 +20,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         private depGraphProvider: DependencyGraphProvider,
         private pubspecProvider: PubspecProvider,
         private workspaceRoot: string,
+        private isDev: boolean = false,
     ) { }
     resolveWebviewView(
         webviewView: vscode.WebviewView,
@@ -107,7 +108,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         let jsContent = '';
         const outMediaPath = path.join(this.extensionUri.fsPath, 'out', 'media');
         const srcMediaPath = path.join(this.extensionUri.fsPath, 'src', 'webview', 'media');
-        const mediaPath = fs.existsSync(outMediaPath) ? outMediaPath : srcMediaPath;
+        const mediaPath = this.isDev ? srcMediaPath : (fs.existsSync(outMediaPath) ? outMediaPath : srcMediaPath);
         try {
             cssContent = fs.readFileSync(path.join(mediaPath, 'sidebar.css'), 'utf-8');
         } catch { cssContent = ''; }
@@ -187,6 +188,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     </div>
     <!-- Analysis Tab -->
     <div class="tab-content" id="tab-analysis">
+      <div class="pubspec-header">
+        <span>Code Analysis</span>
+        <button class="icon-btn" id="refreshAnalysis" title="Refresh">⟳</button>
+      </div>
       <div class="pubspec-content" id="analysisContent"></div>
     </div>
     <!-- Libraries Tab -->

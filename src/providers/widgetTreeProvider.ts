@@ -18,7 +18,12 @@ export class WidgetTreeProvider {
     /** Get widget tree for current active editor */
     getTreeForActiveEditor(): WidgetTreeNode[] | null {
         const editor = vscode.window.activeTextEditor;
-        if (!editor || !editor.document.fileName.endsWith('.dart')) {
+        if (!editor) {
+            return null;
+        }
+        const fileName = editor.document.fileName;
+        const isSupported = fileName.endsWith('.dart') || fileName.endsWith('.ts') || fileName.endsWith('.tsx') || fileName.endsWith('.js') || fileName.endsWith('.jsx');
+        if (!isSupported) {
             return null;
         }
         const content = editor.document.getText();
@@ -51,11 +56,15 @@ export class WidgetTreeProvider {
     /** Serialize tree for webview */
     async getTreeDataForWebview(): Promise<WebviewTreeData> {
         const editor = vscode.window.activeTextEditor;
-        if (!editor || !editor.document.fileName.endsWith('.dart')) {
+        if (!editor) {
+            return { fileName: null, tree: [], classNames: [] };
+        }
+        const filePath = editor.document.fileName;
+        const isSupported = filePath.endsWith('.dart') || filePath.endsWith('.ts') || filePath.endsWith('.tsx') || filePath.endsWith('.js') || filePath.endsWith('.jsx');
+        if (!isSupported) {
             return { fileName: null, tree: [], classNames: [] };
         }
         const content = editor.document.getText();
-        const filePath = editor.document.fileName;
         
         // Ensure project name is loaded for the active file's project
         await this.indexManager.ensureProjectName(filePath);

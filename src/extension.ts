@@ -6,6 +6,7 @@
  */
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as net from 'net';
 import { IndexManager, DiagnosticInfo } from './indexer/indexManager';
 import { FileWatcher } from './indexer/fileWatcher';
 import { SearchProvider } from './providers/searchProvider';
@@ -14,16 +15,29 @@ import { DependencyGraphProvider } from './providers/dependencyGraphProvider';
 import { PubspecProvider } from './providers/pubspecProvider';
 import { SidebarProvider } from './webview/sidebarProvider';
 import { setupMcpConfig } from './utils/mcpSetup';
+
 let statusBarItem: vscode.StatusBarItem;
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    // Set default auto-select family attempt timeout to 1000ms
+    if (typeof net.setDefaultAutoSelectFamilyAttemptTimeout === 'function') {
+        net.setDefaultAutoSelectFamilyAttemptTimeout(1000);
+    }
+
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) {
         vscode.window.showWarningMessage('Flutter Explorer: No workspace folder found.');
         return;
     }
     const workspaceRoot = workspaceFolder.uri.fsPath;
+
     // ─── Initialize Components ─────────────────────────────
     const indexManager = new IndexManager(workspaceRoot, context.extensionPath);
+
+    // ✅ طريقة واحدة فقط للـ dispose — VS Code بيتكفل بها تلقائياً عند deactivate
+    context.subscriptions.push({
+        dispose: () => indexManager.dispose()
+    });
 
     const config = vscode.workspace.getConfiguration('flutterExplorer');
     const debounceMs = config.get<number>('debounceMs', 300);
@@ -32,6 +46,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const widgetTreeProvider = new WidgetTreeProvider(indexManager);
     const depGraphProvider = new DependencyGraphProvider(indexManager);
     const pubspecProvider = new PubspecProvider(workspaceRoot);
+
     // ─── Sidebar Provider ─────────────────────────────────
     const sidebarProvider = new SidebarProvider(
         context.extensionUri,
@@ -41,6 +56,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         depGraphProvider,
         pubspecProvider,
         workspaceRoot,
+        context.extensionMode === vscode.ExtensionMode.Development,
     );
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(
@@ -49,12 +65,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             { webviewOptions: { retainContextWhenHidden: true } },
         ),
     );
+
     // ─── Status Bar ────────────────────────────────────────
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
     statusBarItem.command = 'flutterExplorer.reindex';
     statusBarItem.tooltip = 'Flutter Explorer — Click to rebuild index';
     context.subscriptions.push(statusBarItem);
     updateStatusBar(indexManager);
+
     // ─── Commands ──────────────────────────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('flutterExplorer.reindex', async () => {
@@ -73,11 +91,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             );
         }),
     );
+
     context.subscriptions.push(
         vscode.commands.registerCommand('flutterExplorer.refresh', () => {
             sidebarProvider.refresh();
         }),
     );
+
     context.subscriptions.push(
         vscode.commands.registerCommand('flutterExplorer.openFile', async (file: string, line: number) => {
             try {
@@ -93,22 +113,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }
         }),
     );
+
     context.subscriptions.push(
         vscode.commands.registerCommand('flutterExplorer.setupMcp', async () => {
             await setupMcpConfig(context.extensionPath, workspaceRoot);
         }),
     );
+
     context.subscriptions.push(
         vscode.commands.registerCommand('flutterExplorer.openGraph', () => {
             const { GraphWebviewPanel } = require('./views/graphWebview');
             GraphWebviewPanel.createOrShow(context.extensionUri, indexManager);
         }),
     );
+
     // ─── Index Changed Listener ────────────────────────────
     indexManager.onDidChangeIndex(() => {
         updateStatusBar(indexManager);
         sidebarProvider.postMessage({ command: 'stats', data: indexManager.getStats() });
+        sidebarProvider.postMessage({
+            command: 'analysisData',
+            data: {
+                missingTranslations: indexManager.analyzeTranslations(),
+                warnings: indexManager.getWarnings()
+            }
+        });
     });
+
     // ─── Active Editor Change → Update Widget Tree ─────────
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(async () => {
@@ -118,11 +149,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             });
         }),
     );
+
     // Listen for text changes to update widget tree in real time
     context.subscriptions.push(
         vscode.workspace.onDidChangeTextDocument(async (e) => {
             if (e.document === vscode.window.activeTextEditor?.document &&
-                e.document.fileName.endsWith('.dart')) {
+                (e.document.fileName.endsWith('.dart') || e.document.fileName.endsWith('.ts') || e.document.fileName.endsWith('.tsx') || e.document.fileName.endsWith('.js') || e.document.fileName.endsWith('.jsx'))) {
                 sidebarProvider.postMessage({
                     command: 'widgetTree',
                     data: await widgetTreeProvider.getTreeDataForWebview(),
@@ -130,11 +162,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }
         }),
     );
+
     // ─── Diagnostics Listener ──────────────────────────────
     const updateDiagnostics = () => {
         const diagnostics: DiagnosticInfo[] = [];
         const allDiagnostics = vscode.languages.getDiagnostics();
-        
+
         for (const [uri, diags] of allDiagnostics) {
             // Only care about project files (lib/)
             const relPath = indexManager.relativePath(uri.fsPath);
@@ -155,7 +188,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     };
 
     context.subscriptions.push(vscode.languages.onDidChangeDiagnostics(updateDiagnostics));
-    
+
     // Initial diagnostics collection
     updateDiagnostics();
 
@@ -168,6 +201,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }
         }),
     );
+
     // ─── Startup: Load Cache or Build Full Index ───────────
     const cacheLoaded = await indexManager.loadCache();
     if (cacheLoaded) {
@@ -200,13 +234,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // ─── Auto MCP Setup ───────────────────────────────────
     setupMcpConfig(context.extensionPath, workspaceRoot);
+
+    // ─── Show Welcome README ──────────────────────────────
+    const extensionVersion = context.extension.packageJSON.version;
+    const lastVersionOpened = context.globalState.get<string>('lastVersionOpened');
+    if (lastVersionOpened !== extensionVersion) {
+        context.globalState.update('lastVersionOpened', extensionVersion);
+        const readmePath = path.join(context.extensionPath, 'README-FlutterExplorer.md');
+        const readmeUri = vscode.Uri.file(readmePath);
+        
+        setTimeout(() => {
+            vscode.commands.executeCommand('markdown.showPreview', readmeUri).then(
+                undefined,
+                () => {
+                    // Fallback to opening as text document if markdown preview command fails
+                    vscode.workspace.openTextDocument(readmeUri).then((doc) => {
+                        vscode.window.showTextDocument(doc);
+                    });
+                }
+            );
+        }, 1500);
+    }
 }
+
 function updateStatusBar(indexManager: IndexManager): void {
     const stats = indexManager.getStats();
     statusBarItem.text = `$(symbol-class) ${stats.classes} classes · $(symbol-method) ${stats.functions} fns · $(extensions) ${stats.widgets} widgets · $(globe) ${stats.translations || 0} loc`;
     statusBarItem.show();
 }
+
 export function deactivate(): void {
+    // ✅ statusBar فقط هنا — الـ indexManager.dispose() بيتنادى تلقائياً
+    // من context.subscriptions اللي VS Code بيعمل dispose عليها
     if (statusBarItem) {
         statusBarItem.dispose();
     }

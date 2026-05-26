@@ -13,6 +13,49 @@ export class PubspecLockProvider {
     static getPackages(projectPath: string): PackageInfo[] {
         const lockPath = path.join(projectPath, 'pubspec.lock');
         if (!fs.existsSync(lockPath)) {
+            const packageLockPath = path.join(projectPath, 'package-lock.json');
+            if (fs.existsSync(packageLockPath)) {
+                try {
+                    const content = fs.readFileSync(packageLockPath, 'utf8');
+                    const lock = JSON.parse(content);
+                    const packages: PackageInfo[] = [];
+
+                    if (lock.packages) {
+                        for (const [pkgPath, pkgInfo] of Object.entries(lock.packages)) {
+                            if (pkgPath === '' || !pkgPath.startsWith('node_modules/')) continue;
+                            const name = pkgPath.substring('node_modules/'.length);
+                            if (name.includes('node_modules/')) continue;
+                            
+                            const version = (pkgInfo as any).version || '';
+                            const dev = !!(pkgInfo as any).dev;
+                            
+                            packages.push({
+                                name,
+                                version,
+                                source: (pkgInfo as any).resolved ? 'hosted' : 'unknown',
+                                dependencyType: dev ? 'dev' : 'direct',
+                                description: {}
+                            });
+                        }
+                    } else if (lock.dependencies) {
+                        for (const [name, pkgInfo] of Object.entries(lock.dependencies)) {
+                            const version = (pkgInfo as any).version || '';
+                            const dev = !!(pkgInfo as any).dev;
+                            packages.push({
+                                name,
+                                version,
+                                source: (pkgInfo as any).resolved ? 'hosted' : 'unknown',
+                                dependencyType: dev ? 'dev' : 'direct',
+                                description: {}
+                            });
+                        }
+                    }
+                    return packages;
+                } catch (error) {
+                    console.error('Error parsing package-lock.json:', error);
+                    return [];
+                }
+            }
             return [];
         }
 

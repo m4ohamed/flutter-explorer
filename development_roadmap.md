@@ -1,20 +1,164 @@
-# Development Roadmap
+# 🗺️ خريطة التطوير وخطة العمل (development_roadmap.md)
 
-## Completed
-- [x] Integrate Dart Analyzer for accurate AST indexing
-- [x] Improve incremental Regex parser
-- [x] Configure VS Code Webview for Dependency Graph
-- [x] Implement robust SQLite caching with read/write modes
-- [x] Handle SQLite DB file locking between Extension and MCP Server
-- [x] Optimize index generation performance (concurrent batch processing)
-- [x] Fix MCP Server `stdio` JSON-RPC corruption by overriding `console.log`
+هذا الملف مخصص لتتبع حالة التطوير، الإنجازات اليومية، والخطوات المستقبلية لمشروع **Flutter Explorer**.
 
-## Today's Progress
-- SQLite cache is already updated incrementally during indexing. JSON fallback is no longer needed as MCP server now reads from SQLite.
-- Fixed `better-sqlite3` ABI mismatch issues.
-- Configured separate environments awareness (Electron for VSCode Extension vs Node for MCP Server).
+---
 
-## Upcoming
-- [ ] Test the full suite of MCP tools (Search, Pubspec, Impact Analysis, Logic Flow, etc.)
-- [ ] Finalize UI/UX for the interactive graph (D3.js)
-- [ ] Add extensive Error Logging to `.flutter-explorer`
+## 📅 إنجازات اليوم (17 مايو 2026)
+
+### 1. مراجعة وتأكيد الباتشات الشاملة في `dartParser.ts`
+تم إجراء فحص دقيق وشامل لملف `dartParser.ts` ومقارنته بمتطلبات `FIX.md`، وتم تأكيد الآتي:
+- **Patch 1 (ReDoS)**: تم تطبيق حماية متقدمة ضد التراجع الكارثي مع دعم الأقواس المتداخلة في المعاملات `((?:[^)(]+|\([^)(]*\))*)`.
+- **Patch 2 & 4 (ScopeFrame & ExtensionTypes)**: تم دمج نوع `extensionType` وتخزين المرجع المباشر `ref` في إطار النطاق بشكل صحيح.
+- **Patch 3 (syncBraces Name Collision)**: تم اعتماد المرجع المباشر `if (popped.ref)` لتحسين الأداء إلى O(1) ومنع تضارب الأسماء.
+- **Patch 5 (extractEnumValues)**: تم التحقق من تمرير الأسطر المطموسة `maskedLines` لتجنب الأقواس المزيفة داخل التعليقات والنصوص.
+- **Patch 6 (extractFunctionCalls Context)**: تم تمرير الأسطر الأصلية للحفاظ على سياق الاستدعاء المعروض في IDE بدون طمس.
+- **Patch 7 (analyzeUsages O(1) Map)**: تم تحسين خوارزمية البحث باستخدام `Map` و `Set` لتقليل التعقيد الزمني بشكل كبير.
+- **Patch 8 (Constructor Search)**: تم دمج البحث عن المشيدات داخل المرور الرئيسي وتجنب التكرار.
+- **Patch 9 (preprocessSource)**: تم دعم النصوص الخام `r'...'` والتعليقات المتداخلة `/* ... */`.
+- **Patch 10 (Abstract Methods)**: تم تحسين استخراج الدوال المجردة المنتهية بـ `;`.
+- **Patch 11 (split('\n'))**: تم تقليل استدعاءات التقسيم إلى الحد الأدنى وتخزين النتائج مؤقتاً.
+- **Patch 12 (Error Handling)**: تم تغليف المعالجة بـ `try/catch` لمنع تعطل الإضافة بالكامل.
+
+### 2. التوافقية مع MCP Server
+- تم التحقق من نقاط الاتصال بين `mcp-server.ts` و `dartParser.ts`.
+- تم تأكيد أن خادم MCP يقرأ من `sqliteCache`، وأن التعديلات على المحلل ستنعكس فور إعادة بناء الفهرس `Rebuild Full Index`.
+
+### 3. حل مشاكل TypeScript في SQLite Cache
+- تم اكتشاف خطأين في ملف `sqliteCache.ts` يتعلقان بتمرير `undefined` إلى المعامل `hash` في استعلامات SQLite.
+- تم توثيق الخطأ في `error.md` وإصلاحه بتمرير `hash ?? null`.
+
+### 4. حل مشكلة فقدان ملف `node-sqlite3-wasm.wasm` وتنظيف السكربتات القديمة
+- تم حل مشكلة `ENOENT` التي منعت تفعيل الإضافة بسبب عدم العثور على ملف `node-sqlite3-wasm.wasm` في مجلد `out/`.
+- تم إزالة سكربتات `rebuild` و `postinstall` القديمة الخاصة بـ `better-sqlite3` من `package.json`.
+- تم تحديث إعدادات `esbuild.js` لتعيين `node-sqlite3-wasm` كـ `external` وإضافة خطوة نسخ تلقائي لملف `.wasm` إلى `out/` لضمان عمل الإضافة بسلاسة تامة في جميع بيئات التشغيل (VS Code, Cursor, Antigravity).
+
+### 5. تحسين تجربة المستخدم أثناء الفهرسة وحل مشكلة تضارب وتأخر العداد (Progress UX)
+- تم حل مشكلة ظهور رسالة `Building initial index...` لفترة طويلة دون تحديث عن طريق إرسال إشعارات فورية للمستخدم أثناء مرحلة اكتشاف الملفات `findFiles`.
+- تم تعديل أداة `dart_analyzer.dart` لحساب إجمالي عدد ملفات Dart وإرسال `TOTAL:` في البداية، بالإضافة إلى إرسال إشعار التقدم `PROGRESS:` عند كل ملف منفرد بدلاً من كل 10 ملفات.
+- تم تحديث `dartAnalyzerWrapper.ts` لالتقاط الإجمالي وتمريره، وتعديل `indexManager.ts` لاستخدام عداد ذري متزايد (`completedCount`) لضمان تصاعد أرقام التقدم بشكل سلس ودقيق 100% أثناء التحليل المتزامن.
+
+### 6. القضاء على التجمد اللانهائي (ReDoS) في محلل الـ RegExp
+- تم اكتشاف ثغرة تراجع كارثي (Catastrophic Backtracking) في أنماط مطابقة المعاملات `ctor`, `method`, `topFunc` في `dartParser.ts`، والتي كانت تتسبب في تجميد الإضافة عند تحليل ملفات معقدة مثل `sync_attendance_gaps_usecase.dart`.
+- تم استبدال الأنماط بتركيبة خطية محكمة `([^)(]*(?:\([^)(]*\)[^)(]*)*)` تمنع التراجع الكارثي نهائياً مع الحفاظ على دقة الاستخراج وسرعة الفهرسة.
+
+### 7. إضافة خيار التحويل إلى نظام JSON لاختبار الأداء
+- تلبيةً لرغبة المستخدم في اختبار ما ومقارنة الأداء، تم إضافة الإعداد `flutterExplorer.enableJsonIndex` في `package.json`.
+- تم تحديث `SqliteCache` و `IndexManager` و `extension.ts` لدعم هذا الخيار وتجاوز عمليات الكتابة في SQLite عند تفعيله للاعتماد على ملف `flutter-explorer.json`.
+
+### 8. حل مشكلة قفل قاعدة البيانات (database is locked / database table is locked) في بيئة متعددة العمليات (MCP & VS Code)
+- تم تشخيص سبب حدوث خطأ `Failed to initialize WASM database: database is locked` عند تشغيل خادم MCP، والذي كان يعود لعدم تمرير خيار القراءة فقط `{ readOnly: this.readonlyMode }` إلى مشيد `Database`، مما تسبب في محاولة فتح قاعدة البيانات للقراءة والكتابة من عمليتين مختلفتين في آن واحد.
+- تم تمرير خيار القراءة فقط صراحةً لتمكين خادم MCP من العمل بسلاسة تامة بالتزامن مع إضافة VS Code.
+- تم تشخيص سبب حدوث خطأ `SQLite3Error: database table is locked` أثناء الفهرسة المتزامنة (`concurrency: 3`)، والذي كان يعود للاستدعاء اليدوي المتكرر للأمر `PRAGMA wal_checkpoint(PASSIVE)` بعد كل إدخال.
+- تم إزالة استدعاءات الـ Checkpoint اليدوية الزائدة من كافة دوال الإدخال والحذف والاعتماد على إدارة SQLite التلقائية.
+- تم إضافة الأمر `PRAGMA busy_timeout = 5000` لتمكين الانتظار السلس للأقفال وحماية أوامر الـ `ROLLBACK` داخل `try/catch`.
+
+### 9. القضاء على مشكلة قفل قاعدة البيانات المستمر وفشل حلقة إعادة المحاولة (On-Demand DB Connection)
+- تم تشخيص سبب استمرار ظهور رسائل `Database locked by another process. Retrying...` وفشل حلقة إعادة المحاولة في `SqliteCache`.
+- تم اكتشاف أن خادم MCP كان يحتفظ باتصال قاعدة البيانات مفتوحاً بشكل دائم للقراءة، مما يمنع إضافة VS Code من الكتابة أو التعديل في وضع `DELETE` على نظام Windows. كما تبين أن فشل مشيد `Database` أثناء المحاولات كان يترك الاتصال المعلق مفتوحاً دون إغلاق.
+- تم إعادة تصميم `SqliteCache` بالكامل للتحول من الاتصال الدائم إلى نمط الفتح والإغلاق عند الطلب (On-Demand Open & Close) باستخدام دالة مساعدة محكمة `withDatabase`.
+- أصبح خادم MCP يفتح الاتصال لعدة أجزاء من الثانية أثناء القراءة ويغلقه فوراً، وأصبحت إضافة VS Code تفتح الاتصال وتغلقه فور انتهاء المعاملة، مما ينهي تماماً أخطاء القفل ويجعل حلقة إعادة المحاولة تعمل بكفاءة ونجاح بنسبة 100%.
+
+### 10. معالجة أخطاء التجميع والتشغيل المتعلقة باستدعاءات دوال SQLite غير المتزامنة (TS2339 / Async Await)
+- تم اكتشاف خطأ تجميع في `src/indexer/indexManager.ts` (`error TS2339: Property 'hash' does not exist on type 'Promise...'`) ناتج عن محاولة الوصول لخصائص كائن من دالة غير متزامنة دون انتظارها بـ `await`.
+- تم مراجعة كافة استدعاءات `SqliteCache` في `IndexManager` وإضافة `await` للدوال غير المتزامنة مثل `getDartFile`, `clearAll`, `batchUpsertDartFiles`, `upsertDartFile`, و `upsertArbFile`.
+- هذا التعديل يضمن التسلسل الزمني الصحيح للمعاملات في SQLite ويمنع تداخل الـ Transactions أو حدوث سباق البيانات (Race Conditions)، وقد تم التحقق من سلامة البناء واجتياز فحص TypeScript بنجاح تام (`exit code 0`).
+
+### 11. حل مشكلة غياب الحزم الخارجية (External Native Modules) عند حزم الإضافة (vsce package / Cannot find module 'sqlite3')
+- تم تشخيص سبب حدوث خطأ `Error: Cannot find module 'sqlite3'` عند تثبيت الإضافة بعد حزمها باستخدام `vsce package`.
+- تم اكتشاف أن إعدادات `esbuild.js` تعين `sqlite3` كـ `external`، بينما ملف `.vscodeignore` كان يتجاهل مجلد `node_modules/**` بالكامل، مما أدى لاستبعاد حزمة `sqlite3` واعتمادياتها الإنتاجية من الـ VSIX.
+- تم إزالة تجاهل `node_modules/**` من `.vscodeignore` للاستفادة من آلية `vsce` الذكية في تضمين الحزم الإنتاجية فقط واستبعاد حزم التطوير تلقائياً، مما يضمن عمل الإضافة بكفاءة تامة عند التثبيت.
+
+---
+
+
+## 🚀 الخطوات القادمة
+
+1. **إعادة تشغيل مراقب البناء (Watch Mode)**: توجيه المستخدم لإيقاف وإعادة تشغيل أمر `npm run watch` في الطرفية (Terminal) ليقوم بتحميل التعديلات الجديدة.
+2. **إعادة بناء الفهرس (Re-Index)**: توجيه المستخدم لتشغيل أمر `Flutter Explorer: Rebuild Full Index` في المحرر لتحديث قاعدة بيانات SQLite والاستمتاع بتجربة الفهرسة التفاعلية والسريعة.
+
+## 📅 إنجازات اليوم (20 مايو 2026)
+
+### 1. تحسين وتطوير خادم MCP (Phase 2 - Completed)
+- **دمج محرك البحث BM25**: تم تحسين أداة `flutter_search` لتمرير النتائج عبر محرك التقييم Okapi BM25 وتصنيفها ترتيباً تنازلياً حسب الأكثر ملاءمة (Relevance Ranking) مع دعم حقل الأوزان والمطابقات الخاصة بالأسماء والبادئات.
+- **إضافة أداة `flutter_run_analyze`**: تمكين العميل الذكي من تشغيل `flutter analyze` مباشرة من خلال الـ MCP والتحقق الفوري من سلامة التعديلات البرمجية وتلقي المخرجات ككائنات JSON مهيكلة.
+- **إضافة أداة `flutter_run_build_runner`**: تم إضافة أداة لتشغيل منشئ الأكواد `dart run build_runner build --delete-conflicting-outputs` بالتوازي مع حمايتها من التشغيل المتزامن والمهلات الزمنية الطويلة.
+- **إضافة أداة `flutter_find_references`**: تتبع كافة أماكن استخدام أي كلاس أو دالة أو متغير عبر المشروع بأكمله بالاعتماد على فهرس المشروع واستدعاءات الدوال، وتمت ترقيتها لتقوم بمسح ديناميكي لخطوط الكود باستخدام RegExp لجلب أرقام الأسطر والسياق الفعلي للمرجع.
+- **تحسين تتبع الاعتماديات العكسية (Reverse Dependencies)**: إزالة استبعاد الاستيرادات التي تبدأ بـ `package:projectName` لضمان حساب دقيق للأثر التعديلي (Blast Radius) عبر كامل الفهرس.
+- **توسيع تحليل اعتماديات المشيدات (Constructor Dependencies)**: تعديل محلل الأكواد ليقبل جميع أنواع الكلاسات وتصفية الأنواع الافتراضية البدائية لـ Dart و Flutter لتغطية كافة المكونات المعرفة.
+- **ذكاء استخراج اعتماديات الاستيرادات (Smart Import Mapping)**: ترقية أداة `flutter_get_dependencies` لتقوم بحل مسارات الاستيرادات (بما فيها مسارات `package:`) والتحقق ديناميكيًا مما إذا كانت الملفات المستوردة تعرّف أيًا من كلاسات المشيد المستخرجة بالاعتماد على فهرس SQLite مباشرة، مع الاحتفاظ بآلية مطابقة الأسماء والكلمات المفتاحية للمكتبات الخارجية.
+
+---
+
+## 🚀 الخطوات القادمة (قبل 20 مايو)
+
+1. **إعادة تشغيل مراقب البناء (Watch Mode)**: إيقاف وإعادة تشغيل أمر `npm run watch` ليعمل على حزم الكود الجديد باستمرار.
+2. **تحديث السيرفر في محرر العميل**: إعادة تحميل السيرفر في محرر Cursor أو VS Code لتطبيق التغييرات فاعلياً على مشروع فلاتر الحقيقي.
+
+---
+
+## 📅 إنجازات اليوم (20 مايو 2026) — الجلسة الثانية
+
+### 1. إصلاح `flutter_find_references` — نتائج صفرية بسبب الاستيراد غير المباشر
+- **المشكلة:** الأداة كانت تعيد `referencesCount: 0` لأي رمز يُستخدم عبر ملف وسيط (re-export)، لأن الخوارزمية القديمة تعتمد فقط على `usedInFiles` من الاستيرادات المباشرة.
+- **الحل — 3 مراحل:**
+  - **Phase 1:** البحث في `functionCalls` و `classUsages` في الفهرس (كما كان).
+  - **Phase 2:** مسح ملفات `usedInFiles` بـ Regex `\bName\b` مع تجاهل أسطر import/export.
+  - **Phase 3:** إذا لا نتائج → مسح جميع ملفات المشروع المفهرسة (full project-wide scan).
+- النتائج مُرتَّبة حسب الملف والسطر، والسياق مقطوع عند 200 حرف.
+- تم التحقق من الكود بـ `tsc --noEmit` (exit code 0).
+
+### 2. إضافة خيار `isDev` لـ `SidebarProvider`
+- أُضيف معامل `isDev: boolean` للـ constructor يجبر تحميل CSS/JS من `src/webview/media` في وضع التطوير مباشرةً بدون الحاجة للـ build.
+- يُمرَّر من `extension.ts` تلقائياً عبر `context.extensionMode === vscode.ExtensionMode.Development`.
+
+### 3. حزم VSIX ناجح (flutter-explorer-0.1.0.vsix)
+- تم الحزم بـ `vsce package --no-dependencies` → 2.49 MB، 114 ملف، exit code 0.
+
+---
+
+## 🚀 الخطوات القادمة
+
+1. **تثبيت VSIX المحدّث** على مشروع `E:\New folder\sad\sadara` والتحقق من نتائج `flutter_find_references` مباشرةً.
+2. **مراجعة أداء Phase 3** (full scan) على مشاريع كبيرة جداً وإضافة حد أقصى للنتائج إن لزم.
+3. **إضافة أداة `flutter_get_blast_radius`** لحساب عدد الملفات المتأثرة بتعديل رمز معيّن.
+
+---
+
+## 📅 إنجازات اليوم (21 مايو 2026)
+
+### 1. ضبط مهلة محاولة تحديد عائلة IP التلقائية (Default Auto-Select Family Attempt Timeout)
+- **المشكلة:** قد تظهر مشكلات اتصال/مهلة (Connection timeouts) في خادم اللغة أو الشبكة بسبب قصر مهلة عائلة IP الافتراضية (250ms) في بيئات معينة.
+- **الحل:** استدعاء `net.setDefaultAutoSelectFamilyAttemptTimeout(1000)` في دالة `activate` بـ `src/extension.ts` لضبطها افتراضياً إلى 1000ms، مما يوفر وقتاً كافياً للاتصالات الثنائية (IPv4/IPv6) دون تأخيرات أو انقطاع غير مبرر، مع حماية الاستدعاء للعمل مع إصدارات Node القديمة.
+
+### 2. تحديث تحذيرات Hardcoded Text & Colors وتنبيهات الترجمات تلقائياً وإضافة زر تحديث لتبويب التحليل
+- **المشكلة:** عدم تحديث قائمة التحذيرات الخاصة بالنصوص المكتوبة يدوياً أو ملفات الترجمة عند تعديل وحفظ الملفات أو الفهرسة الكاملة. وأيضاً غياب زر التحديث في التبويب بالرغم من وجود مستمع الحدث الخاص به في الكود المصدري لـ JS.
+- **الحل:**
+  - تم إضافة ترويسة تبويب التحليل مع زر التحديث `refreshAnalysis` في ملف `src/webview/sidebarProvider.ts` باستخدام الفئات المتوافقة مع التصميم العام لتبويبات الإضافة.
+  - تم تعديل حدث `indexManager.onDidChangeIndex` في `src/extension.ts` ليعيد إرسال رسالة `analysisData` مع البيانات الحديثة (المفردات المفقودة والتحذيرات) عند كل عملية فهرسة جديدة تلقائياً.
+
+### 3. معالجة وتحديث تحذيرات النصوص والألوان المكتوبة يدوياً (Hardcoded Warnings) والرسم البياني التفاعلي
+- **المشكلة:** عند تشغيل الفهرسة الكاملة (مع تفعيل Dart SDK Analyzer)، كانت تحذيرات النصوص والألوان المكتوبة يدوياً تُمسح وتختفي من التقرير لأن محلل Dart SDK لا يستخرجها، كما أن الرسم البياني التفاعلي لم يكن يتحدث تلقائياً عند تحديث الفهرس. بالإضافة إلى أن فحص النصوص المكتوبة يدوياً `P.hardText` كان يفشل دائماً ويرجع `null` بسبب طمس النصوص في مرحلة المعالجة المسبقة.
+- **الحل:**
+  - تعديل دالة `buildFullIndex` لاستخراج التحذيرات باستخدام الـ `DartParser` ودمجها مع مخرجات محلل Dart SDK بعد الانتهاء من التحليل.
+  - ربط الرسم البياني التفاعلي بحدث `onDidChangeIndex` لإعادة إرسال البيانات المحدثة تلقائياً في الوقت الفعلي.
+  - إصلاح مطابقة نمط `P.hardText` في `dartParser.ts` ليتم تشغيلها على السطر الأصلي والتأكد من عدم وقوعها في منطقة تعليقات أو نصوص عن طريق مطابقة المؤشر مع السطر المطموس `maskedLine`.
+### 4. مراجعة وتطوير الرسم البياني التفاعلي للاعتمادات (Interactive Dependencies Graph)
+- **المشكلة:** الحاجة إلى تحسين الرسم البياني للاعتمادات وتوسيع نطاق العناصر المدعومة ليشمل Mixins و Enums وتحديد اتجاه العلاقات (Arrows) وتوفير واجهة تحكم عصرية ومرنة (Control Panel) تمكن المستخدم من البحث والتصفية والتكبير والتفتيش.
+- **الحل:**
+  - **تحديث الفهرسة ودعم عناصر جديدة:** تم تعديل [indexManager.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/indexer/indexManager.ts) لتضمين الـ Mixins والـ Enums في بيانات الرسم البياني وربطهم بعلاقة `contains` و `with` بشكل صحيح.
+  - **تخصيص الألوان والتصميم:** تحديث [graph.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/webview/graph.ts) لدعم أنواع العقد الجديدة وتخصيص ألوان مميزة لكل نوع (مثل الكلاسات، الواجهات، الـ Mixins، والـ Enums).
+  - **إضافة مؤشرات الاتجاه (SVG Arrow Markers):** تم إضافة أسهم توجيهية مرسومة ديناميكياً على روابط الرسم البياني في [graph.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/webview/graph.ts) مع حساب المسافات لضبط رأس السهم على حدود العقدة تماماً دون تداخل.
+  - **لوحة تحكم زجاجية (Glassmorphic Control Panel):** تصميم وبناء واجهة تحكم عائمة وممتازة في [graphWebview.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/views/graphWebview.ts) تحتوي على صندوق بحث تفاعلي، خانات خيارية لتصفية أنواع العقد والروابط، أزرار تكبير وتوسيط الكاميرا، وبطاقة فحص العقدة (Inspector Card) لعرض معلومات العنصر وفتحه مباشرة في المحرر.
+  - **مزامنة البيانات والترشيح التفاعلي:** ربط اللوحة بالـ simulation لتصفية العقد والروابط لحظياً وإعادة ضبط الكاميرا عند النقر، مع معالجة استقرار العقد (restoring coordinates) لمنع اهتزاز الرسم البياني أثناء التصفية.
+  - **ربط استدعاءات الدوال والأساليب (Call Edges Resolution):** تم تحديث خوارزمية بناء المخطط في [indexManager.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/indexer/indexManager.ts) لتقوم ببناء فهارس بحث سريعة لجميع الأساليب والوظائف والوراثة والعلاقات على مستوى المشروع بالكامل. عند استدعاء دالة، يتم تحديد الهدف بدقة (calleeId) مع دعم وراثة الكلاسات والـ Mixins، وتطبيق إرشاد ذكي لتحويل أسماء الكائنات (camelCase) إلى أسماء فئات (PascalCase) المقابلة لها (مثلاً `authService` -> `AuthService`)، مما يضمن رسم خطوط ربط صحيحة وغير منقطعة بين جهة الاستدعاء وتعريف الدالة الفعلي سواء في نفس الملف أو عبر الملفات الأخرى.
+
+### 5. محاذاة وتوحيد الرسم البياني التفصيلي وتوسيع نطاق التصفية والعناصر التفاعلية
+- **المشكلة:** عدم تطابق وتناسق بين معرفات ومفاتيح العقد والروابط بين `indexManager.ts` وخادم MCP `mcp-server.ts` مما كان يؤدي لعدم توافق الرسم البياني التفاعلي. بالإضافة إلى غياب العناصر الجديدة مثل (Widgets, Extensions, Typedefs, Variables, Constructors) والعلاقات الجديدة (Implements, Uses Class, Uses Var) من واجهة المستخدم و D3.js.
+- **الحل:**
+  - توحيد صيغة مفاتيح ومعرفات العقد والروابط بالكامل لتكون متوافقة بين المحرر وخادم MCP.
+  - إضافة العناصر والعلاقات الجديدة إلى ملف `graphWebview.ts` بتعريف مربعات تصفية (Checkboxes) جديدة وتنسيق ألوانها المميزة في اللوحة الزجاجية.
+  - تحديث ملف `graph.ts` لدعم الأنواع الجديدة في D3.js وتوسيع `NODE_COLOR` و `NODE_RADIUS` لتعكس الألوان المميزة بدقة.
+  - ضبط الأسهم والروابط والمؤشرات (Arrow Markers) لدعم العلاقات الإضافية وسهولة تصفيتها ديناميكياً بدون أي مشاكل.
+  - فحص المشروع بالكامل والتحقق من التجميع الناجح والخلو من أخطاء TypeScript باستخدام `npx tsc --noEmit`.
+

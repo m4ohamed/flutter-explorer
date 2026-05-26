@@ -1,11 +1,8 @@
 /**
  * SQLite Cache - Replaces the monolithic JSON cache.
  *
- * Why SQLite instead of one big JSON file?
- *   JSON:   read/write the entire file (could be 5MB+) on every file change
- *   SQLite: read/write only the changed row in milliseconds
- *
- * Falls back to JSON file if better-sqlite3 is unavailable.
+ * Now uses sqlite3 instead of node-sqlite3-wasm.
+ * Works natively in Node.js with asynchronous API wrapped in Promises.
  */
 
 import * as path from 'path';
@@ -16,26 +13,15 @@ import { PackageInfo } from '../providers/pubspecLockProvider';
 
 import { ProjectDetector } from '../utils/projectDetector';
 
-// Lazily require better-sqlite3 to handle cases where it's not compiled yet.
-let Database: any = null;
-function getDatabase() {
-    if (!Database) {
-        try {
-            Database = require('better-sqlite3');
-        } catch (err: any) {
-            console.error('[FlutterExplorer] Failed to load better-sqlite3:', err.message || err);
-            Database = null;
-        }
-    }
-    return Database;
-}
+import sqlite3 from 'sqlite3';
 
 export class SqliteCache {
-    private db: any = null;
+    private db: sqlite3.Database | null = null;
     private available = false;
     private readonlyMode = false;
     private workspaceRoot: string;
     private jsonPath: string | null = null;
+    // We still keep the JSON fallback just in case of file system permission issues.
     private jsonCache: {
         dartFiles: Record<string, { hash: string; data: string }>;
         arbFiles: Record<string, { data: string; updated_at: number }>;
@@ -45,7 +31,7 @@ export class SqliteCache {
     constructor(workspaceRoot: string, options: { readonly?: boolean } = {}) {
         this.workspaceRoot = workspaceRoot;
         this.readonlyMode = !!options.readonly;
-        const DB = getDatabase();
+
         try {
             const dataDir = ProjectDetector.getDataDir(workspaceRoot);
             this.jsonPath = path.join(dataDir, 'flutter-explorer.json');
@@ -65,16 +51,15 @@ export class SqliteCache {
                     if (fs.existsSync(sideFile)) {
                         try {
                             fs.copyFileSync(sideFile, targetSideFile);
-                            fs.unlinkSync(sideFile); // Remove old side file
+                            fs.unlinkSync(sideFile);
                         } catch (e) {
                             console.warn(`[FlutterExplorer] Could not migrate side-file ${suffix}:`, e);
                         }
                     }
                 }
-                // Optional: fs.unlinkSync(legacyDb); // Should we delete the old db? Keeping for now.
             }
 
-            // Legacy JSON cleanup: Remove flutter-explorer.json from .vscode if it exists
+            // Legacy JSON cleanup
             const legacyJson = path.join(legacyDir, 'flutter-explorer.json');
             if (fs.existsSync(legacyJson)) {
                 try {
@@ -85,34 +70,49 @@ export class SqliteCache {
                 }
             }
 
-
-            if (DB) {
-                try {
-                    this.db = new DB(dbPath, { readonly: this.readonlyMode });
-                    if (!this.readonlyMode) {
-                        this.db.pragma('journal_mode = WAL');
-                        this.db.pragma('synchronous = NORMAL');
-                        this._createTables();
-                    }
-                    this.available = true;
-                    console.log(`[FlutterExplorer] SQLite cache initialized (${this.readonlyMode ? 'READONLY' : 'READ/WRITE'}).`);
-                } catch (err: any) {
-                    const msg = err.message || String(err);
-                    if (msg.includes('NODE_MODULE_VERSION') || msg.includes('compiled against')) {
-                        console.error(`[FlutterExplorer] SQLite ABI mismatch detected: ${msg}`);
-                        console.error('[FlutterExplorer] Rebuild required.');
-                        // Still fallback to JSON instead of crashing
-                        this._loadJson();
-                    } else {
-                        throw err;
-                    }
+            // Initialize sqlite3
+            const mode = this.readonlyMode ? sqlite3.OPEN_READONLY : (sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE);
+            this.available = true; // Set available immediately so callers queue queries
+            this.db = new sqlite3.Database(dbPath, mode, (err) => {
+                if (err) {
+                    console.error(`[FlutterExplorer] Failed to initialize sqlite3 database: ${err.message || String(err)}`);
+                    this.db = null;
+                    this.available = false;
+                    this._loadJson();
+                } else {
+                    console.log(`[FlutterExplorer] sqlite3 cache initialized (${this.readonlyMode ? 'READONLY' : 'READ/WRITE'}).`);
                 }
-            } else {
-                this._loadJson();
-                console.log('[FlutterExplorer] SQLite not available — using JSON fallback.');
+            });
+
+            this.db.serialize(); // Put database into serialized mode permanently so all queries queue sequentially
+
+            this.db.exec('PRAGMA busy_timeout = 10000', () => {});
+            if (!this.readonlyMode) {
+                this.db.exec('PRAGMA journal_mode = DELETE', () => {});
+                this.db.exec('PRAGMA synchronous = NORMAL', () => {});
+                this._createTables();
             }
         } catch (e) {
             console.warn('[FlutterExplorer] Cache init error, using memory only:', e);
+            this.db = null;
+            this.available = false;
+        }
+    }
+
+    /**
+     * ✅ إغلاق الـ DB بأمان عند تعطيل الـ extension.
+     * يحتوي على guard ضد double-close.
+     */
+    close(): void {
+        if (!this.db) return; // ✅ guard — لو اتنادى تاني مرة مش هيعمل حاجة
+        try {
+            this.db.close((err) => {
+                if (err) console.error('[FlutterExplorer] Error closing SQLite database:', err);
+                else console.log('[FlutterExplorer] SQLite database connection closed cleanly.');
+            });
+        } catch (e) {
+            console.error('[FlutterExplorer] Error closing SQLite database:', e);
+        } finally {
             this.db = null;
             this.available = false;
         }
@@ -125,7 +125,7 @@ export class SqliteCache {
     /**
      * Returns granular diagnostic information about the cache status.
      */
-    getDiagnostics(): any {
+    async getDiagnostics(): Promise<any> {
         const dbPath = ProjectDetector.getDbPath(this.workspaceRoot);
         const stats = {
             available: this.available,
@@ -142,22 +142,27 @@ export class SqliteCache {
 
         if (this.available && this.db) {
             try {
-                stats.counts.dart_files = this.db.prepare('SELECT COUNT(*) as count FROM dart_files').get().count;
-                stats.counts.arb_files = this.db.prepare('SELECT COUNT(*) as count FROM arb_files').get().count;
-                stats.counts.metadata = this.db.prepare('SELECT COUNT(*) as count FROM metadata').get().count;
+                const getCount = (table: string): Promise<number> => {
+                    return new Promise((resolve) => {
+                        this.db!.get(`SELECT COUNT(*) as count FROM ${table}`, (err, row: any) => {
+                            if (err || !row) resolve(0);
+                            else resolve(row.count || 0);
+                        });
+                    });
+                };
+                stats.counts.dart_files = await getCount('dart_files');
+                stats.counts.arb_files = await getCount('arb_files');
+                stats.counts.metadata = await getCount('metadata');
             } catch (e: any) {
                 stats.error = e.message || String(e);
             }
         } else if (stats.exists) {
-            // Attempt to open just for a quick check if it's locked or corrupt
-            const DB = getDatabase();
-            if (DB) {
-                try {
-                    const tempDb = new DB(dbPath, { readonly: true, timeout: 500 });
-                    tempDb.close();
-                } catch (e: any) {
-                    stats.error = `Could not open database file: ${e.message || String(e)}`;
-                }
+            try {
+                const tempDb = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+                    if (tempDb) tempDb.close();
+                });
+            } catch (e: any) {
+                stats.error = `Could not open database file: ${e.message || String(e)}`;
             }
         }
 
@@ -165,275 +170,284 @@ export class SqliteCache {
     }
 
     private _createTables(): void {
-        this.db.exec(`
-      CREATE TABLE IF NOT EXISTS dart_files (
-        path TEXT PRIMARY KEY,
-        hash TEXT,
-        data TEXT,
-        updated_at INTEGER
-      );
-      CREATE TABLE IF NOT EXISTS arb_files (
-        path TEXT PRIMARY KEY,
-        data TEXT,
-        updated_at INTEGER
-      );
-      CREATE TABLE IF NOT EXISTS metadata (
-        key TEXT PRIMARY KEY,
-        data TEXT,
-        updated_at INTEGER
-      );
-    `);
+        const sql = `
+          CREATE TABLE IF NOT EXISTS dart_files (
+            path TEXT PRIMARY KEY,
+            hash TEXT,
+            data TEXT,
+            updated_at INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS arb_files (
+            path TEXT PRIMARY KEY,
+            data TEXT,
+            updated_at INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS metadata (
+            key TEXT PRIMARY KEY,
+            data TEXT,
+            updated_at INTEGER
+          );
+        `;
+        this.db?.exec(sql, (err) => {
+            if (err) console.error('[FlutterExplorer] Error creating tables:', err);
+        });
     }
 
-    /**
-     * Forces a checkpoint, moving data from the WAL file to the main database file.
-     * This ensures the .db file is up-to-date for external readers (like the MCP server).
-     */
     checkpoint(): void {
-        if (this.available && !this.readonlyMode) {
-            try {
-                this.db.pragma('wal_checkpoint(TRUNCATE)');
-                console.log('[FlutterExplorer] SQLite checkpoint (TRUNCATE) completed.');
-            } catch (e) {
-                console.error('[FlutterExplorer] SQLite checkpoint error:', e);
-            }
-        }
+        // DELETE mode لا يحتاج checkpoint
     }
 
     // ── Dart file operations ───────────────────────────────────────────────────
 
-    /** Write or update a single dart file entry. O(1) — only touches one row. */
-    upsertDartFile(relPath: string, hash: string | undefined, info: DartFileInfo): void {
-        if (this.available) {
-            try {
-                this.db.prepare(`
-          INSERT OR REPLACE INTO dart_files (path, hash, data, updated_at)
-          VALUES (?, ?, ?, ?)
-        `).run(relPath, hash, JSON.stringify(info), Date.now());
-
-                // PASSIVE checkpoint: flushes WAL to .db without blocking writers/readers
-                this.db.pragma('wal_checkpoint(PASSIVE)');
-            } catch (e) {
-                console.error('[FlutterExplorer] SQLite upsertDartFile error:', e);
-            }
+    async upsertDartFile(relPath: string, hash: string | undefined, info: DartFileInfo): Promise<void> {
+        if (this.available && !this.readonlyMode && this.db) {
+            return new Promise((resolve) => {
+                const sql = `
+                    INSERT OR REPLACE INTO dart_files (path, hash, data, updated_at)
+                    VALUES (?, ?, ?, ?)
+                `;
+                this.db!.run(sql, [relPath, hash ?? null, JSON.stringify(info), Date.now()], (err) => {
+                    if (err) console.error('[FlutterExplorer] SQLite upsertDartFile error:', err);
+                    resolve();
+                });
+            });
         } else {
             this.jsonCache.dartFiles[relPath] = { hash: hash ?? '', data: JSON.stringify(info) };
             this._saveJson();
+            return Promise.resolve();
         }
     }
 
-    /** Batch update multiple dart files in a single transaction. */
-    batchUpsertDartFiles(files: Array<{ relPath: string; hash: string | undefined; info: DartFileInfo }>): void {
-        if (this.available && !this.readonlyMode) {
-            try {
-                const stmt = this.db.prepare(`
-                    INSERT OR REPLACE INTO dart_files (path, hash, data, updated_at)
-                    VALUES (?, ?, ?, ?)
-                `);
-
-                const transaction = this.db.transaction((items: any[]) => {
-                    for (const item of items) {
-                        stmt.run(item.relPath, item.hash, JSON.stringify(item.info), Date.now());
+    async batchUpsertDartFiles(files: Array<{ relPath: string; hash: string | undefined; info: DartFileInfo }>): Promise<void> {
+        if (this.available && !this.readonlyMode && this.db) {
+            return new Promise((resolve) => {
+                this.db!.serialize(() => {
+                    this.db!.run('BEGIN TRANSACTION');
+                    const stmt = this.db!.prepare(`
+                        INSERT OR REPLACE INTO dart_files (path, hash, data, updated_at)
+                        VALUES (?, ?, ?, ?)
+                    `);
+                    for (const item of files) {
+                        stmt.run([item.relPath, item.hash ?? null, JSON.stringify(item.info), Date.now()]);
                     }
+                    stmt.finalize();
+                    this.db!.run('COMMIT', (err) => {
+                        if (err) {
+                            this.db!.run('ROLLBACK');
+                            console.error('[FlutterExplorer] SQLite batchUpsertDartFiles error:', err);
+                        }
+                        resolve();
+                    });
                 });
-
-                transaction(files);
-
-                // PASSIVE checkpoint: flushes WAL to .db without blocking writers/readers
-                this.db.pragma('wal_checkpoint(PASSIVE)');
-            } catch (e) {
-                console.error('[FlutterExplorer] SQLite batchUpsertDartFiles error:', e);
-            }
+            });
         } else {
             for (const f of files) {
                 this.jsonCache.dartFiles[f.relPath] = { hash: f.hash ?? '', data: JSON.stringify(f.info) };
             }
             this._saveJson();
+            return Promise.resolve();
         }
     }
 
-    /** Read a single dart file entry. */
-    getDartFile(relPath: string): { hash: string; info: DartFileInfo } | null {
-        if (this.available) {
-            try {
-                const row = this.db.prepare(
-                    'SELECT hash, data FROM dart_files WHERE path = ?'
-                ).get(relPath) as { hash: string; data: string } | undefined;
-                if (!row) return null;
-                return { hash: row.hash, info: JSON.parse(row.data) };
-            } catch {
-                return null;
-            }
+    async getDartFile(relPath: string): Promise<{ hash: string; info: DartFileInfo } | null> {
+        if (this.available && this.db) {
+            return new Promise((resolve) => {
+                this.db!.get('SELECT hash, data FROM dart_files WHERE path = ?', [relPath], (err, row: any) => {
+                    if (err || !row) {
+                        resolve(null);
+                    } else {
+                        try {
+                            resolve({ hash: row.hash, info: JSON.parse(row.data) });
+                        } catch {
+                            resolve(null);
+                        }
+                    }
+                });
+            });
         } else {
             const entry = this.jsonCache.dartFiles[relPath];
-            if (!entry) return null;
-            return { hash: entry.hash, info: JSON.parse(entry.data) };
+            if (!entry) return Promise.resolve(null);
+            return Promise.resolve({ hash: entry.hash, info: JSON.parse(entry.data) });
         }
     }
 
-    /** Delete a dart file entry (called on file delete). */
-    deleteDartFile(relPath: string): void {
-        if (this.available) {
-            try {
-                this.db.prepare('DELETE FROM dart_files WHERE path = ?').run(relPath);
-            } catch (e) {
-                console.error('[FlutterExplorer] SQLite deleteDartFile error:', e);
-            }
+    async deleteDartFile(relPath: string): Promise<void> {
+        if (this.available && !this.readonlyMode && this.db) {
+            return new Promise((resolve) => {
+                this.db!.run('DELETE FROM dart_files WHERE path = ?', [relPath], (err) => {
+                    if (err) console.error('[FlutterExplorer] SQLite deleteDartFile error:', err);
+                    resolve();
+                });
+            });
         } else {
             delete this.jsonCache.dartFiles[relPath];
             this._saveJson();
+            return Promise.resolve();
         }
     }
 
-    /** Load all dart files at startup. */
-    getAllDartFiles(): Array<{ path: string; hash: string; info: DartFileInfo }> {
-        if (this.available) {
-            try {
-                const rows = this.db.prepare(
-                    'SELECT path, hash, data FROM dart_files'
-                ).all() as Array<{ path: string; hash: string; data: string }>;
-                return rows.map(r => ({ path: r.path, hash: r.hash, info: JSON.parse(r.data) }));
-            } catch {
-                return [];
-            }
+    async getAllDartFiles(): Promise<Array<{ path: string; hash: string; info: DartFileInfo }>> {
+        if (this.available && this.db) {
+            return new Promise((resolve) => {
+                this.db!.all('SELECT path, hash, data FROM dart_files', (err, rows: any[]) => {
+                    if (err || !rows) {
+                        resolve([]);
+                    } else {
+                        const result: Array<{ path: string; hash: string; info: DartFileInfo }> = [];
+                        for (const r of rows) {
+                            try {
+                                result.push({ path: r.path, hash: r.hash, info: JSON.parse(r.data) });
+                            } catch { /* skip corrupt */ }
+                        }
+                        resolve(result);
+                    }
+                });
+            });
         } else {
-            return Object.entries(this.jsonCache.dartFiles).map(([path, entry]) => ({
+            return Promise.resolve(Object.entries(this.jsonCache.dartFiles).map(([path, entry]) => ({
                 path, hash: entry.hash, info: JSON.parse(entry.data)
-            }));
+            })));
         }
     }
 
     // ── ARB file operations ─────────────────────────────────────────────────────
 
-    upsertArbFile(relPath: string, translations: TranslationInfo[]): void {
-        if (this.available) {
-            try {
-                this.db.prepare(`
-          INSERT OR REPLACE INTO arb_files (path, data, updated_at)
-          VALUES (?, ?, ?)
-        `).run(relPath, JSON.stringify(translations), Date.now());
-
-                // PASSIVE checkpoint: flushes WAL to .db without blocking writers/readers
-                this.db.pragma('wal_checkpoint(PASSIVE)');
-            } catch (e) {
-                console.error('[FlutterExplorer] SQLite upsertArbFile error:', e);
-            }
+    async upsertArbFile(relPath: string, translations: TranslationInfo[]): Promise<void> {
+        if (this.available && !this.readonlyMode && this.db) {
+            return new Promise((resolve) => {
+                const sql = `
+                    INSERT OR REPLACE INTO arb_files (path, data, updated_at)
+                    VALUES (?, ?, ?)
+                `;
+                this.db!.run(sql, [relPath, JSON.stringify(translations), Date.now()], (err) => {
+                    if (err) console.error('[FlutterExplorer] SQLite upsertArbFile error:', err);
+                    resolve();
+                });
+            });
         } else {
             this.jsonCache.arbFiles[relPath] = { data: JSON.stringify(translations), updated_at: Date.now() };
             this._saveJson();
+            return Promise.resolve();
         }
     }
 
-    deleteArbFile(relPath: string): void {
-        if (this.available) {
-            try {
-                this.db.prepare('DELETE FROM arb_files WHERE path = ?').run(relPath);
-            } catch (e) {
-                console.error('[FlutterExplorer] SQLite deleteArbFile error:', e);
-            }
+    async deleteArbFile(relPath: string): Promise<void> {
+        if (this.available && !this.readonlyMode && this.db) {
+            return new Promise((resolve) => {
+                this.db!.run('DELETE FROM arb_files WHERE path = ?', [relPath], (err) => {
+                    if (err) console.error('[FlutterExplorer] SQLite deleteArbFile error:', err);
+                    resolve();
+                });
+            });
         } else {
             delete this.jsonCache.arbFiles[relPath];
             this._saveJson();
+            return Promise.resolve();
         }
     }
 
-    getAllArbFiles(): Array<{ path: string; translations: TranslationInfo[] }> {
-        if (this.available) {
-            try {
-                const rows = this.db.prepare(
-                    'SELECT path, data FROM arb_files'
-                ).all() as Array<{ path: string; data: string }>;
-                return rows.map(r => ({ path: r.path, translations: JSON.parse(r.data) }));
-            } catch {
-                return [];
-            }
+    async getAllArbFiles(): Promise<Array<{ path: string; translations: TranslationInfo[] }>> {
+        if (this.available && this.db) {
+            return new Promise((resolve) => {
+                this.db!.all('SELECT path, data FROM arb_files', (err, rows: any[]) => {
+                    if (err || !rows) {
+                        resolve([]);
+                    } else {
+                        const result: Array<{ path: string; translations: TranslationInfo[] }> = [];
+                        for (const r of rows) {
+                            try {
+                                result.push({ path: r.path, translations: JSON.parse(r.data) });
+                            } catch { /* skip corrupt */ }
+                        }
+                        resolve(result);
+                    }
+                });
+            });
         } else {
-            return Object.entries(this.jsonCache.arbFiles).map(([path, entry]) => ({
+            return Promise.resolve(Object.entries(this.jsonCache.arbFiles).map(([path, entry]) => ({
                 path, translations: JSON.parse(entry.data)
-            }));
+            })));
         }
     }
 
     // ── Metadata operations ─────────────────────────────────────────────────────
 
-    setMeta(key: string, value: any): void {
-        if (this.available) {
-            try {
-                this.db.prepare(`
-          INSERT OR REPLACE INTO metadata (key, data, updated_at)
-          VALUES (?, ?, ?)
-        `).run(key, JSON.stringify(value), Date.now());
-
-                // PASSIVE checkpoint: flushes WAL to .db without blocking writers/readers
-                this.db.pragma('wal_checkpoint(PASSIVE)');
-            } catch (e) {
-                console.error('[FlutterExplorer] SQLite setMeta error:', e);
-            }
+    async setMeta(key: string, value: any): Promise<void> {
+        if (this.available && !this.readonlyMode && this.db) {
+            return new Promise((resolve) => {
+                const sql = `
+                    INSERT OR REPLACE INTO metadata (key, data, updated_at)
+                    VALUES (?, ?, ?)
+                `;
+                this.db!.run(sql, [key, JSON.stringify(value), Date.now()], (err) => {
+                    if (err) console.error('[FlutterExplorer] SQLite setMeta error:', err);
+                    resolve();
+                });
+            });
         } else {
             this.jsonCache.meta[key] = value;
             this._saveJson();
+            return Promise.resolve();
         }
     }
 
-    getMeta<T>(key: string): T | null {
-        if (this.available) {
-            try {
-                const row = this.db.prepare(
-                    'SELECT data FROM metadata WHERE key = ?'
-                ).get(key) as { data: string } | undefined;
-                if (!row) return null;
-                return JSON.parse(row.data) as T;
-            } catch {
-                return null;
-            }
+    async getMeta<T>(key: string): Promise<T | null> {
+        if (this.available && this.db) {
+            return new Promise((resolve) => {
+                this.db!.get('SELECT data FROM metadata WHERE key = ?', [key], (err, row: any) => {
+                    if (err || !row) {
+                        resolve(null);
+                    } else {
+                        try {
+                            resolve(JSON.parse(row.data) as T);
+                        } catch {
+                            resolve(null);
+                        }
+                    }
+                });
+            });
         } else {
-            return (this.jsonCache.meta[key] as T) || null;
+            return Promise.resolve((this.jsonCache.meta[key] as T) || null);
         }
     }
 
-    clearAll(): void {
-        if (this.available) {
-            try {
-                this.db.prepare('DELETE FROM dart_files').run();
-                this.db.prepare('DELETE FROM arb_files').run();
-                this.db.prepare('DELETE FROM metadata').run();
-                
-                // Ensure the wipe is visible to the MCP server immediately
-                this.db.pragma('wal_checkpoint(PASSIVE)');
-            } catch (e) {
-                console.error('[FlutterExplorer] SQLite clearAll error:', e);
-            }
+    async clearAll(): Promise<void> {
+        if (this.available && !this.readonlyMode && this.db) {
+            return new Promise((resolve) => {
+                this.db!.serialize(() => {
+                    this.db!.run('DELETE FROM dart_files');
+                    this.db!.run('DELETE FROM arb_files');
+                    this.db!.run('DELETE FROM metadata', (err) => {
+                        if (err) console.error('[FlutterExplorer] SQLite clearAll error:', err);
+                        resolve();
+                    });
+                });
+            });
         } else {
             this.jsonCache = { dartFiles: {}, arbFiles: {}, meta: {} };
             this._saveJson();
+            return Promise.resolve();
         }
     }
 
     /**
      * Finds the innermost node at a cursor position.
-     * Useful for jumping from a file location to a graph node.
      */
-    getNodeAtCursor(relPath: string, line: number): any | null {
-        const fileInfo = this.getDartFile(relPath);
+    async getNodeAtCursor(relPath: string, line: number): Promise<any | null> {
+        const fileInfo = await this.getDartFile(relPath);
         if (!fileInfo) return null;
 
         let bestNode: any = null;
-        let smallestSpan = Infinity;
 
-        // Check classes
         for (const cls of fileInfo.info.classes) {
-            // we don't have lineEnd for classes yet, assuming 100 lines for now or just check start
             if (cls.line <= line && line <= cls.line + 50) {
                 bestNode = { type: 'class', name: cls.name };
-                smallestSpan = 50;
             }
         }
 
-        // Check functions
         for (const func of fileInfo.info.functions) {
             if (func.line <= line && line <= func.line + 20) {
                 bestNode = { type: 'function', name: func.name };
-                smallestSpan = 20;
             }
         }
 
@@ -442,13 +456,11 @@ export class SqliteCache {
 
     /**
      * BFS traversal to find impacted nodes within maxDepth.
-     * This is the "Blast Radius" implementation.
      */
-    getImpactRadius(changedFiles: string[], maxDepth: number = 2): any {
-        const allFiles = this.getAllDartFiles();
+    async getImpactRadius(changedFiles: string[], maxDepth: number = 2): Promise<any> {
+        const allFiles = await this.getAllDartFiles();
         const seeds = new Set<string>();
 
-        // 1. Initial seeds: all nodes in changed files
         for (const relPath of changedFiles) {
             const file = allFiles.find(f => f.path === relPath);
             if (file) {
@@ -457,7 +469,6 @@ export class SqliteCache {
             }
         }
 
-        // 2. BFS
         const visited = new Set<string>(seeds);
         let frontier = new Set<string>(seeds);
         const impacted = new Set<string>();
@@ -465,13 +476,9 @@ export class SqliteCache {
         for (let depth = 0; depth < maxDepth; depth++) {
             const nextFrontier = new Set<string>();
             for (const name of frontier) {
-                // Find all nodes that depend on 'name'
                 for (const file of allFiles) {
-                    // Check if this file calls 'name'
                     const calls = file.info.functionCalls.filter(c => c.name === name);
                     if (calls.length > 0) {
-                        // Find which node in THIS file is calling it
-                        // (Simplification: just mark the whole file or its classes as impacted)
                         file.info.classes.forEach(c => {
                             if (!visited.has(c.name)) {
                                 nextFrontier.add(c.name);
@@ -481,7 +488,6 @@ export class SqliteCache {
                         });
                     }
 
-                    // Check inheritance
                     file.info.classes.forEach(c => {
                         if (c.extendsClass === name && !visited.has(c.name)) {
                             nextFrontier.add(c.name);

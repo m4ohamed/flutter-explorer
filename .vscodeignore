@@ -3,7 +3,6 @@
 .git/**
 .gitignore
 .gitattributes
-node_modules/**
 src/**
 tsconfig.json
 esbuild.js
@@ -14,7 +13,8 @@ skills/**
 AGENTS
 analyzer_output.json
 development_roadmap.md
-errror.md
+error.md
+FIX.md
 lessons.md
 .flutter-explorer/**
 !out/**
@@ -22,5 +22,7 @@ lessons.md
 !tools/**
 !LICENSE
 !README.md
+!README-FlutterExplorer.md
 !package.json
 !package-lock.json
+

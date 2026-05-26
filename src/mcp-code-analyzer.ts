@@ -144,32 +144,113 @@ export class CodeAnalyzer {
   extractConstructorDependencies(classBody: string): string[] {
     const dependencies: string[] = [];
     const lines = classBody.split('\n');
-    let inConstructor = false;
+
+    // 1. Gather all class fields and their types
+    const fieldTypes = new Map<string, string>();
+    const fieldPattern = /(?:final|const|late)?\s*([a-zA-Z0-9_<>,?\s]+)\s+([a-zA-Z0-9_]+)\s*(?:;|=)/;
+
+    const primitiveTypes = new Set([
+      'string', 'int', 'double', 'bool', 'num', 'dynamic', 'void',
+      'list', 'map', 'set', 'datetime', 'duration', 'widget', 'buildcontext',
+      'key', 'function', 'future', 'stream', 'object', 'final', 'const', 'late',
+      'var', 'override', 'get', 'set', 'return', 'this', 'super'
+    ]);
+
+    const isClassType = (typeStr: string): boolean => {
+      const cleaned = typeStr.trim().replace(/[?<>]/g, '');
+      if (cleaned.length === 0) return false;
+      const firstChar = cleaned[0];
+      const isUpper = firstChar === firstChar.toUpperCase() && firstChar !== firstChar.toLowerCase();
+      return isUpper && !primitiveTypes.has(cleaned.toLowerCase());
+    };
 
     for (const line of lines) {
       const trimmed = line.trim();
+      if (trimmed.startsWith('//') || trimmed.startsWith('/*')) continue;
 
-      // Find constructor
-      if (trimmed.match(/^\w+\s*\(/)) {
-        inConstructor = true;
+      const fieldMatch = trimmed.match(fieldPattern);
+      if (fieldMatch) {
+        const typePart = fieldMatch[1].trim();
+        const namePart = fieldMatch[2].trim();
+        if (isClassType(typePart)) {
+          fieldTypes.set(namePart, typePart);
+        }
       }
+    }
 
-      if (inConstructor) {
-        // Match constructor parameters that look like dependencies
-        const paramMatch = trimmed.match(/(required\s+)?(?:final\s+)?(\w+)\s+(\w+)/);
-        if (paramMatch) {
-          const type = paramMatch[2];
-          const name = paramMatch[3];
-          
-          // Common dependency patterns
-          if (type.includes('Repository') || type.includes('Service') || type.includes('Provider') || type.includes('UseCase')) {
-            dependencies.push(`${type} ${name}`);
+    // 2. Identify constructor parameters and resolve their types
+    let inConstructor = false;
+    let constructorParamsText = '';
+    let parenCount = 0;
+
+    const processConstructorParams = (paramsText: string) => {
+      const startIdx = paramsText.indexOf('(');
+      const endIdx = paramsText.lastIndexOf(')');
+      if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) return;
+      const inner = paramsText.substring(startIdx + 1, endIdx);
+
+      const params: string[] = [];
+      let current = '';
+      let depth = 0;
+      for (let i = 0; i < inner.length; i++) {
+        const char = inner[i];
+        if (char === '<' || char === '(' || char === '{') depth++;
+        else if (char === '>' || char === ')' || char === '}') depth--;
+
+        if (char === ',' && depth === 0) {
+          params.push(current.trim());
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      if (current.trim()) params.push(current.trim());
+
+      for (const param of params) {
+        if (!param) continue;
+        const cleanedParam = param.replace(/\b(?:required|final|const)\b/g, '').trim();
+
+        const thisMatch = cleanedParam.match(/this\.([a-zA-Z0-9_]+)/);
+        if (thisMatch) {
+          const fieldName = thisMatch[1];
+          const type = fieldTypes.get(fieldName);
+          if (type) {
+            dependencies.push(`${type} ${fieldName}`);
+          }
+        } else {
+          const typedMatch = cleanedParam.match(/^([a-zA-Z0-9_<>?]+)\s+([a-zA-Z0-9_]+)/);
+          if (typedMatch) {
+            const type = typedMatch[1];
+            const fieldName = typedMatch[2];
+            if (isClassType(type)) {
+              dependencies.push(`${type} ${fieldName}`);
+            }
           }
         }
+      }
+    };
 
-        // End of constructor
-        if (trimmed.includes('{') && inConstructor) {
-          break;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('//') || trimmed.startsWith('/*')) continue;
+
+      if (!inConstructor) {
+        const ctorMatch = trimmed.match(/^[a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)?\s*\(/);
+        if (ctorMatch) {
+          inConstructor = true;
+          constructorParamsText = trimmed;
+          parenCount = (trimmed.match(/\(/g) || []).length - (trimmed.match(/\)/g) || []).length;
+          if (parenCount === 0) {
+            inConstructor = false;
+            processConstructorParams(constructorParamsText);
+          }
+        }
+      } else {
+        constructorParamsText += ' ' + trimmed;
+        parenCount += (trimmed.match(/\(/g) || []).length - (trimmed.match(/\)/g) || []).length;
+        if (parenCount <= 0) {
+          inConstructor = false;
+          processConstructorParams(constructorParamsText);
         }
       }
     }

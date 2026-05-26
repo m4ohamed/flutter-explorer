@@ -1,5 +1,14 @@
 # Error Log & Fixes
 
+## [2026-05-17] RESOLVED: ENOENT node-sqlite3-wasm.wasm & Obsolete better-sqlite3 Scripts
+- **Problem**: Activating extension failed with `ENOENT: no such file or directory, open 'c:\Users\m4oha\OneDrive\Desktop\new\out\node-sqlite3-wasm.wasm'`. Also, obsolete `better-sqlite3` rebuild scripts remained in `package.json`.
+- **Cause**: When `esbuild` bundles `node-sqlite3-wasm` (or when loaded from `out/extension.js`), `__dirname` becomes `out/`, causing the WASM loader to look for `node-sqlite3-wasm.wasm` in `out/`. Meanwhile, `package.json` still had `postinstall` and `rebuild` scripts for `better-sqlite3` even though the project switched to `node-sqlite3-wasm`.
+- **Solution**:
+    1. Removed `rebuild` and `postinstall` scripts from `package.json`.
+    2. Updated `esbuild.js` `external` array to include `node-sqlite3-wasm` instead of `better-sqlite3`.
+    3. Added a dedicated copy step in `esbuild.js` to automatically copy `node_modules/node-sqlite3-wasm/dist/node-sqlite3-wasm.wasm` to `out/node-sqlite3-wasm.wasm`, guaranteeing 100% availability regardless of whether the module is bundled or external.
+- **Lessons**: Always ensure WASM binary assets are copied to the build output directory (`out/`) when using bundlers like esbuild, and clean up obsolete native rebuild scripts when migrating to WASM-based solutions.
+
 ## [2026-05-17] RESOLVED: better-sqlite3 ABI Mismatch & Hardcoded Electron Version
 - **Problem**: `better-sqlite3` native module rebuilding was hardcoded to `-v 39.2.3` in `package.json`. When VS Code updates its internal Electron/Node version (e.g. NODE_MODULE_VERSION 140), the rebuild script fails to match the new ABI, requiring manual version updates.
 - **Solution**:

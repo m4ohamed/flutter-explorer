@@ -23,7 +23,14 @@ void main(List<String> args) async {
   }
 
   try {
+    stderr.writeln('START_ANALYSIS:Warming up Dart SDK Analyzer & resolving package graph...');
     final collection = AnalysisContextCollection(includedPaths: [libPath]);
+    int totalFiles = 0;
+    for (final context in collection.contexts) {
+      totalFiles += context.contextRoot.analyzedFiles().where((p) => p.endsWith('.dart')).length;
+    }
+    stderr.writeln('TOTAL:$totalFiles');
+
     final results = <Map<String, dynamic>>[];
     int fileCount = 0;
 
@@ -32,6 +39,7 @@ void main(List<String> args) async {
         if (!path.endsWith('.dart')) continue;
 
         try {
+          stderr.writeln('ANALYZING:${p.basename(path)}');
           // getResolvedUnit gives us AST + Elements + LineInfo
           final result = await context.currentSession.getResolvedUnit(path);
           if (result is ResolvedUnitResult) {
@@ -165,13 +173,12 @@ void main(List<String> args) async {
             fileInfo['widgets'] = widgetVisitor.widgets;
 
             results.add(fileInfo);
-            fileCount++;
-            if (fileCount % 10 == 0) {
-              stderr.writeln('PROGRESS:$fileCount');
-            }
           }
         } catch (e) {
           // Skip files that fail to analyze
+        } finally {
+          fileCount++;
+          stderr.writeln('PROGRESS:$fileCount');
         }
       }
     }

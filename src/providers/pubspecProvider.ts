@@ -26,15 +26,74 @@ export class PubspecProvider {
     constructor(workspaceRoot: string) {
         this.workspaceRoot = workspaceRoot;
     }
-    /** Parse pubspec.yaml and return structured data */
+    /** Parse pubspec.yaml or package.json and return structured data */
     analyze(): PubspecData | null {
         const pubspecPath = path.join(this.workspaceRoot, 'pubspec.yaml');
-        if (!fs.existsSync(pubspecPath)) { return null; }
+        if (fs.existsSync(pubspecPath)) {
+            try {
+                const content = fs.readFileSync(pubspecPath, 'utf-8');
+                return this.parsePubspec(content);
+            } catch {
+                return null;
+            }
+        }
+
+        const packageJsonPath = path.join(this.workspaceRoot, 'package.json');
+        if (fs.existsSync(packageJsonPath)) {
+            try {
+                const content = fs.readFileSync(packageJsonPath, 'utf-8');
+                return this.parsePackageJson(content);
+            } catch {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    private parsePackageJson(content: string): PubspecData {
         try {
-            const content = fs.readFileSync(pubspecPath, 'utf-8');
-            return this.parsePubspec(content);
+            const pkg = JSON.parse(content);
+            const dependencies = Object.entries(pkg.dependencies || {}).map(([name, ver]) => ({
+                name,
+                version: String(ver),
+                isPath: String(ver).startsWith('file:'),
+                isGit: String(ver).startsWith('git') || String(ver).includes('/')
+            }));
+            const devDependencies = Object.entries(pkg.devDependencies || {}).map(([name, ver]) => ({
+                name,
+                version: String(ver),
+                isPath: String(ver).startsWith('file:'),
+                isGit: String(ver).startsWith('git') || String(ver).includes('/')
+            }));
+
+            const warnings: string[] = [];
+            if (!pkg.description) warnings.push('⚠️ Missing "description" field in package.json');
+            if (!pkg.version) warnings.push('⚠️ Missing "version" field in package.json');
+
+            return {
+                name: pkg.name || 'unnamed',
+                version: pkg.version || '0.0.0',
+                description: pkg.description || '',
+                sdkConstraint: pkg.engines?.node ? `node: ${pkg.engines.node}` : 'any',
+                dependencies,
+                devDependencies,
+                flutterAssets: [],
+                flutterFonts: [],
+                warnings
+            };
         } catch {
-            return null;
+            return {
+                name: 'unnamed',
+                version: '0.0.0',
+                description: '',
+                sdkConstraint: 'any',
+                dependencies: [],
+                devDependencies: [],
+                flutterAssets: [],
+                flutterFonts: [],
+                warnings: ['⚠️ Failed to parse package.json']
+            };
         }
     }
     private parsePubspec(content: string): PubspecData {

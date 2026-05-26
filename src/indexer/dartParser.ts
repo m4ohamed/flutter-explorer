@@ -252,14 +252,14 @@ export class DartParser {
     typedefOld_: /^typedef\s+([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(([^)]*)\);/,
     annotation: /^@(\w+)/,
     class_: /^((?:abstract\s+|sealed\s+|base\s+|interface\s+|final\s+)*)(mixin\s+)?class\s+(\w+)(?:\s+extends\s+([\w<>,\s\[\]]+))?(?:\s+with\s+([\w<>,\s\[\]]+))?(?:\s+implements\s+([\w<>,\s\[\]]+))?/,
-    ctor: /^\s*(const\s+)?(factory\s+)?(\w+)(?:\.(\w+))?\s*\(((?:[^)(]+|\([^)(]*\))*)\)\s*(?::[^{;]*)?([\{;])/,
+    ctor: /^\s*(const\s+)?(factory\s+)?(\w+)(?:\.(\w+))?\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(?::[^{;]*)?([\{;])/,
     buildMethod: /(?:Widget|Route|PreferredSizeWidget|StatelessWidget|StatefulWidget)\s+(\w+)\s*\(([^)]*)\)/,
-    method: /^\s*(static\s+)?([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(((?:[^)(]+|\([^)(]*\))*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
+    method: /^\s*(static\s+)?([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
     getter: /^\s+(\w+)\s+get\s+(\w+)\s*(=>|\{)/,
     setter: /^\s+(\w+)\s+set\s+(\w+)\s*\(([^)]*)\)/,
     field: /^\s+(final|const|late)?\s*(final|const)?\s*(static\s+)?([\w<>\[\]?,\s]+?)\s+(\w+)\s*(=\s*[^;]+)?;/,
     topVar: /^(final|const|late)?\s*(final|const)?\s*([\w<>\[\]?,\s]+?)\s+(\w+)\s*(=\s*[^;]+)?;/,
-    topFunc: /^([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(((?:[^)(]+|\([^)(]*\))*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
+    topFunc: /^([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
     callPat: /(?:([a-zA-Z_]\w*)\.)?([a-zA-Z_]\w*)\s*\(/g,
     classDef: /class\s+(\w+)/,
     funcDef: /([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(/,
@@ -444,10 +444,16 @@ export class DartParser {
       if (trimmed.startsWith('import ') || trimmed.startsWith('export ')) { syncBraces(i); continue; }
 
       // Hardcoded text/color — use ORIGINAL line (we want real content for message)
-      // but only if it isn't inside a string/comment (maskedLine won't match)
-      const textMatch = maskedLine.match(P.hardText);
-      if (textMatch && !maskedLine.includes('.tr') && !maskedLine.includes('S.of') && !maskedLine.includes('Intl.message')) {
-        result.warnings.push({ type: 'hardcoded_text', message: `Hardcoded text: ${line.match(P.hardText)?.[0] ?? textMatch[0]}`, line: lineNum });
+      // but only if it isn't inside a string/comment
+      const textMatch = line.match(P.hardText);
+      if (textMatch) {
+        const idx = textMatch.index ?? -1;
+        if (idx !== -1 && maskedLine[idx] === 'T') {
+          const matchedStr = textMatch[0];
+          if (!matchedStr.includes('.tr') && !matchedStr.includes('S.of') && !matchedStr.includes('Intl.message')) {
+            result.warnings.push({ type: 'hardcoded_text', message: `Hardcoded text: ${matchedStr}`, line: lineNum });
+          }
+        }
       }
       const colorMatch = maskedLine.match(P.hardColor);
       if (colorMatch && !filePath.toLowerCase().includes('theme') && !filePath.toLowerCase().includes('color')) {
