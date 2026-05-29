@@ -2122,6 +2122,39 @@ server.registerTool(
   }
 );
 
+// --- Intl and Reindex Commands ---
+
+server.registerTool("flutter_run_intl_generate", {
+  description: "Manually trigger Intl generation (l10n.dart, messages_*.dart) via the built-in IntlGenerator. This will read the ARB files and write the generated Dart files.",
+  inputSchema: z.object({})
+}, async () => {
+  try {
+    const { IntlGenerator } = await import('./indexer/intlGenerator.js');
+    const generator = new IntlGenerator(currentProjectPath);
+    if (!generator.isEnabled()) {
+      return { content: [{ type: "text", text: "Flutter Intl is not enabled in pubspec.yaml." }] };
+    }
+    const generated = generator.generate();
+    return { content: [{ type: "text", text: `Generated ${generated.length} files:\n${generated.join('\n')}` }] };
+  } catch (error: any) {
+    return { content: [{ type: "text", text: `Error generating Intl: ${error.message}` }], isError: true };
+  }
+});
+
+server.registerTool("flutter_rebuild_index", {
+  description: "Manually trigger a full re-index of the Flutter project by the VS Code extension.",
+  inputSchema: z.object({})
+}, async () => {
+  try {
+    const triggerFile = path.join(currentProjectPath, '.vscode', '.flutter-explorer-trigger');
+    fs.mkdirSync(path.dirname(triggerFile), { recursive: true });
+    fs.writeFileSync(triggerFile, Date.now().toString());
+    return { content: [{ type: "text", text: "Triggered full re-index in VS Code. The extension will now rebuild the index." }] };
+  } catch (error: any) {
+    return { content: [{ type: "text", text: `Error triggering re-index: ${error.message}` }], isError: true };
+  }
+});
+
 // Start the server
 async function main() {
   if (typeof net.setDefaultAutoSelectFamilyAttemptTimeout === 'function') {

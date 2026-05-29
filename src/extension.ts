@@ -15,6 +15,7 @@ import { DependencyGraphProvider } from './providers/dependencyGraphProvider';
 import { PubspecProvider } from './providers/pubspecProvider';
 import { SidebarProvider } from './webview/sidebarProvider';
 import { setupMcpConfig } from './utils/mcpSetup';
+import { IntlGenerator } from './indexer/intlGenerator';
 
 let statusBarItem: vscode.StatusBarItem;
 
@@ -41,7 +42,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const config = vscode.workspace.getConfiguration('flutterExplorer');
     const debounceMs = config.get<number>('debounceMs', 300);
-    const fileWatcher = new FileWatcher(indexManager, debounceMs);
+    const fileWatcher = new FileWatcher(indexManager, workspaceRoot, debounceMs);
     const searchProvider = new SearchProvider(indexManager, workspaceRoot);
     const widgetTreeProvider = new WidgetTreeProvider(indexManager);
     const depGraphProvider = new DependencyGraphProvider(indexManager);
@@ -124,6 +125,72 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand('flutterExplorer.openGraph', () => {
             const { GraphWebviewPanel } = require('./views/graphWebview');
             GraphWebviewPanel.createOrShow(context.extensionUri, indexManager);
+        }),
+    );
+
+    // ─── Intl Generator Commands ───────────────────────────
+    context.subscriptions.push(
+        vscode.commands.registerCommand('flutterExplorer.intlInitialize', async () => {
+            try {
+                const generator = new IntlGenerator(workspaceRoot);
+                const locale = await vscode.window.showInputBox({
+                    prompt: 'Enter main locale (e.g. en, ar)',
+                    value: 'en'
+                });
+                if (!locale) return;
+                
+                const generated = generator.initialize(locale);
+                vscode.window.showInformationMessage(`Flutter Intl initialized. Created: ${generated.join(', ')}`);
+            } catch (err: any) {
+                vscode.window.showErrorMessage(`Intl Error: ${err.message}`);
+            }
+        }),
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('flutterExplorer.intlAddLocale', async () => {
+            try {
+                const generator = new IntlGenerator(workspaceRoot);
+                if (!generator.isEnabled()) {
+                    vscode.window.showErrorMessage('Flutter Intl is not initialized. Run "Flutter Intl: Initialize" first.');
+                    return;
+                }
+                const locale = await vscode.window.showInputBox({
+                    prompt: 'Enter new locale to add (e.g. ar, de_DE)'
+                });
+                if (!locale) return;
+                
+                const generated = generator.addLocale(locale);
+                vscode.window.showInformationMessage(`Locale ${locale} added. Created: ${generated.join(', ')}`);
+            } catch (err: any) {
+                vscode.window.showErrorMessage(`Intl Error: ${err.message}`);
+            }
+        }),
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('flutterExplorer.intlRemoveLocale', async () => {
+            try {
+                const generator = new IntlGenerator(workspaceRoot);
+                if (!generator.isEnabled()) {
+                    vscode.window.showErrorMessage('Flutter Intl is not initialized.');
+                    return;
+                }
+                const locales = generator.getLocales();
+                if (locales.length === 0) {
+                    vscode.window.showErrorMessage('No locales found.');
+                    return;
+                }
+                const locale = await vscode.window.showQuickPick(locales, {
+                    placeHolder: 'Select locale to remove'
+                });
+                if (!locale) return;
+                
+                const generated = generator.removeLocale(locale);
+                vscode.window.showInformationMessage(`Locale ${locale} removed. Updated ${generated.length} files.`);
+            } catch (err: any) {
+                vscode.window.showErrorMessage(`Intl Error: ${err.message}`);
+            }
         }),
     );
 

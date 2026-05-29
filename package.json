@@ -75,6 +75,18 @@
                 "command": "flutterExplorer.openGraph",
                 "title": "Flutter Explorer: Open Interactive Dependency Graph",
                 "icon": "$(graph)"
+            },
+            {
+                "command": "flutterExplorer.intlInitialize",
+                "title": "Flutter Intl: Initialize"
+            },
+            {
+                "command": "flutterExplorer.intlAddLocale",
+                "title": "Flutter Intl: Add locale"
+            },
+            {
+                "command": "flutterExplorer.intlRemoveLocale",
+                "title": "Flutter Intl: Remove locale"
             }
         ],
         "configuration": {
@@ -114,6 +126,11 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Enable legacy JSON index cache (bypasses SQLite writes to test performance)"
+                },
+                "flutterExplorer.autoGenerateIntl": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Automatically generate localization Dart files (l10n.dart, messages_*.dart) when ARB files are saved. Requires flutter_intl.enabled: true in pubspec.yaml."
                 }
             }
         }
