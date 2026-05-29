@@ -74,4 +74,20 @@ export class ProjectDetector {
     const dataDir = this.getDataDir(projectRoot);
     return path.join(dataDir, 'flutter-explorer.db');
   }
+
+  /**
+   * Determine the project type based on the presence of key files.
+   */
+  static getProjectType(projectRoot: string): 'flutter' | 'ts' | 'android' | 'unknown' {
+    if (fs.existsSync(path.join(projectRoot, 'pubspec.yaml'))) {
+      return 'flutter';
+    }
+    if (fs.existsSync(path.join(projectRoot, 'package.json')) || fs.existsSync(path.join(projectRoot, 'tsconfig.json'))) {
+      return 'ts';
+    }
+    if (fs.existsSync(path.join(projectRoot, 'build.gradle')) || fs.existsSync(path.join(projectRoot, 'settings.gradle')) || fs.existsSync(path.join(projectRoot, 'build.gradle.kts'))) {
+      return 'android';
+    }
+    return 'unknown';
+  }
 }

@@ -142,7 +142,7 @@ export async function generateSkills(workspaceRoot: string): Promise<void> {
     try {
         const username = os.userInfo().username;
         const homedir = os.homedir();
-        
+
         // 1. Generic workspace fallback (skills/ folder)
         const genericSkillsDir = path.join(workspaceRoot, 'skills');
         ensureDir(genericSkillsDir);

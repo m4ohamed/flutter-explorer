@@ -4,6 +4,8 @@ dist
 *.vsix
 .vscode-test
 .vscode/flutter-explorer-index.json
+.flutter-explorer
 .DS_Store
 .history
 code-review-graph-source/
+test

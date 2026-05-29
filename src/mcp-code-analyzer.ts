@@ -367,6 +367,17 @@ export class CodeAnalyzer {
           }
         }
       }
+
+      // 3. JS/TS/React Functional Components & Entry Files fallback
+      const isJsTsEntryFile = path.endsWith('App.tsx') || path.endsWith('App.jsx') || path.endsWith('index.tsx') || path.endsWith('index.jsx') || path.endsWith('index.ts') || path.endsWith('index.js') || path.endsWith('main.ts') || path.endsWith('main.js') || path.endsWith('main.tsx');
+      if (isJsTsEntryFile) {
+        for (const func of info.functions || []) {
+          entryPoints.push({ ...func, filePath: path, kind: 'Function', qname: this.getQName(path, null, func.name) });
+        }
+        for (const widget of info.widgets || []) {
+          entryPoints.push({ ...widget, filePath: path, kind: 'Widget', qname: this.getQName(path, null, widget.name) });
+        }
+      }
     }
     return entryPoints;
   }

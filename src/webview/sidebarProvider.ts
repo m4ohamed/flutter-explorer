@@ -9,6 +9,7 @@ import { SearchProvider } from '../providers/searchProvider';
 import { WidgetTreeProvider } from '../providers/widgetTreeProvider';
 import { DependencyGraphProvider } from '../providers/dependencyGraphProvider';
 import { PubspecProvider } from '../providers/pubspecProvider';
+import { ProjectDetector } from '../utils/projectDetector';
 export class SidebarProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'flutterExplorer.sidebar';
     private view?: vscode.WebviewView;
@@ -116,6 +117,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             jsContent = fs.readFileSync(path.join(mediaPath, 'sidebar.js'), 'utf-8');
         } catch { jsContent = ''; }
         const nonce = getNonce();
+
+        const projectType = ProjectDetector.getProjectType(this.workspaceRoot);
+        let tabTitle = '📦 Pubspec';
+        let fileHeader = 'pubspec.yaml';
+        if (projectType === 'ts') {
+            tabTitle = '📦 Package';
+            fileHeader = 'package.json';
+        } else if (projectType === 'android') {
+            tabTitle = '📦 Gradle';
+            fileHeader = 'build.gradle';
+        }
+
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -131,7 +144,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       <button class="tab active" data-tab="search" title="Search">🔍 Search</button>
       <button class="tab" data-tab="tree" title="Widget Tree">🌳 Tree</button>
       <button class="tab" data-tab="graph" title="Dependencies">📊 Graph</button>
-      <button class="tab" data-tab="pubspec" title="Pubspec">📦 Pubspec</button>
+      <button class="tab" data-tab="pubspec" title="${fileHeader}">${tabTitle}</button>
       <button class="tab" data-tab="libraries" title="External Libraries">📚 Libraries</button>
       <button class="tab" data-tab="analysis" title="Analysis">⚠️ Analysis</button>
     </div>
@@ -161,7 +174,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <!-- Widget Tree Tab -->
     <div class="tab-content" id="tab-tree">
       <div class="tree-header">
-        <span class="tree-file-name" id="treeFileName">No Dart file open</span>
+        <span class="tree-file-name" id="treeFileName">No file open</span>
         <button class="icon-btn" id="refreshTree" title="Refresh">⟳</button>
       </div>
       <div class="tree-view" id="treeView"></div>
@@ -181,7 +194,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <!-- Pubspec Tab -->
     <div class="tab-content" id="tab-pubspec">
       <div class="pubspec-header">
-        <span>pubspec.yaml</span>
+        <span>${fileHeader}</span>
         <button class="icon-btn" id="refreshPubspec" title="Refresh">⟳</button>
       </div>
       <div class="pubspec-content" id="pubspecContent"></div>

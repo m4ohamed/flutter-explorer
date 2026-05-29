@@ -26,7 +26,7 @@ export class PubspecProvider {
     constructor(workspaceRoot: string) {
         this.workspaceRoot = workspaceRoot;
     }
-    /** Parse pubspec.yaml or package.json and return structured data */
+    /** Parse pubspec.yaml, package.json, or build.gradle and return structured data */
     analyze(): PubspecData | null {
         const pubspecPath = path.join(this.workspaceRoot, 'pubspec.yaml');
         if (fs.existsSync(pubspecPath)) {
@@ -48,7 +48,87 @@ export class PubspecProvider {
             }
         }
 
+        // Try Android gradle files
+        for (const file of ['build.gradle', 'app/build.gradle', 'build.gradle.kts', 'app/build.gradle.kts']) {
+            const gradlePath = path.join(this.workspaceRoot, file);
+            if (fs.existsSync(gradlePath)) {
+                try {
+                    const content = fs.readFileSync(gradlePath, 'utf-8');
+                    return this.parseGradle(content);
+                } catch {
+                    // try next
+                }
+            }
+        }
+
         return null;
+    }
+
+    private parseGradle(content: string): PubspecData {
+        const lines = content.split('\n');
+        const dependencies: PubspecDep[] = [];
+        const devDependencies: PubspecDep[] = [];
+        const warnings: string[] = [];
+        let sdkConstraint = 'any';
+        let version = '1.0.0';
+
+        const depRegex = /^\s*(implementation|api|kapt|annotationProcessor|compileOnly)\s*\(?\s*['"]([^'"]+)['"]\s*\)?/;
+        const devDepRegex = /^\s*(testImplementation|androidTestImplementation|testCompileOnly)\s*\(?\s*['"]([^'"]+)['"]\s*\)?/;
+        const sdkRegex = /^\s*(compileSdk|targetSdk)\s*=?\s*(\d+)/;
+        const versionRegex = /^\s*versionName\s*=?\s*['"]([^'"]+)['"]/;
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('//') || trimmed.startsWith('/*')) continue;
+
+            const sdkMatch = trimmed.match(sdkRegex);
+            if (sdkMatch) {
+                sdkConstraint = `${sdkMatch[1]}: ${sdkMatch[2]}`;
+                continue;
+            }
+
+            const verMatch = trimmed.match(versionRegex);
+            if (verMatch) {
+                version = verMatch[1];
+                continue;
+            }
+
+            const depMatch = trimmed.match(depRegex);
+            if (depMatch) {
+                const parts = depMatch[2].split(':');
+                dependencies.push({
+                    name: parts[0] + (parts[1] ? ':' + parts[1] : ''),
+                    version: parts[2] || 'any',
+                    isPath: false,
+                    isGit: false
+                });
+                continue;
+            }
+
+            const devMatch = trimmed.match(devDepRegex);
+            if (devMatch) {
+                const parts = devMatch[2].split(':');
+                devDependencies.push({
+                    name: parts[0] + (parts[1] ? ':' + parts[1] : ''),
+                    version: parts[2] || 'any',
+                    isPath: false,
+                    isGit: false
+                });
+                continue;
+            }
+        }
+
+        return {
+            name: path.basename(this.workspaceRoot),
+            version,
+            description: 'Android Gradle Project',
+            sdkConstraint,
+            dependencies,
+            devDependencies,
+            flutterAssets: [],
+            flutterFonts: [],
+            warnings
+        };
     }
 
     private parsePackageJson(content: string): PubspecData {

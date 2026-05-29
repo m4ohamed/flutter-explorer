@@ -4,10 +4,106 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { generateSkills } from './skillsGenerator';
 
+async function setupGeminiMd(homedir: string): Promise<void> {
+    try {
+        const geminiDir = path.join(homedir, '.gemini');
+        if (!fs.existsSync(geminiDir)) {
+            fs.mkdirSync(geminiDir, { recursive: true });
+        }
+        const geminiMdPath = path.join(geminiDir, 'GEMINI.md');
+        const ruleHeader = "# 📑 تعليمات وقواعد التطوير البرمجي لـ Gemini Agent";
+        
+        const content = `${ruleHeader}
+
+مجموعة من القواعد الأساسية والإلزامية لضمان جودة الأكواد، وتسريع عملية التطوير، وتفادي الأخطاء المتكررة. **يجب قراءة هذا الملف وملفات الأخطاء والدروس عند بدء أي جلسة عمل.**
+
+---
+
+## 🎯 1. الخطوة الأولى عند بدء الجلسة (إجباري)
+1. **قراءة ملف الأخطاء**: قم فوراً بفتح وقراءة [error.md](./error.md) لفحص المشاكل السابقة وتجنبها.
+2. **قراءة ملف الدروس**: قم بفتح [lessons.md](./lessons.md) لاستيعاب الأنماط البرمجية الخاطئة والمصححة حتى لا تكررها رياضياً.
+3. **استكشاف الفهرس**: احرص على استخدام أدوات الـ MCP الخاصة بالمشروع \`@mcp:flutter-explorer-mcp:\` بشكل أساسي ومستمر للبحث عن المراجع، وفهم البنية، واستكشاف العلاقات البرمجية لضمان أقصى درجات الدقة والتوافق.
+
+---
+
+## 🛠️ 2. التحقق من جودة الكود وبناء المشروع
+بعد أي تعديل في الأكواد المصدرية (وليس ملفات التوثيق مثل \`.md\` أو \`.txt\`)، يجب إجراء التحققات التالية تلقائياً ودون طلب إذن:
+
+* **مشاريع TypeScript / React**:
+  شغل الأمر التالي فوراً للتحقق من سلامة الأنواع وتوافقها:
+  \`\`\`bash
+  npx tsc --noEmit 2>&1
+  \`\`\`
+  *إذا كان هناك نظام بناء أو تجميع (مثل \`esbuild\` في هذه الإضافة)، فقم بتشغيل أمر البناء للتأكد من نجاح تجميع الحزمة بالكامل (مثل \`npm run compile\`).*
+* **مشاريع Flutter / Dart**:
+  استخدم أدوات الـ MCP الخاصة بـ Dart (إن وجدت) لفحص الأخطاء لأنها أسرع، أو قم بتشغيل الفحص العام:
+  \`\`\`bash
+  flutter analyze
+  \`\`\`
+* **المشاريع الأخرى**:
+  شغل أداة التحليل والتدقيق الخاصة بنوع ولغة المشروع الفعلي.
+
+---
+
+## 📝 3. توثيق الأخطاء والتطور المستمر
+
+### 1️⃣ ملف الأخطاء والحلول ([error.md](./error.md))
+قبل كتابة الأكواد المصدرية الجديدة أو إجراء تعديلات كبيرة، قم بتسجيل الأخطاء المتوقعة أو التي واجهتها وكيفية إصلاحها متبعاً هذا الهيكل:
+* **الخطأ (The Bug)**: رسالة الخطأ والسطر المسبب.
+* **السبب الجذري (Root Cause)**: تحليل المشكلة ولماذا حدثت.
+* **الحل الفعلي (The Fix)**: الكود قبل وبعد التعديل أو التعديل البرمجي المتخذ.
+
+### 2️⃣ ملف خريطة الطريق ([development_roadmap.md](./development_roadmap.md))
+سجل تقدم العمل اليومي بشكل دوري ونظم المهام في أقسام واضحة (المهام المكتملة، المهام الحالية، والمهام المستقبلية) لضمان سهولة استئناف العمل في الجلسات القادمة.
+
+### 3️⃣ ملف الدروس المستفادة ([lessons.md](./lessons.md))
+يمثل حلقة تحسين ذاتي مستمر (Self-optimizing loop). عندما يرتكب وكيل الذكاء الاصطناعي خطأً ويقوم المطور البشري بتصحيحه، **يجب صياغة الدرس وتوثيقه رياضياً وبرمجياً فوراً** لمنع تكراره مستقبلاً بالصيغة التالية:
+* **النمط الخاطئ (Anti-pattern)**: الكود أو السلوك المسبب للمشكلة.
+* **النمط الصحيح (Approved Pattern)**: الكود السليم والآمن المعتمد.
+`;
+
+        if (!fs.existsSync(geminiMdPath)) {
+            fs.writeFileSync(geminiMdPath, content, 'utf8');
+            console.log(`Created GEMINI.md at: ${geminiMdPath}`);
+        } else {
+            const existing = fs.readFileSync(geminiMdPath, 'utf8');
+            if (!existing.includes(ruleHeader)) {
+                const updated = existing + "\n\n" + content;
+                fs.writeFileSync(geminiMdPath, updated, 'utf8');
+                console.log(`Appended Gemini Agent rules to existing GEMINI.md`);
+            } else {
+                const idx = existing.indexOf(ruleHeader);
+                if (idx !== -1) {
+                    const before = existing.substring(0, idx);
+                    fs.writeFileSync(geminiMdPath, before + content, 'utf8');
+                    console.log(`Updated Gemini Agent rules block in GEMINI.md`);
+                }
+            }
+        }
+    } catch (e) {
+        console.error('Failed to setup GEMINI.md:', e);
+    }
+}
+
 export async function setupMcpConfig(extensionPath: string, workspaceRoot: string): Promise<void> {
     try {
         // Generate AI Skills instructions
         await generateSkills(workspaceRoot);
+
+        // Setup global GEMINI.md rules
+        await setupGeminiMd(os.homedir());
+
+        // Write the active project path to a global file for fallback resolution
+        try {
+            const geminiDir = path.join(os.homedir(), '.gemini');
+            if (!fs.existsSync(geminiDir)) {
+                fs.mkdirSync(geminiDir, { recursive: true });
+            }
+            const activeProjectPath = path.join(geminiDir, 'active-project.txt');
+            fs.writeFileSync(activeProjectPath, workspaceRoot, 'utf8');
+        } catch (e) {
+            console.error('Failed to write active project fallback:', e);
+        }
 
         const username = os.userInfo().username;
         const mcpServerPath = path.join(extensionPath, 'out', 'mcp-server.js').replace(/\\/g, '/');

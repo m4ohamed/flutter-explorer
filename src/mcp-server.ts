@@ -4,6 +4,7 @@ import { z } from "zod";
 import * as fs from "fs";
 import * as path from "path";
 import * as net from "net";
+import * as os from "os";
 import { DirectSearch } from './mcp-direct-search.js';
 import { ArbEditor } from './mcp-arb-editor.js';
 import { CodeAnalyzer } from './mcp-code-analyzer.js';
@@ -27,8 +28,21 @@ console.log = function (...args) {
 import { ProjectDetector } from './utils/projectDetector.js';
 import { SqliteCache } from './indexer/sqliteCache.js';
 
-// Current project path, resolved via ProjectDetector (looks for pubspec.yaml or .git)
-let currentProjectPath = ProjectDetector.findProjectRoot(process.cwd());
+// Current project path, resolved via environment variable or global active project fallback
+let currentProjectPath: string = process.env.FLUTTER_PROJECT_PATH || "";
+if (!currentProjectPath || currentProjectPath === "${workspaceFolder}") {
+  try {
+    const fallbackPath = path.join(os.homedir(), '.gemini', 'active-project.txt');
+    if (fs.existsSync(fallbackPath)) {
+      currentProjectPath = fs.readFileSync(fallbackPath, 'utf-8').trim();
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+if (!currentProjectPath) {
+  currentProjectPath = ProjectDetector.findProjectRoot(process.cwd());
+}
 const PUBSPEC_PATH = () => path.join(currentProjectPath, "pubspec.yaml");
 
 let sqliteCache: SqliteCache | null = null;
@@ -937,16 +951,29 @@ server.registerTool(
   {
     description: "Get the structure of the project (folders and files), specifically focusing on the lib/ directory.",
     inputSchema: z.object({
-      targetPath: z.string().optional().describe("Specific subdirectory to explore (defaults to 'lib')"),
+      targetPath: z.string().optional().describe("Specific subdirectory to explore (defaults to 'lib', 'src', or 'app/src/main' based on existence)"),
     }),
   },
-  async ({ targetPath = "lib" }) => {
-    const fullPath = path.join(currentProjectPath, targetPath);
-    if (!fs.existsSync(fullPath)) {
-      return { content: [{ type: "text" as const, text: `Path not found: ${targetPath}` }] };
+  async ({ targetPath }) => {
+    let resolvedTargetPath = targetPath;
+    if (!resolvedTargetPath) {
+      if (fs.existsSync(path.join(currentProjectPath, "lib"))) {
+        resolvedTargetPath = "lib";
+      } else if (fs.existsSync(path.join(currentProjectPath, "src"))) {
+        resolvedTargetPath = "src";
+      } else if (fs.existsSync(path.join(currentProjectPath, "app/src/main"))) {
+        resolvedTargetPath = "app/src/main";
+      } else {
+        resolvedTargetPath = ""; // default to root if none of the above exist
+      }
     }
 
-    const structure = getDirectoryStructure(fullPath, targetPath);
+    const fullPath = path.join(currentProjectPath, resolvedTargetPath);
+    if (!fs.existsSync(fullPath)) {
+      return { content: [{ type: "text" as const, text: `Path not found: ${resolvedTargetPath || "root"}` }] };
+    }
+
+    const structure = getDirectoryStructure(fullPath, resolvedTargetPath);
 
     const formatStructure = (items: any[], indent: string = ""): string => {
       let output = "";
@@ -1330,16 +1357,26 @@ server.registerTool(
   },
   async ({ functionName, filePath, parentClass }: { functionName: string; filePath?: string; parentClass?: string }) => {
     const index = await readIndex();
-    if (!index || !index.dart) return { content: [{ type: "text", text: "Index not found." }] };
+    if (!index || !index.dart) return await handleIndexError();
     const analyzer = new CodeAnalyzer(currentProjectPath);
     let targetFile = filePath;
+    let resolvedParentClass = parentClass;
 
     if (!targetFile) {
       for (const file in index.dart) {
         const info = index.dart[file] as DartFileInfo;
-        const found = info.functions.some((f: FunctionInfo) =>
-          f.name === functionName && (parentClass ? f.parentClass === parentClass : !f.parentClass)
+        let found = info.functions.some((f: FunctionInfo) =>
+          f.name === functionName && (resolvedParentClass ? f.parentClass === resolvedParentClass : !f.parentClass)
         );
+        if (!found && !resolvedParentClass) {
+          const matchingFunc = info.functions.find((f: FunctionInfo) => f.name === functionName);
+          if (matchingFunc) {
+            found = true;
+            if (matchingFunc.parentClass) {
+              resolvedParentClass = matchingFunc.parentClass;
+            }
+          }
+        }
         if (found) { targetFile = file; break; }
       }
     }
@@ -1354,10 +1391,10 @@ server.registerTool(
       return { content: [{ type: "text", text: `Error reading file: ${error}` }] };
     }
 
-    const elementType = parentClass ? 'method' : 'function';
+    const elementType = resolvedParentClass ? 'method' : 'function';
     const existingParsed = index.dart[targetFile] as DartFileInfo | undefined;
     const parser = getParserForFile(targetFile);
-    const result = parser.extractCodeBlock(targetContent, elementType, functionName, parentClass, existingParsed);
+    const result = parser.extractCodeBlock(targetContent, elementType, functionName, resolvedParentClass, existingParsed);
 
     if (!result) return { content: [{ type: "text" as const, text: `Could not extract function body for ${functionName}` }] };
 
@@ -1437,6 +1474,22 @@ server.registerTool(
       return path.posix.normalize(path.posix.join(dir.replace(/\\/g, '/'), importPath));
     };
 
+    const resolveJsTsAndroidImportPath = (fromFile: string, importPath: string): string | null => {
+      if (!importPath.startsWith('.') && !importPath.startsWith('/')) {
+        return null;
+      }
+      const dir = path.dirname(fromFile);
+      const joined = path.posix.normalize(path.posix.join(dir.replace(/\\/g, '/'), importPath));
+      for (const ext of ['', '.ts', '.tsx', '.js', '.jsx', '.kt', '.java']) {
+        const testPath = joined + ext;
+        if (fs.existsSync(path.join(currentProjectPath, testPath)) && !fs.statSync(path.join(currentProjectPath, testPath)).isDirectory()) {
+          return testPath;
+        }
+      }
+      return null;
+    };
+
+    const isJsTsOrAndroid = targetFile.endsWith('.ts') || targetFile.endsWith('.tsx') || targetFile.endsWith('.js') || targetFile.endsWith('.jsx') || targetFile.endsWith('.kt') || targetFile.endsWith('.java');
     const dependencies = analyzer.extractConstructorDependencies(result.body);
     const importDependencies: string[] = [];
     
@@ -1449,7 +1502,7 @@ server.registerTool(
       const lines = targetContent.split('\n');
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        const importMatch = line.match(/import\s+['"]([^'"]+)['"]/);
+        const importMatch = line.match(/import\s+['"]([^'"]+)['"]/) || line.match(/require\(\s*['"]([^'"]+)['"]\s*\)/);
         if (importMatch) {
           imports.push({ path: importMatch[1], line: i + 1 });
         }
@@ -1458,26 +1511,31 @@ server.registerTool(
 
     for (const imp of imports) {
       const lowerPath = imp.path.toLowerCase();
-      const resolvedPath = resolveImportPath(targetFile, imp.path, projectName);
-      const importedFileInfo = index.dart[resolvedPath] as DartFileInfo | undefined;
-
       let isMatching = false;
-      if (importedFileInfo) {
-        isMatching = importedFileInfo.classes.some(c => dependencies.includes(c.name));
-      }
-      
-      if (!isMatching) {
-        isMatching = dependencies.some(dep => {
-          const depLower = dep.toLowerCase();
-          return lowerPath.includes(depLower) || lowerPath.includes(depLower.replace('service', '').replace('repository', ''));
-        });
-      }
 
-      if (!isMatching) {
-        isMatching = [
-          'repository', 'service', 'provider', 'usecase', 'datasource',
-          'notifier', 'bloc', 'controller', 'helper', 'api'
-        ].some(keyword => lowerPath.includes(keyword));
+      if (isJsTsOrAndroid) {
+        isMatching = true;
+      } else {
+        const resolvedPath = resolveImportPath(targetFile, imp.path, projectName);
+        const importedFileInfo = index.dart[resolvedPath] as DartFileInfo | undefined;
+
+        if (importedFileInfo) {
+          isMatching = importedFileInfo.classes.some(c => dependencies.includes(c.name));
+        }
+        
+        if (!isMatching) {
+          isMatching = dependencies.some(dep => {
+            const depLower = dep.toLowerCase();
+            return lowerPath.includes(depLower) || lowerPath.includes(depLower.replace('service', '').replace('repository', ''));
+          });
+        }
+
+        if (!isMatching) {
+          isMatching = [
+            'repository', 'service', 'provider', 'usecase', 'datasource',
+            'notifier', 'bloc', 'controller', 'helper', 'api'
+          ].some(keyword => lowerPath.includes(keyword));
+        }
       }
 
       if (isMatching) {
@@ -1743,7 +1801,7 @@ let isAnalyzeRunning = false;
 server.registerTool(
   "flutter_run_analyze",
   {
-    description: "Run 'flutter analyze' on the current project to find compilation errors and warnings.",
+    description: "Run compiler checks or linters on the current project based on its detected type (Flutter, TS/JS, Android).",
     inputSchema: z.object({}),
   },
   async () => {
@@ -1751,22 +1809,41 @@ server.registerTool(
       return { content: [{ type: "text", text: "Another analysis is already running. Please wait." }] };
     }
     
-    const hasPubspec = fs.existsSync(path.join(currentProjectPath, "pubspec.yaml"));
-    if (!hasPubspec) {
-      return { content: [{ type: "text", text: `Error: 'pubspec.yaml' not found in current project path: ${currentProjectPath}. Use 'flutter_set_project_path' to set it first.` }] };
+    const projectType = ProjectDetector.getProjectType(currentProjectPath);
+    let command = "";
+    let args: string[] = [];
+
+    if (projectType === "flutter") {
+      command = "flutter";
+      args = ["analyze"];
+    } else if (projectType === "ts") {
+      command = "npx";
+      args = ["tsc", "--noEmit"];
+    } else if (projectType === "android") {
+      const isWindows = process.platform === "win32";
+      const gradlewFile = isWindows ? "gradlew.bat" : "./gradlew";
+      if (fs.existsSync(path.join(currentProjectPath, gradlewFile))) {
+        command = gradlewFile;
+        args = ["lint"];
+      } else {
+        command = "gradle";
+        args = ["lint"];
+      }
+    } else {
+      return { content: [{ type: "text", text: `Error: Could not determine project type for analysis at: ${currentProjectPath}.` }] };
     }
 
     isAnalyzeRunning = true;
     try {
       const result = await new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
-        const child = spawn("flutter", ["analyze"], { cwd: currentProjectPath, shell: true });
+        const child = spawn(command, args, { cwd: currentProjectPath, shell: true });
         let stdout = "";
         let stderr = "";
         
         const timer = setTimeout(() => {
           child.kill();
-          resolve({ stdout, stderr: stderr + "\nProcess timed out after 60 seconds.", code: -1 });
-        }, 60000);
+          resolve({ stdout, stderr: stderr + "\nProcess timed out after 5 minutes.", code: -1 });
+        }, 300000);
 
         child.stdout.on("data", (data) => stdout += data.toString());
         child.stderr.on("data", (data) => stderr += data.toString());
@@ -1776,21 +1853,50 @@ server.registerTool(
         });
       });
 
-      const lines = result.stdout.split("\n");
+      const lines = result.stdout.split("\n").concat(result.stderr.split("\n"));
       const diagnostics: any[] = [];
-      const regex = /^\s*(info|warning|error)\s+•\s+(.*?)\s+•\s+(.*?):(\d+):(\d+)\s+•\s+(.*)$/i;
+      const flutterRegex = /^\s*(info|warning|error)\s+•\s+(.*?)\s+•\s+(.*?):(\d+):(\d+)\s+•\s+(.*)$/i;
+      const tscRegex = /^(.*?)\((\d+),(\d+)\):\s+(error|warning|info)\s+(TS\d+):\s+(.*)$/i;
+      const javaRegex = /^(.*?):(\d+):\s+(error|warning|info):\s+(.*)$/i;
 
       for (const line of lines) {
-        const match = line.match(regex);
-        if (match) {
+        const flutterMatch = line.match(flutterRegex);
+        if (flutterMatch) {
           diagnostics.push({
-            severity: match[1].toLowerCase(),
-            description: match[2].trim(),
-            file: match[3].trim(),
-            line: parseInt(match[4], 10),
-            column: parseInt(match[5], 10),
-            message: match[6].trim()
+            severity: flutterMatch[1].toLowerCase(),
+            description: flutterMatch[2].trim(),
+            file: flutterMatch[3].trim(),
+            line: parseInt(flutterMatch[4], 10),
+            column: parseInt(flutterMatch[5], 10),
+            message: flutterMatch[6].trim()
           });
+          continue;
+        }
+
+        const tscMatch = line.match(tscRegex);
+        if (tscMatch) {
+          diagnostics.push({
+            severity: tscMatch[4].toLowerCase(),
+            description: tscMatch[5].trim(),
+            file: tscMatch[1].trim(),
+            line: parseInt(tscMatch[2], 10),
+            column: parseInt(tscMatch[3], 10),
+            message: tscMatch[6].trim()
+          });
+          continue;
+        }
+
+        const javaMatch = line.match(javaRegex);
+        if (javaMatch) {
+          diagnostics.push({
+            severity: javaMatch[3].toLowerCase(),
+            description: "Compilation Issue",
+            file: javaMatch[1].trim(),
+            line: parseInt(javaMatch[2], 10),
+            column: 1,
+            message: javaMatch[4].trim()
+          });
+          continue;
         }
       }
 
@@ -1798,7 +1904,7 @@ server.registerTool(
         content: [{
           type: "text" as const,
           text: JSON.stringify({
-            success: diagnostics.filter(d => d.severity === "error").length === 0,
+            success: result.code !== -1 && diagnostics.filter(d => d.severity === "error").length === 0,
             exitCode: result.code,
             diagnosticsCount: diagnostics.length,
             diagnostics: diagnostics.slice(0, 100),
