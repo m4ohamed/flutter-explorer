@@ -464,20 +464,62 @@
     container.innerHTML = html;
   }
 
+  var lastAnalysisData = null;
+
+  var typeFilterEl = document.getElementById('analysisTypeFilter');
+  if (typeFilterEl) {
+    typeFilterEl.addEventListener('change', function() {
+      if (lastAnalysisData) renderAnalysisContent(lastAnalysisData);
+    });
+  }
+  var colorFilterEl = document.getElementById('analysisColorFilter');
+  if (colorFilterEl) {
+    colorFilterEl.addEventListener('input', function() {
+      if (lastAnalysisData) renderAnalysisContent(lastAnalysisData);
+    });
+  }
+  var fileFilterEl = document.getElementById('analysisFileFilter');
+  if (fileFilterEl) {
+    fileFilterEl.addEventListener('input', function() {
+      if (lastAnalysisData) renderAnalysisContent(lastAnalysisData);
+    });
+  }
+
   function renderAnalysis(data) {
+    lastAnalysisData = data;
+    renderAnalysisContent(data);
+  }
+
+  function renderAnalysisContent(data) {
     var container = document.getElementById('analysisContent');
     if (!container) { return; }
+
+    var typeFilter = typeFilterEl ? typeFilterEl.value : 'all';
+    var textFilter = colorFilterEl ? colorFilterEl.value.toLowerCase().trim() : '';
+    var fileFilter = fileFilterEl ? fileFilterEl.value.toLowerCase().trim() : '';
 
     var html = '';
 
     // Missing Translations
     html += '<div class="pubspec-section">';
     html += '<div class="pubspec-section-title">🌐 Missing Translations</div>';
-    if (!data.missingTranslations || data.missingTranslations.length === 0) {
-      html += '<div class="empty-state"><div class="empty-state-text">All ARB files are fully synced!</div></div>';
-    } else {
+    
+    var filteredTranslations = [];
+    if (data.missingTranslations) {
       for (var i = 0; i < data.missingTranslations.length; i++) {
         var mt = data.missingTranslations[i];
+        if (fileFilter && !mt.filePath.toLowerCase().includes(fileFilter)) continue;
+        filteredTranslations.push(mt);
+      }
+    }
+
+    if (filteredTranslations.length === 0 && data.missingTranslations && data.missingTranslations.length > 0) {
+        html += '<div class="empty-state"><div class="empty-state-text">No translations match the filter!</div></div>';
+    } else if (!data.missingTranslations || data.missingTranslations.length === 0) {
+      html += '<div class="empty-state"><div class="empty-state-text">All ARB files are fully synced!</div></div>';
+    } else {
+      for (var i = 0; i < filteredTranslations.length; i++) {
+        var mt = filteredTranslations[i];
         html += '<div class="dep-item" style="flex-direction: column; align-items: flex-start; padding: 8px;">';
         html += '<div class="dep-name" style="margin-bottom: 4px; font-weight: bold;">' + escapeHtml(mt.filePath) + '</div>';
         html += '<div style="display: flex; flex-wrap: wrap; gap: 4px;">';
@@ -489,20 +531,46 @@
     }
     html += '</div>';
 
-    // Hardcoded Warnings
+    // Hardcoded & Duplicate Warnings
     html += '<div class="pubspec-section">';
-    html += '<div class="pubspec-section-title">⚠️ Hardcoded Text & Colors</div>';
-    if (!data.warnings || data.warnings.length === 0) {
-      html += '<div class="empty-state"><div class="empty-state-text">No hardcoded strings or colors found!</div></div>';
-    } else {
+    html += '<div class="pubspec-section-title">⚠️ Hardcoded & Duplicated Code</div>';
+    
+    var filteredWarnings = [];
+    if (data.warnings) {
       for (var w = 0; w < data.warnings.length; w++) {
         var fileWarn = data.warnings[w];
+        if (fileFilter && !fileWarn.filePath.toLowerCase().includes(fileFilter)) continue;
+        
+        var matchingWarns = fileWarn.warnings.filter(function(warn) {
+          if (typeFilter !== 'all' && warn.type !== typeFilter) return false;
+          if (textFilter && !warn.message.toLowerCase().includes(textFilter)) return false;
+          return true;
+        });
+
+        if (matchingWarns.length > 0) {
+          filteredWarnings.push({
+            filePath: fileWarn.filePath,
+            warnings: matchingWarns
+          });
+        }
+      }
+    }
+
+    if (filteredWarnings.length === 0 && data.warnings && data.warnings.length > 0) {
+      html += '<div class="empty-state"><div class="empty-state-text">No warnings match the filter!</div></div>';
+    } else if (!data.warnings || data.warnings.length === 0) {
+      html += '<div class="empty-state"><div class="empty-state-text">No hardcoded strings or colors found!</div></div>';
+    } else {
+      for (var w = 0; w < filteredWarnings.length; w++) {
+        var fileWarn = filteredWarnings[w];
         html += '<div class="dep-item analysis-file-link" data-file="' + escapeHtml(fileWarn.filePath) + '" style="flex-direction: column; align-items: flex-start; padding: 8px; cursor: pointer;">';
         html += '<div class="dep-name" style="margin-bottom: 4px; font-weight: bold;">' + escapeHtml(fileWarn.filePath) + ' (' + fileWarn.warnings.length + ')</div>';
         for (var k = 0; k < fileWarn.warnings.length; k++) {
           var warn = fileWarn.warnings[k];
-          var bgColor = warn.type === 'hardcoded_text' ? '#3d3800' : '#1a3d1a';
-          var fgColor = warn.type === 'hardcoded_text' ? '#e2c08d' : '#73c991';
+          var bgColor = warn.type === 'hardcoded_text' ? '#3d3800' : 
+                        warn.type === 'hardcoded_color' ? '#1a3d1a' : '#4d1a4d'; // Purple for duplicated logic
+          var fgColor = warn.type === 'hardcoded_text' ? '#e2c08d' : 
+                        warn.type === 'hardcoded_color' ? '#73c991' : '#e699ff';
           html += '<div class="warning-item analysis-warn-link" data-file="' + escapeHtml(fileWarn.filePath) + '" data-line="' + warn.line + '" style="width: 100%; display: flex; justify-content: space-between;">';
           html += '<span>' + escapeHtml(warn.message) + '</span>';
           html += '<span class="dep-badge" style="background: ' + bgColor + '; color: ' + fgColor + ';">L' + warn.line + '</span>';

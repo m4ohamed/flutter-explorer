@@ -459,6 +459,9 @@ export class IndexManager {
     for (const info of this.index.values()) {
       classes += info.classes.length;
       functions += info.functions.length;
+      functions += info.classes.reduce((sum, c) => sum + c.methods.length, 0);
+      functions += (info.extensions || []).reduce((sum, e) => sum + e.methods.length, 0);
+      functions += (info.extensionTypes || []).reduce((sum, et) => sum + et.methods.length, 0);
       widgets += info.widgets.length;
       enums += info.enums.length;
       mixins += info.mixins.length;
@@ -505,7 +508,13 @@ export class IndexManager {
           }
         }
         if (!filter || filter === 'function') {
-          for (const f of info.functions) {
+          const allFunctions = [
+            ...info.functions,
+            ...info.classes.flatMap(c => c.methods),
+            ...(info.extensions || []).flatMap(e => e.methods),
+            ...(info.extensionTypes || []).flatMap(et => et.methods)
+          ];
+          for (const f of allFunctions) {
             if (f.name.toLowerCase().includes(q)) {
               const usage = info.functionUsages?.find(u => u.functionName === f.name && u.parentClass === f.parentClass);
               const usageCount = usage ? usage.calledByFunctions.length : 0;
@@ -959,9 +968,57 @@ export class IndexManager {
 
   getWarnings(): { filePath: string; warnings: import('./dartParser').WarningInfo[] }[] {
     const results: { filePath: string; warnings: import('./dartParser').WarningInfo[] }[] = [];
+    
+    // Group by bodyHash to find duplicates
+    const hashGroups = new Map<string, { type: string, name: string, filePath: string, line: number }[]>();
+    
     for (const [filePath, info] of this.index.entries()) {
-      if (info.warnings && info.warnings.length > 0)
-        results.push({ filePath, warnings: info.warnings });
+      const processItem = (item: any, type: string) => {
+        if (item.bodyHash && item.bodyLength && item.bodyLength >= 50) {
+          if (!hashGroups.has(item.bodyHash)) hashGroups.set(item.bodyHash, []);
+          hashGroups.get(item.bodyHash)!.push({ type, name: item.name, filePath, line: item.line });
+        }
+      };
+      
+      for (const c of info.classes || []) processItem(c, 'class');
+      for (const f of info.functions || []) processItem(f, 'function');
+      for (const c of info.classes || []) {
+        for (const m of c.methods || []) processItem(m, 'method');
+      }
+      for (const e of info.extensions || []) {
+        for (const m of e.methods || []) processItem(m, 'method');
+      }
+      for (const et of info.extensionTypes || []) {
+        for (const m of et.methods || []) processItem(m, 'method');
+      }
+    }
+    
+    const duplicateWarningsByFile = new Map<string, import('./dartParser').WarningInfo[]>();
+    for (const group of hashGroups.values()) {
+      if (group.length > 1) {
+        for (const item of group) {
+          if (!duplicateWarningsByFile.has(item.filePath)) duplicateWarningsByFile.set(item.filePath, []);
+          const others = group.filter(g => g !== item).slice(0, 3); // limit to 3 to avoid huge messages
+          const otherNames = others.map(g => `'${g.name}' in ${path.basename(g.filePath)}`).join(', ');
+          const extra = group.length > 4 ? ` and ${group.length - 4} more` : '';
+          duplicateWarningsByFile.get(item.filePath)!.push({
+            type: 'duplicated_logic',
+            message: `Duplicated ${item.type} logic: matches ${otherNames}${extra}`,
+            line: item.line
+          });
+        }
+      }
+    }
+
+    for (const [filePath, info] of this.index.entries()) {
+      const fileWarnings = [...(info.warnings || [])];
+      const duplicates = duplicateWarningsByFile.get(filePath);
+      if (duplicates) {
+        fileWarnings.push(...duplicates);
+      }
+      if (fileWarnings.length > 0) {
+        results.push({ filePath, warnings: fileWarnings });
+      }
     }
     return results;
   }

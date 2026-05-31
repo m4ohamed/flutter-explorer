@@ -2,7 +2,7 @@
     "name": "flutter-explorer",
     "displayName": "Flutter Explorer",
     "description": "Code Search, Widget Tree Viewer, Dependency Graph, and pubspec.yaml Analysis for Flutter projects",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "publisher": "flutter-explorer",
     "icon": "resources/icon.png",
     "repository": {

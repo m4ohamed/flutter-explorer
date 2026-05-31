@@ -66,12 +66,36 @@ To enable AI models to query and code on your Flutter codebase using the high-pe
    *   **Command**: `node "C:/path/to/extension/out/mcp-server.js"`
 
 ### Available MCP Tools for AI:
-*   `flutter_search`: Semantic & ranked BM25 search across all Dart elements.
-*   `flutter_get_dependencies`: Extracts constructor parameters and matches them to smart import paths.
-*   `flutter_find_references`: Scans files line-by-line using precise boundary RegEx patterns to return references with actual line numbers and code snippets.
-*   `flutter_run_analyze`: Runs `flutter analyze` and returns parsed JSON warnings/errors.
-*   `flutter_run_build_runner`: Executes `build_runner build` safely in the background with timeout guards.
-*   `flutter_list_translations` / `flutter_update_translation` / `flutter_delete_translation`: Manage localized ARB files.
+*   `flutter_search`: Search for classes, functions, widgets, and other Dart elements. Use flutter_get_code_block to get full function/class bodies.
+*   `flutter_get_stats`: Get summary statistics of the Flutter project index.
+*   `flutter_get_project_structure`: Get the structure of the project (folders and files), specifically focusing on the lib/ directory.
+*   `flutter_get_file_info`: Get detailed information about a specific Dart file.
+*   `flutter_get_pubspec`: Read and analyze the project's pubspec.yaml file.
+*   `flutter_get_code_warnings`: Get all code warnings (like hardcoded text and colors) from the Dart project.
+*   `flutter_get_diagnostics`: Get all VS Code diagnostics (errors and warnings) for the project.
+*   `flutter_get_missing_translations`: Find missing translation keys across all ARB files.
+*   `flutter_update_translation`: Update or add a translation key across all ARB files.
+*   `flutter_delete_translation`: Delete a translation key from all ARB files.
+*   `flutter_list_translations`: List all translation keys and check for missing keys across ARB files.
+*   `flutter_get_impact_analysis`: Analyze the 'blast radius' of a file: find all application entry points (UI/Main/Events) that eventually call code in this file.
+*   `flutter_get_reverse_deps`: Get reverse dependencies for a class or function (what depends on this element).
+*   `flutter_set_project_path`: Set the Flutter project root path for the MCP server.
+*   `flutter_get_project_path`: Get the current Flutter project root path.
+*   `flutter_get_node_at_cursor`: Find the Dart element (class/function) at a specific cursor position in a file.
+*   `flutter_list_packages`: List all project dependencies from pubspec.lock.
+*   `flutter_get_code_block`: Get the full body of a class, function, or method including comments.
+*   `flutter_analyze_logic_flow`: Analyze a function's logic and return a summarized flow of steps.
+*   `flutter_get_dependencies`: Get the dependencies (repositories, services, etc.) that a class depends on from its constructor.
+*   `flutter_read_fragment`: Read a code fragment by element name (class, function, method) with surrounding comments.
+*   `flutter_search_text`: Search for specific text, strings, or comments across all Dart files.
+*   `flutter_get_index_status`: Check the status and last update time of the project index.
+*   `flutter_get_detailed_graph`: Get a detailed relationship graph (inheritance, calls, imports) for the project or a specific file.
+*   `flutter_get_hints`: Get context-aware suggestions for the next steps based on recent analysis.
+*   `flutter_run_analyze`: Run compiler checks or linters on the current project based on its detected type (Flutter, TS/JS, Android).
+*   `flutter_run_build_runner`: Run 'dart run build_runner build --delete-conflicting-outputs' to generate code for Freezed, Riverpod, etc.
+*   `flutter_find_references`: Find all usages/references of a class, function, variable, enum, mixin, extension, or typedef in the project.
+*   `flutter_run_intl_generate`: Manually trigger Intl generation (l10n.dart, messages_*.dart) via the built-in IntlGenerator.
+*   `flutter_rebuild_index`: Manually trigger a full re-index of the Flutter project by the VS Code extension.
 
 ---
 

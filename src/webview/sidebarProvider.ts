@@ -205,6 +205,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         <span>Code Analysis</span>
         <button class="icon-btn" id="refreshAnalysis" title="Refresh">⟳</button>
       </div>
+      <div class="analysis-filters">
+        <select id="analysisTypeFilter" class="analysis-select" title="Filter by type">
+          <option value="all">All Types</option>
+          <option value="hardcoded_text">Text Only</option>
+          <option value="hardcoded_color">Color Only</option>
+          <option value="duplicated_logic">Duplicates Only</option>
+        </select>
+        <input type="text" id="analysisColorFilter" placeholder="Color/Text (e.g. 0xFFFFFF)" class="analysis-input" title="Filter by specific text or color value" />
+        <input type="text" id="analysisFileFilter" placeholder="File name" class="analysis-input" title="Filter by specific file path" />
+      </div>
       <div class="pubspec-content" id="analysisContent"></div>
     </div>
     <!-- Libraries Tab -->

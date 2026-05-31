@@ -716,7 +716,13 @@ server.registerTool(
 
         if (!targetFilter || targetFilter === "function") {
           if (mode === "definitions" || mode === "both") {
-            for (const f of info.functions) {
+            const allFunctions = [
+              ...info.functions,
+              ...info.classes.flatMap((c: any) => c.methods),
+              ...(info.extensions || []).flatMap((e: any) => e.methods),
+              ...(info.extensionTypes || []).flatMap((et: any) => et.methods)
+            ];
+            for (const f of allFunctions) {
               if (f.name.toLowerCase().includes(q)) {
                 results.push({ name: f.name, type: "function_definition", parent: f.parentClass, file, line: f.line, lineEnd: f.lineEnd });
               }
@@ -903,7 +909,7 @@ server.registerTool(
     const index = await readIndex();
     if (!index) return await handleIndexError();
 
-    let files = 0, classes = 0, functions = 0, widgets = 0, enums = 0, mixins = 0;
+    let files = 0, classes = 0, functions = 0, methods = 0, widgets = 0, enums = 0, mixins = 0;
     let extensions = 0, typedefs = 0, variables = 0, constructors = 0, properties = 0, annotations = 0;
 
     for (const file in index.dart || {}) {
@@ -911,6 +917,9 @@ server.registerTool(
       files++;
       classes += info.classes.length;
       functions += info.functions.length;
+      methods += info.classes.reduce((sum: number, c: any) => sum + (c.methods || []).length, 0) +
+                 (info.extensions || []).reduce((sum: number, e: any) => sum + (e.methods || []).length, 0) +
+                 (info.extensionTypes || []).reduce((sum: number, et: any) => sum + (et.methods || []).length, 0);
       widgets += info.widgets.length;
       enums += (info.enums || []).length;
       mixins += (info.mixins || []).length;
@@ -929,7 +938,8 @@ server.registerTool(
     const stats = [
       `Files: ${files}`,
       `Classes: ${classes}`,
-      `Functions: ${functions}`,
+      `Functions (Top-level): ${functions}`,
+      `Methods: ${methods}`,
       `Widgets: ${widgets}`,
       `Enums: ${enums}`,
       `Mixins: ${mixins}`,
@@ -1035,17 +1045,40 @@ server.registerTool(
 server.registerTool(
   "flutter_get_code_warnings",
   {
-    description: "Get all code warnings (like hardcoded text and colors) from the Dart project",
-    inputSchema: z.object({}),
+    description: "Get code warnings (like hardcoded text and colors) from the Dart project with optional filtering",
+    inputSchema: z.object({
+      typeFilter: z.enum(["all", "text", "color", "duplicated_logic"]).optional().describe("Filter by warning type ('all', 'text', 'color', 'duplicated_logic')"),
+      searchQuery: z.string().optional().describe("Search text inside the warning message (e.g. #FFFFFF or a word)"),
+      fileQuery: z.string().optional().describe("Search text inside the file path (e.g. main.dart)"),
+    }),
   },
-  async () => {
+  async ({ typeFilter, searchQuery, fileQuery }: { typeFilter?: string; searchQuery?: string; fileQuery?: string }) => {
     const index = await readIndex();
     if (!index || !index.dart) return await handleIndexError();
 
     const warnings = [];
+    const sq = searchQuery?.toLowerCase();
+    const fq = fileQuery?.toLowerCase();
+    
     for (const file in index.dart) {
+      if (fq && !file.toLowerCase().includes(fq)) continue;
+
       if (index.dart[file].warnings && index.dart[file].warnings.length > 0) {
-        warnings.push({ filePath: file, warnings: index.dart[file].warnings });
+        let fileWarnings = index.dart[file].warnings;
+        
+        if (typeFilter && typeFilter !== 'all') {
+          const targetType = typeFilter === 'text' ? 'hardcoded_text' : 
+                             typeFilter === 'color' ? 'hardcoded_color' : 'duplicated_logic';
+          fileWarnings = fileWarnings.filter((w: any) => w.type === targetType);
+        }
+        
+        if (sq) {
+          fileWarnings = fileWarnings.filter((w: any) => w.message.toLowerCase().includes(sq));
+        }
+
+        if (fileWarnings.length > 0) {
+          warnings.push({ filePath: file, warnings: fileWarnings });
+        }
       }
     }
     return { content: [{ type: "text" as const, text: JSON.stringify(warnings, null, 2) }] };
@@ -1314,7 +1347,11 @@ server.registerTool(
         else if (elementType === 'mixin') found = (info.mixins || []).some((m: any) => m.name === name);
         else if (elementType === 'extension') found = (info.extensions || []).some((e: any) => e.name === name);
         else if (elementType === 'function') found = info.functions.some((f: FunctionInfo) => f.name === name && !f.parentClass);
-        else if (elementType === 'method') found = info.functions.some((f: FunctionInfo) => f.name === name && f.parentClass === parentClass);
+        else if (elementType === 'method') {
+          found = info.classes.some((c: ClassInfo) => c.methods.some(m => m.name === name && (!parentClass || c.name === parentClass))) ||
+                  (info.extensions || []).some((e: any) => e.methods.some((m: any) => m.name === name && (!parentClass || e.name === parentClass))) ||
+                  (info.extensionTypes || []).some((et: any) => et.methods.some((m: any) => m.name === name && (!parentClass || et.name === parentClass)));
+        }
 
         if (found) { targetFile = file; break; }
       }
@@ -1365,15 +1402,36 @@ server.registerTool(
     if (!targetFile) {
       for (const file in index.dart) {
         const info = index.dart[file] as DartFileInfo;
-        let found = info.functions.some((f: FunctionInfo) =>
-          f.name === functionName && (resolvedParentClass ? f.parentClass === resolvedParentClass : !f.parentClass)
-        );
-        if (!found && !resolvedParentClass) {
-          const matchingFunc = info.functions.find((f: FunctionInfo) => f.name === functionName);
-          if (matchingFunc) {
-            found = true;
-            if (matchingFunc.parentClass) {
-              resolvedParentClass = matchingFunc.parentClass;
+        let found = false;
+        
+        if (!resolvedParentClass) {
+          found = info.functions.some((f: FunctionInfo) => f.name === functionName);
+        }
+        
+        if (!found) {
+          for (const c of info.classes) {
+            if (c.methods.some(m => m.name === functionName && (!resolvedParentClass || c.name === resolvedParentClass))) {
+              found = true;
+              resolvedParentClass = c.name;
+              break;
+            }
+          }
+        }
+        if (!found) {
+          for (const e of (info.extensions || [])) {
+            if (e.methods.some((m: any) => m.name === functionName && (!resolvedParentClass || e.name === resolvedParentClass))) {
+              found = true;
+              resolvedParentClass = e.name;
+              break;
+            }
+          }
+        }
+        if (!found) {
+          for (const et of (info.extensionTypes || [])) {
+            if (et.methods.some((m: any) => m.name === functionName && (!resolvedParentClass || et.name === resolvedParentClass))) {
+              found = true;
+              resolvedParentClass = et.name;
+              break;
             }
           }
         }
@@ -1586,13 +1644,19 @@ server.registerTool(
         if (!detectedType) {
           if (info.classes.some((c: ClassInfo) => c.name === name)) detectedType = 'class';
           else if (info.functions.some((f: FunctionInfo) => f.name === name && !f.parentClass)) detectedType = 'function';
-          else if (info.functions.some((f: FunctionInfo) => f.name === name && f.parentClass)) detectedType = 'method';
+          else if (info.classes.some((c: ClassInfo) => c.methods.some(m => m.name === name))) detectedType = 'method';
+          else if ((info.extensions || []).some((e: any) => e.methods.some((m: any) => m.name === name))) detectedType = 'method';
+          else if ((info.extensionTypes || []).some((et: any) => et.methods.some((m: any) => m.name === name))) detectedType = 'method';
         }
 
         let found = false;
         if (detectedType === 'class') found = info.classes.some((c: ClassInfo) => c.name === name);
         else if (detectedType === 'function') found = info.functions.some((f: FunctionInfo) => f.name === name && !f.parentClass);
-        else if (detectedType === 'method') found = info.functions.some((f: FunctionInfo) => f.name === name && f.parentClass === parentClass);
+        else if (detectedType === 'method') {
+          found = info.classes.some((c: ClassInfo) => c.methods.some(m => m.name === name && (!parentClass || c.name === parentClass))) ||
+                  (info.extensions || []).some((e: any) => e.methods.some((m: any) => m.name === name && (!parentClass || e.name === parentClass))) ||
+                  (info.extensionTypes || []).some((et: any) => et.methods.some((m: any) => m.name === name && (!parentClass || et.name === parentClass)));
+        }
 
         if (found) { targetFile = file; break; }
       }
@@ -1699,22 +1763,6 @@ server.registerTool(
     } catch (error) {
       return { content: [{ type: "text" as const, text: `Error checking index status: ${error}` }] };
     }
-  }
-);
-
-server.registerTool(
-  "flutter_rebuild_index",
-  {
-    description: "Request a manual rebuild of the project index (Note: Requires the VS Code extension to be active)",
-    inputSchema: z.object({}),
-  },
-  async () => {
-    return {
-      content: [{
-        type: "text" as const,
-        text: `Rebuild request received for ${currentProjectPath}. Please ensure the Flutter Explorer VS Code extension is active to perform a full project re-indexing.`
-      }],
-    };
   }
 );
 

@@ -14,6 +14,25 @@ body {
     overflow-x: hidden;
 }
 
+/* Custom Scrollbar for VS Code Webview */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4));
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.7));
+}
+::-webkit-scrollbar-thumb:active {
+    background: var(--vscode-scrollbarSlider-activeBackground, rgba(191, 191, 191, 0.4));
+}
+
 .container {
     display: flex;
     flex-direction: column;
@@ -37,22 +56,28 @@ body {
     color: var(--vscode-foreground, #ccc);
     cursor: pointer;
     font-size: 11px;
-    transition: all 0.2s ease;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
     border-bottom: 2px solid transparent;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    opacity: 0.7;
 }
 
 .tab:hover {
     background: var(--vscode-list-hoverBackground, #2a2d2e);
     color: var(--vscode-foreground);
+    opacity: 1;
 }
 
 .tab.active {
     color: var(--vscode-panelTitle-activeForeground, #fff);
     border-bottom-color: var(--vscode-panelTitle-activeBorder, #007acc);
     background: var(--vscode-sideBar-background, #1e1e1e);
+    opacity: 1;
+    font-weight: 600;
 }
 
 /* ─── Stats Bar ───────────────────────────────────────── */
@@ -109,18 +134,20 @@ body {
 
 #searchInput {
     width: 100%;
-    padding: 6px 10px;
+    padding: 8px 12px;
     border: 1px solid var(--vscode-input-border, #3c3c3c);
     background: var(--vscode-input-background, #3c3c3c);
     color: var(--vscode-input-foreground, #ccc);
-    border-radius: 4px;
+    border-radius: 6px;
     outline: none;
     font-size: 13px;
-    transition: border-color 0.2s;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1) inset;
 }
 
 #searchInput:focus {
     border-color: var(--vscode-focusBorder, #007acc);
+    box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.2), 0 2px 4px rgba(0,0,0,0.1) inset;
 }
 
 #searchInput::placeholder {
@@ -135,25 +162,29 @@ body {
 }
 
 .filter-btn {
-    padding: 3px 8px;
+    padding: 4px 10px;
     border: 1px solid var(--vscode-button-secondaryBackground, #3a3a3a);
-    background: transparent;
+    background: var(--vscode-button-secondaryBackground, #3a3a3a);
     color: var(--vscode-descriptionForeground, #888);
-    border-radius: 12px;
+    border-radius: 14px;
     cursor: pointer;
     font-size: 11px;
-    transition: all 0.2s;
+    font-weight: 500;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
 }
 
 .filter-btn:hover {
-    background: var(--vscode-list-hoverBackground, #2a2d2e);
+    background: var(--vscode-button-hoverBackground, #4a4a4a);
     color: var(--vscode-foreground);
+    transform: translateY(-1px);
 }
 
 .filter-btn.active {
     background: var(--vscode-button-background, #007acc);
     color: var(--vscode-button-foreground, #fff);
     border-color: var(--vscode-button-background, #007acc);
+    box-shadow: 0 2px 6px rgba(0, 122, 204, 0.3);
 }
 
 .results-list {
@@ -165,15 +196,19 @@ body {
 .result-item {
     display: flex;
     align-items: flex-start;
-    padding: 6px 12px;
+    padding: 8px 12px;
     cursor: pointer;
-    transition: background 0.15s;
+    transition: all 0.2s ease;
     gap: 8px;
     border-bottom: 1px solid var(--vscode-panel-border, #2a2a2a);
+    border-left: 2px solid transparent;
 }
 
 .result-item:hover {
     background: var(--vscode-list-hoverBackground, #2a2d2e);
+    border-left-color: var(--vscode-focusBorder, #007acc);
+    padding-left: 14px;
+    padding-right: 10px;
 }
 
 .result-icon {
@@ -212,12 +247,16 @@ body {
 }
 
 .result-badge {
-    padding: 1px 6px;
-    border-radius: 8px;
+    padding: 2px 6px;
+    border-radius: 12px;
     font-size: 10px;
-    font-weight: 500;
+    font-weight: 600;
     flex-shrink: 0;
     align-self: center;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
 }
 
 .badge-class {
@@ -703,4 +742,36 @@ body {
 .tree-node,
 .dep-item {
     animation: fadeIn 0.15s ease-out;
+}
+
+/* ─── Analysis Filters ────────────────────────────────── */
+.analysis-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--vscode-sideBarSectionHeader-background, #252526);
+    border-bottom: 1px solid var(--vscode-panel-border, #333);
+}
+
+.analysis-input, .analysis-select {
+    flex: 1;
+    min-width: 90px;
+    padding: 6px 8px;
+    border: 1px solid var(--vscode-input-border, #3c3c3c);
+    background: var(--vscode-input-background, #3c3c3c);
+    color: var(--vscode-input-foreground, #ccc);
+    border-radius: 4px;
+    outline: none;
+    font-size: 11px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1) inset;
+}
+
+.analysis-input:focus, .analysis-select:focus {
+    border-color: var(--vscode-focusBorder, #007acc);
+    box-shadow: 0 0 0 1px rgba(0, 122, 204, 0.2), 0 1px 2px rgba(0,0,0,0.1) inset;
+}
+
+.analysis-input::placeholder {
+    color: var(--vscode-input-placeholderForeground, #777);
 }

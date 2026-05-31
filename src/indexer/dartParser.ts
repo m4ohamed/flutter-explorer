@@ -1,3 +1,5 @@
+import * as crypto from 'crypto';
+
 /**
  * Dart File Parser - Regex-based extraction of classes, functions, widgets,
  * imports, exports, enums, and mixins from Dart source files.
@@ -14,6 +16,8 @@ export interface ClassInfo {
   isPrivate: boolean;
   methods: FunctionInfo[];
   properties: PropertyInfo[];
+  bodyHash?: string;
+  bodyLength?: number;
 }
 export interface FunctionInfo {
   name: string;
@@ -25,12 +29,16 @@ export interface FunctionInfo {
   isAsync: boolean;
   isStatic: boolean;
   parentClass: string | null;
+  bodyHash?: string;
+  bodyLength?: number;
 }
 export interface WidgetInfo {
   name: string;
   line: number;
   children: WidgetInfo[];
   properties: { name: string; value: string }[];
+  bodyHash?: string;
+  bodyLength?: number;
 }
 export interface ImportInfo {
   path: string;
@@ -52,7 +60,7 @@ export interface MixinInfo {
   isPrivate: boolean;
 }
 export interface WarningInfo {
-  type: 'hardcoded_text' | 'hardcoded_color';
+  type: 'hardcoded_text' | 'hardcoded_color' | 'duplicated_logic';
   message: string;
   line: number;
 }
@@ -254,12 +262,12 @@ export class DartParser {
     class_: /^((?:abstract\s+|sealed\s+|base\s+|interface\s+|final\s+)*)(mixin\s+)?class\s+(\w+)(?:\s+extends\s+([\w<>,\s\[\]]+))?(?:\s+with\s+([\w<>,\s\[\]]+))?(?:\s+implements\s+([\w<>,\s\[\]]+))?/,
     ctor: /^\s*(const\s+)?(factory\s+)?(\w+)(?:\.(\w+))?\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(?::[^{;]*)?([\{;])/,
     buildMethod: /(?:Widget|Route|PreferredSizeWidget|StatelessWidget|StatefulWidget)\s+(\w+)\s*\(([^)]*)\)/,
-    method: /^\s*(static\s+)?([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
+    method: /^\s*(static\s+)?(\w[\w<>\[\]?,\s]*?)\s+(\w+)\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
     getter: /^\s+(\w+)\s+get\s+(\w+)\s*(=>|\{)/,
     setter: /^\s+(\w+)\s+set\s+(\w+)\s*\(([^)]*)\)/,
     field: /^\s+(final|const|late)?\s*(final|const)?\s*(static\s+)?([\w<>\[\]?,\s]+?)\s+(\w+)\s*(=\s*[^;]+)?;/,
     topVar: /^(final|const|late)?\s*(final|const)?\s*([\w<>\[\]?,\s]+?)\s+(\w+)\s*(=\s*[^;]+)?;/,
-    topFunc: /^([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
+    topFunc: /^(\w[\w<>\[\]?,\s]*?)\s+(\w+)\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
     callPat: /(?:([a-zA-Z_]\w*)\.)?([a-zA-Z_]\w*)\s*\(/g,
     classDef: /class\s+(\w+)/,
     funcDef: /([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(/,
@@ -373,34 +381,51 @@ export class DartParser {
             braceDepth--;
             while (scopeStack.length > 0 && scopeStack[scopeStack.length - 1].braceDepth >= braceDepth) {
               const popped = scopeStack.pop();
+              if (popped?.name === '_BattleshipScreenState') {
+                console.log(`[DEBUG] Popped _BattleshipScreenState at line ${idx + 1}. Current braceDepth=${braceDepth}, line content: ${maskedLines[idx]}`);
+              }
               if (popped) {
                 const lineNum_ = idx + 1;
-                if (popped.ref) {
-                  (popped.ref as any).lineEnd = lineNum_;
-                } else {
+                let actualRef: any = popped.ref;
+                if (!actualRef) {
                   if (popped.type === 'class') {
-                    const cls = result.classes.find(c => c.name === popped.name && c.lineEnd === undefined);
-                    if (cls) cls.lineEnd = lineNum_;
+                    actualRef = result.classes.find(c => c.name === popped.name && c.lineEnd === undefined);
                   } else if (popped.type === 'extensionType') {
-                    const et = result.extensionTypes.find(e => e.name === popped.name && e.lineEnd === undefined);
-                    if (et) et.lineEnd = lineNum_;
+                    actualRef = result.extensionTypes.find(e => e.name === popped.name && e.lineEnd === undefined);
                   } else if (popped.type === 'function') {
-                    const func = result.functions.find(f => f.name === popped.name && f.lineEnd === undefined);
-                    if (func) { func.lineEnd = lineNum_; }
-                    else {
+                    actualRef = result.functions.find(f => f.name === popped.name && f.lineEnd === undefined);
+                    if (!actualRef) {
                       for (const cls of result.classes) {
-                        const m = cls.methods.find(f => f.name === popped.name && f.lineEnd === undefined);
-                        if (m) { m.lineEnd = lineNum_; break; }
+                        actualRef = cls.methods.find(f => f.name === popped.name && f.lineEnd === undefined);
+                        if (actualRef) break;
                       }
-                      for (const ext of result.extensions) {
-                        const m = ext.methods.find(f => f.name === popped.name && f.lineEnd === undefined);
-                        if (m) { m.lineEnd = lineNum_; break; }
+                      if (!actualRef) {
+                        for (const ext of result.extensions) {
+                          actualRef = ext.methods.find(f => f.name === popped.name && f.lineEnd === undefined);
+                          if (actualRef) break;
+                        }
                       }
-                      for (const et of result.extensionTypes) {
-                        const m = et.methods.find(f => f.name === popped.name && f.lineEnd === undefined);
-                        if (m) { m.lineEnd = lineNum_; break; }
+                      if (!actualRef) {
+                        for (const et of result.extensionTypes) {
+                          actualRef = et.methods.find(f => f.name === popped.name && f.lineEnd === undefined);
+                          if (actualRef) break;
+                        }
                       }
                     }
+                  }
+                }
+                
+                if (actualRef) {
+                  actualRef.lineEnd = lineNum_;
+                  const startLine = actualRef.line - 1;
+                  const endLine = lineNum_ - 1;
+                  if (startLine >= 0 && endLine < maskedLines.length && startLine <= endLine) {
+                    const bodyLines = maskedLines.slice(startLine, endLine + 1);
+                    const rawBody = bodyLines.join(' ');
+                    // Ignore function/class name, strip all whitespace
+                    const normalizedBody = rawBody.replace(new RegExp(`\\b${popped.name}\\b`, 'g'), '').replace(/\s+/g, '');
+                    actualRef.bodyLength = normalizedBody.length;
+                    actualRef.bodyHash = crypto.createHash('md5').update(normalizedBody).digest('hex');
                   }
                 }
               }
@@ -620,7 +645,7 @@ export class DartParser {
         }
 
         const methodMatch = mLookahead.match(P.method);
-        if (methodMatch && !SKIP_METHODS.has(methodMatch[3])) {
+        if (methodMatch && !SKIP_METHODS.has(methodMatch[3]) && !RESERVED.has(methodMatch[3])) {
           const methodInfo: FunctionInfo = {
             name: methodMatch[3], returnType: methodMatch[2].trim(), params: methodMatch[4].trim().replace(/\n/g, ' '),
             line: lineNum, isPrivate: methodMatch[3].startsWith('_'),
@@ -1109,6 +1134,18 @@ export class DartParser {
           for (const cls of parsed.classes) {
             const m = cls.methods.find(m => m.name === name);
             if (m && (!parentClass || cls.name === parentClass)) { fn = m; break; }
+          }
+        }
+        if (!fn) {
+          for (const e of (parsed.extensions || [])) {
+            const m = e.methods.find((m: any) => m.name === name);
+            if (m && (!parentClass || e.name === parentClass)) { fn = m; break; }
+          }
+        }
+        if (!fn) {
+          for (const et of (parsed.extensionTypes || [])) {
+            const m = et.methods.find((m: any) => m.name === name);
+            if (m && (!parentClass || et.name === parentClass)) { fn = m; break; }
           }
         }
         if (fn) { startLine = fn.line; endLine = fn.lineEnd ?? -1; }
