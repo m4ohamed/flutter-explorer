@@ -228,3 +228,42 @@ npx tsc --noEmit.
 - **المشكلة:** كان خادم MCP يفشل في التشغيل ويخرج بكود 1 مع رسالة خطأ `Error: Tool flutter_rebuild_index is already registered` بسبب وجود تسجيلين لنفس الأداة في ملف `src/mcp-server.ts`.
 - **الحل:** تم إزالة التسجيل الأول للأداة (في السطور 1705-1719) والاحتفاظ بالتسجيل الثاني (في السطور 2144-2156) والذي يقوم بكتابة ملف التنبيه `.flutter-explorer-trigger` بشكل سليم لإخطار الإضافة ببدء إعادة الفهرسة.
 - **التحقق:** تم تشغيل مترجم TypeScript بنجاح للتأكد من سلامة الكود `npx tsc --noEmit` ثم تجميع الحزمة بنجاح تام `npm run compile`. كما تم التحقق من تشغيل خادم MCP بنجاح بدون أي أخطاء.
+
+---
+
+## 📅 إنجازات اليوم (8 يونيو 2026)
+
+### 1. إزالة سجلات التتبع debug log الزائدة في كود الإنتاج
+- تم إزالة جملة التحقق والطباعة الخاصة بكلاس `_BattleshipScreenState` من داخل دالة `syncBraces` بملف `src/indexer/dartParser.ts` لمنع الرسائل غير الضرورية في Console عند تشغيل الإضافة.
+
+### 2. ترقية دالة مطابقة العناصر عند المؤشر `getNodeAtCursor`
+- تم استبدال الأرقام الافتراضية الثابتة (`+50` و `+20` أسطر) بـ `lineEnd` الفعلي المحسوب في الفهرس، وتوسيع الفحص ليشمل دوال الكلاسات، والامتدادات (Extensions)، وامتدادات الأنواع (Extension Types)، والوظائف الفرعية لتحديد دقيق ومضمون للعنصر الذي يقع تحت مؤشر المستخدم.
+
+### 3. إصلاح سباق البيانات الصامت في فحص قاعدة البيانات `getDiagnostics`
+- تم تغليف عملية فتح قاعدة البيانات المؤقتة `tempDb` والتحقق منها داخل `Promise` مغلّف ومنتظر بـ `await` بدلاً من المعالجة غير المتزامنة غير المحمية، مما يضمن معالجة الأخطاء وإغلاق الملفات وتفادي تسريبات مؤشرات الملفات.
+
+### 4. مزامنة تشغيل مراقب الملفات `fileWatcher` بعد انتهاء الفهرسة
+- تم تحريك استدعاء بدء مراقب الملفات `fileWatcher.start()` في مسار الفهرسة الأولية إلى داخل الـ callback الخاص بـ `withProgress` بعد انتهاء `buildFullIndex` لضمان عدم استقبال أي أحداث تعديل ملفات على فهرس غير مكتمل وتفادي تضارب البيانات.
+
+### 5. إصلاح معالجة YAML في `pubspecProvider.ts`
+- تم تقييد مطابقة الحزم (Packages) بالمسافة البادئة المخصصة للمستوى المباشر فقط (`indentLevel + 2`) وتجاهل الأسطر المتداخلة العميقة (مثل `version:` و `path:`) لمنع تسجيل اعتماديات وهمية.
+- تم ضبط التحقق من SDKConstraint ليتم فقط عندما يقع داخل قسم `environment:` لتفادي التفسيرات العشوائية.
+
+### 6. تحسين قراءة `pubspecLockProvider.ts` للـ Lock files
+- تم تتبع حالة الأقسام بشكل صارم للتأكد من قراءة الحزم فقط عندما تكون داخل قسم `packages:` صراحة، مع دعم علامات الجدولة (Tabs) والمسافات البادئة للترميز.
+
+### 7. التخلص من الكود الميت وإعادة الهيكلة في الـ Providers
+- تم إزالة الدوال الميتة وغير المستخدمة `getShortName` و `getGroup` من ملف [dependencyGraphProvider.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/providers/dependencyGraphProvider.ts) بالكامل بعد التأكد من عدم استخدامها في أي مكان في المشروع.
+- تم استخراج دالة مساعدة موحدة `isSupportedFile` في [widgetTreeProvider.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/providers/widgetTreeProvider.ts) لمنع تكرار فحص صيغ الملفات المدعومة.
+- تم إضافة تحقق وتأكيد للأنواع المقبولة لمعامل الفلتر `filter` في [searchProvider.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/providers/searchProvider.ts) لمنع تسريب أي قيم غير مدعومة إلى `indexManager`.
+
+### 8. إصلاحات وتحسينات واجهة الرسم البياني (D3 Graph UI) والـ Providers
+- **إصلاح تصفية روابط `contains`**: تم تعديل خوارزمية التصفية في [graph.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/webview/graph.ts) لكي تتحقق من خيار التصفية `rel-contains` بدلاً من رسم روابط الاحتواء بشكل دائم وتجاهل حالة مربع الخيار.
+- **إصلاح دالة التوجيه للملفات في الرسم البياني**: إصلاح الوصول للمعرف `n.label` غير المعرف في `detailedGraph` بملف [dependencyGraphProvider.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/providers/dependencyGraphProvider.ts) واستبداله بـ `n.name || n.label || n.id` لتمثيل العقد وتسهيل فتح ملفاتها بكفاءة تامة.
+
+### 9. إعادة هيكلة وتطوير الـ Sidebar JavaScript (sidebar.js)
+- تم تنظيف وتحديث كود [sidebar.js](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/webview/media/sidebar.js) بالكامل للاستغناء عن استخدام الكلمة المفتاحية القديمة `var` والتحول لاستخدام `let` و `const` لجميع المتغيرات والثوابت والنطاقات، وحذف التكرار غير المقصود للعدادات (مثل `var i`) لضمان خلو الملف من أي أخطاء scope أو closures مع الحفاظ على التوافق التام مع أحداث VS Code.
+
+### 10. التحقق والتجميع الناجح
+- تم التحقق من تجميع TypeScript بنجاح (`npx tsc --noEmit` انتهى بكود 0 وبدون أي أخطاء أو تحذيرات).
+- تم تجميع حزمة الإنتاج بنجاح (`npm run compile` انتهى بنجاح تام) مع نسخ ملفات الوسائط المحدّثة بنجاح إلى مجلد `out/media/`.

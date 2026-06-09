@@ -24,7 +24,7 @@ export class DependencyGraphProvider {
         const detailed = this.indexManager.getDetailedGraph();
         const nodes: GraphNode[] = detailed.nodes.map(n => ({
             id: n.id,
-            label: n.label,
+            label: n.name || n.label || n.id,
             group: n.type, // Group by type (file, class, function, etc.)
         }));
         const edges: GraphEdge[] = detailed.edges;
@@ -61,14 +61,5 @@ export class DependencyGraphProvider {
             }
         }
         return mermaid;
-    }
-    private getShortName(filePath: string): string {
-        const parts = filePath.split('/');
-        return parts[parts.length - 1] || filePath;
-    }
-    private getGroup(filePath: string): string {
-        const parts = filePath.split('/');
-        if (parts.length >= 2) { return parts[parts.length - 2]; }
-        return 'root';
     }
 }

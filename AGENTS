@@ -50,7 +50,7 @@ Use the `flutter-explorer-mcp` tools to gather context.
   
 - **`flutter_read_fragment`**: Read a code fragment by element name with surrounding context
   
-- **`flutter_get_code_warnings`**: Get all code warnings (hardcoded strings/colors)  
+- **`flutter_get_code_warnings`**: Get all code warnings (hardcoded strings/colors and duplicated code)  
   
 - **`flutter_get_diagnostics`**: Get all VS Code diagnostics (errors/warnings) from the project  
   

@@ -158,8 +158,22 @@ export class SqliteCache {
             }
         } else if (stats.exists) {
             try {
-                const tempDb = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
-                    if (tempDb) tempDb.close();
+                await new Promise<void>((resolve, reject) => {
+                    let tempDb: sqlite3.Database | null = null;
+                    tempDb = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+                        if (err) {
+                            reject(err);
+                        } else {
+                            if (tempDb) {
+                                tempDb.close((closeErr) => {
+                                    if (closeErr) reject(closeErr);
+                                    else resolve();
+                                });
+                            } else {
+                                resolve();
+                            }
+                        }
+                    });
                 });
             } catch (e: any) {
                 stats.error = `Could not open database file: ${e.message || String(e)}`;
@@ -438,17 +452,55 @@ export class SqliteCache {
         if (!fileInfo) return null;
 
         let bestNode: any = null;
+        let bestRange = Infinity;
 
+        const checkCandidate = (start: number, end: number, node: any) => {
+            if (start <= line && line <= end) {
+                const range = end - start;
+                if (range < bestRange) {
+                    bestRange = range;
+                    bestNode = node;
+                }
+            }
+        };
+
+        // Classes
         for (const cls of fileInfo.info.classes) {
-            if (cls.line <= line && line <= cls.line + 50) {
-                bestNode = { type: 'class', name: cls.name };
+            checkCandidate(cls.line, cls.lineEnd ?? (cls.line + 50), { type: 'class', name: cls.name });
+            if (cls.methods) {
+                for (const method of cls.methods) {
+                    checkCandidate(method.line, method.lineEnd ?? (method.line + 20), { type: 'method', name: method.name, parentClass: cls.name });
+                }
             }
         }
 
-        for (const func of fileInfo.info.functions) {
-            if (func.line <= line && line <= func.line + 20) {
-                bestNode = { type: 'function', name: func.name };
+        // Extensions
+        if (fileInfo.info.extensions) {
+            for (const ext of fileInfo.info.extensions) {
+                checkCandidate(ext.line, (ext as any).lineEnd ?? (ext.line + 50), { type: 'extension', name: ext.name });
+                if (ext.methods) {
+                    for (const method of ext.methods) {
+                        checkCandidate(method.line, method.lineEnd ?? (method.line + 20), { type: 'method', name: method.name, parentClass: ext.name });
+                    }
+                }
             }
+        }
+
+        // Extension Types
+        if (fileInfo.info.extensionTypes) {
+            for (const et of fileInfo.info.extensionTypes) {
+                checkCandidate(et.line, et.lineEnd ?? (et.line + 50), { type: 'extensionType', name: et.name });
+                if (et.methods) {
+                    for (const method of et.methods) {
+                        checkCandidate(method.line, method.lineEnd ?? (method.line + 20), { type: 'method', name: method.name, parentClass: et.name });
+                    }
+                }
+            }
+        }
+
+        // Top-level functions
+        for (const func of fileInfo.info.functions) {
+            checkCandidate(func.line, func.lineEnd ?? (func.line + 20), { type: 'function', name: func.name });
         }
 
         return bestNode;

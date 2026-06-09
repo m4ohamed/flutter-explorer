@@ -12,11 +12,11 @@
 
   document.querySelectorAll('.tab').forEach(function (tab) {
     tab.addEventListener('click', function () {
-      var targetTab = this.getAttribute('data-tab');
+      const targetTab = this.getAttribute('data-tab');
       document.querySelectorAll('.tab').forEach(function (t) { t.classList.remove('active'); });
       document.querySelectorAll('.tab-content').forEach(function (tc) { tc.classList.remove('active'); });
       this.classList.add('active');
-      var targetEl = document.getElementById('tab-' + targetTab);
+      const targetEl = document.getElementById('tab-' + targetTab);
       if (targetEl) { targetEl.classList.add('active'); }
 
       // Load data for tab
@@ -30,13 +30,13 @@
 
   // ─── Search ────────────────────────────────────────────
 
-  var searchInput = document.getElementById('searchInput');
+  const searchInput = document.getElementById('searchInput');
   if (searchInput) {
     searchInput.addEventListener('input', function () {
       if (searchTimeout) { clearTimeout(searchTimeout); }
       searchTimeout = setTimeout(function () {
-        var query = searchInput.value;
-        var filter = currentFilter === 'all' ? undefined : currentFilter;
+        const query = searchInput.value;
+        const filter = currentFilter === 'all' ? undefined : currentFilter;
         vscode.postMessage({ command: 'search', query: query, filter: filter });
       }, 200);
     });
@@ -50,7 +50,7 @@
       currentFilter = this.getAttribute('data-filter');
       // Re-trigger search
       if (searchInput && searchInput.value) {
-        var filter = currentFilter === 'all' ? undefined : currentFilter;
+        const filter = currentFilter === 'all' ? undefined : currentFilter;
         vscode.postMessage({ command: 'search', query: searchInput.value, filter: filter });
       }
     });
@@ -58,42 +58,42 @@
 
   // ─── Refresh Buttons ──────────────────────────────────
 
-  var refreshTree = document.getElementById('refreshTree');
+  const refreshTree = document.getElementById('refreshTree');
   if (refreshTree) {
     refreshTree.addEventListener('click', function () {
       vscode.postMessage({ command: 'getWidgetTree' });
     });
   }
 
-  var refreshGraph = document.getElementById('refreshGraph');
+  const refreshGraph = document.getElementById('refreshGraph');
   if (refreshGraph) {
     refreshGraph.addEventListener('click', function () {
       vscode.postMessage({ command: 'getDependencyGraph' });
     });
   }
 
-  var openInteractiveGraph = document.getElementById('openInteractiveGraph');
+  const openInteractiveGraph = document.getElementById('openInteractiveGraph');
   if (openInteractiveGraph) {
     openInteractiveGraph.addEventListener('click', function () {
       vscode.postMessage({ command: 'openGraph' });
     });
   }
 
-  var refreshPubspec = document.getElementById('refreshPubspec');
+  const refreshPubspec = document.getElementById('refreshPubspec');
   if (refreshPubspec) {
     refreshPubspec.addEventListener('click', function () {
       vscode.postMessage({ command: 'getPubspec' });
     });
   }
 
-  var refreshAnalysis = document.getElementById('refreshAnalysis');
+  const refreshAnalysis = document.getElementById('refreshAnalysis');
   if (refreshAnalysis) {
     refreshAnalysis.addEventListener('click', function () {
       vscode.postMessage({ command: 'getAnalysis' });
     });
   }
 
-  var refreshLibraries = document.getElementById('refreshLibraries');
+  const refreshLibraries = document.getElementById('refreshLibraries');
   if (refreshLibraries) {
     refreshLibraries.addEventListener('click', function () {
       vscode.postMessage({ command: 'getPackages' });
@@ -103,7 +103,7 @@
   // ─── Message Handler ──────────────────────────────────
 
   window.addEventListener('message', function (event) {
-    var message = event.data;
+    const message = event.data;
     switch (message.command) {
       case 'searchResults':
         renderSearchResults(message.data);
@@ -132,20 +132,20 @@
   // ─── Render Functions ─────────────────────────────────
 
   function renderSearchResults(results) {
-    var container = document.getElementById('searchResults');
+    const container = document.getElementById('searchResults');
     if (!container) { return; }
 
     if (!results || results.length === 0) {
-      var q = searchInput ? searchInput.value : '';
+      const q = searchInput ? searchInput.value : '';
       container.innerHTML = q
         ? '<div class="no-results">No results found for "' + escapeHtml(q) + '"</div>'
         : '<div class="no-results">Start typing to search...</div>';
       return;
     }
 
-    var html = '';
-    for (var i = 0; i < results.length; i++) {
-      var r = results[i];
+    let html = '';
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
       html += '<div class="result-item" data-file="' + escapeHtml(r.file) + '" data-line="' + r.line + '">';
       html += '<span class="result-icon">' + r.icon + '</span>';
       html += '<div class="result-info">';
@@ -164,8 +164,8 @@
     // Add click handlers
     container.querySelectorAll('.result-item').forEach(function (item) {
       item.addEventListener('click', function () {
-        var file = this.getAttribute('data-file');
-        var line = parseInt(this.getAttribute('data-line') || '1', 10);
+        const file = this.getAttribute('data-file');
+        const line = parseInt(this.getAttribute('data-line') || '1', 10);
         vscode.postMessage({ command: 'openFile', file: file, line: line });
       });
     });
@@ -201,7 +201,10 @@
     if (data.tree && data.tree.length > 0) {
       html += renderTreeNodes(data.tree, 0);
     } else {
-      html += '<div class="empty-state"><div class="empty-state-text">No widget tree found in build() method</div></div>';
+      const emptyMsg = data.fileName.endsWith('.dart') 
+        ? 'No widget tree found in build() method' 
+        : 'No UI components found in this file';
+      html += '<div class="empty-state"><div class="empty-state-text">' + emptyMsg + '</div></div>';
     }
 
     treeView.innerHTML = html;
@@ -216,7 +219,7 @@
 
     // Add handlers for widget nodes
     treeView.querySelectorAll('.tree-node').forEach(node => {
-      node.addEventListener('click', (e) => {
+      node.addEventListener('click', () => {
         const line = parseInt(node.getAttribute('data-line') || '1', 10);
         vscode.postMessage({ command: 'openFile', file: data.fileName, line: line });
         
@@ -321,8 +324,8 @@
   }
 
   function renderDependencyGraph(data) {
-    var statsEl = document.getElementById('graphStats');
-    var container = document.getElementById('graphContainer');
+    const statsEl = document.getElementById('graphStats');
+    const container = document.getElementById('graphContainer');
     if (!statsEl || !container) { return; }
 
     if (!data || !data.nodes || data.nodes.length === 0) {
@@ -337,29 +340,29 @@
       '<span class="stat-item">🔗 <span class="stat-value">' + data.stats.totalEdges + '</span> edges</span>';
 
     // Render as a list with import/imported-by info
-    var nodeMap = {};
-    for (var i = 0; i < data.nodes.length; i++) {
+    const nodeMap = {};
+    for (let i = 0; i < data.nodes.length; i++) {
       nodeMap[data.nodes[i].id] = data.nodes[i];
     }
 
     // Group by folder
-    var groups = {};
-    for (var j = 0; j < data.nodes.length; j++) {
-      var n = data.nodes[j];
+    const groups = {};
+    for (let j = 0; j < data.nodes.length; j++) {
+      const n = data.nodes[j];
       if (!groups[n.group]) { groups[n.group] = []; }
       groups[n.group].push(n);
     }
 
-    var html = '';
-    var groupKeys = Object.keys(groups).sort();
-    for (var g = 0; g < groupKeys.length; g++) {
-      var groupName = groupKeys[g];
-      var groupNodes = groups[groupName];
+    let html = '';
+    const groupKeys = Object.keys(groups).sort();
+    for (let g = 0; g < groupKeys.length; g++) {
+      const groupName = groupKeys[g];
+      const groupNodes = groups[groupName];
       html += '<div class="graph-section-title">' + escapeHtml(groupName) + '/</div>';
-      for (var k = 0; k < groupNodes.length; k++) {
-        var gn = groupNodes[k];
-        var imports = data.edges.filter(function (e) { return e.from === gn.id; }).length;
-        var importedBy = data.edges.filter(function (e) { return e.to === gn.id; }).length;
+      for (let k = 0; k < groupNodes.length; k++) {
+        const gn = groupNodes[k];
+        const imports = data.edges.filter(function (e) { return e.from === gn.id; }).length;
+        const importedBy = data.edges.filter(function (e) { return e.to === gn.id; }).length;
         html += '<div class="graph-node" data-file="' + escapeHtml(gn.id) + '">';
         html += '<span class="graph-node-name">' + escapeHtml(gn.label) + '</span>';
         html += '<span class="graph-node-arrows">';
@@ -374,14 +377,14 @@
     // Click to open file
     container.querySelectorAll('.graph-node').forEach(function (node) {
       node.addEventListener('click', function () {
-        var file = this.getAttribute('data-file');
+        const file = this.getAttribute('data-file');
         vscode.postMessage({ command: 'openFile', file: file, line: 1 });
       });
     });
   }
 
   function renderPubspec(data) {
-    var container = document.getElementById('pubspecContent');
+    const container = document.getElementById('pubspecContent');
     if (!container) { return; }
 
     if (!data) {
@@ -389,7 +392,7 @@
       return;
     }
 
-    var html = '';
+    let html = '';
 
     // Project Info
     html += '<div class="pubspec-section">';
@@ -404,7 +407,7 @@
     if (data.warnings && data.warnings.length > 0) {
       html += '<div class="pubspec-section">';
       html += '<div class="pubspec-section-title">⚠️ Warnings</div>';
-      for (var w = 0; w < data.warnings.length; w++) {
+      for (let w = 0; w < data.warnings.length; w++) {
         html += '<div class="warning-item">' + escapeHtml(data.warnings[w]) + '</div>';
       }
       html += '</div>';
@@ -414,8 +417,8 @@
     if (data.dependencies && data.dependencies.length > 0) {
       html += '<div class="pubspec-section">';
       html += '<div class="pubspec-section-title">📦 Dependencies (' + data.dependencies.length + ')</div>';
-      for (var d = 0; d < data.dependencies.length; d++) {
-        var dep = data.dependencies[d];
+      for (let d = 0; d < data.dependencies.length; d++) {
+        const dep = data.dependencies[d];
         html += '<div class="dep-item">';
         html += '<span class="dep-name">' + escapeHtml(dep.name);
         if (dep.isPath) { html += '<span class="dep-badge dep-badge-path">path</span>'; }
@@ -431,8 +434,8 @@
     if (data.devDependencies && data.devDependencies.length > 0) {
       html += '<div class="pubspec-section">';
       html += '<div class="pubspec-section-title">🔧 Dev Dependencies (' + data.devDependencies.length + ')</div>';
-      for (var dd = 0; dd < data.devDependencies.length; dd++) {
-        var devDep = data.devDependencies[dd];
+      for (let dd = 0; dd < data.devDependencies.length; dd++) {
+        const devDep = data.devDependencies[dd];
         html += '<div class="dep-item">';
         html += '<span class="dep-name">' + escapeHtml(devDep.name) + '</span>';
         html += '<span class="dep-version">' + escapeHtml(devDep.version) + '</span>';
@@ -445,7 +448,7 @@
     if (data.flutterAssets && data.flutterAssets.length > 0) {
       html += '<div class="pubspec-section">';
       html += '<div class="pubspec-section-title">🖼️ Assets (' + data.flutterAssets.length + ')</div>';
-      for (var a = 0; a < data.flutterAssets.length; a++) {
+      for (let a = 0; a < data.flutterAssets.length; a++) {
         html += '<div class="dep-item"><span class="dep-name">' + escapeHtml(data.flutterAssets[a]) + '</span></div>';
       }
       html += '</div>';
@@ -455,7 +458,7 @@
     if (data.flutterFonts && data.flutterFonts.length > 0) {
       html += '<div class="pubspec-section">';
       html += '<div class="pubspec-section-title">🔤 Fonts (' + data.flutterFonts.length + ')</div>';
-      for (var f = 0; f < data.flutterFonts.length; f++) {
+      for (let f = 0; f < data.flutterFonts.length; f++) {
         html += '<div class="dep-item"><span class="dep-name">' + escapeHtml(data.flutterFonts[f]) + '</span></div>';
       }
       html += '</div>';
@@ -464,21 +467,21 @@
     container.innerHTML = html;
   }
 
-  var lastAnalysisData = null;
+  let lastAnalysisData = null;
 
-  var typeFilterEl = document.getElementById('analysisTypeFilter');
+  const typeFilterEl = document.getElementById('analysisTypeFilter');
   if (typeFilterEl) {
     typeFilterEl.addEventListener('change', function() {
       if (lastAnalysisData) renderAnalysisContent(lastAnalysisData);
     });
   }
-  var colorFilterEl = document.getElementById('analysisColorFilter');
+  const colorFilterEl = document.getElementById('analysisColorFilter');
   if (colorFilterEl) {
     colorFilterEl.addEventListener('input', function() {
       if (lastAnalysisData) renderAnalysisContent(lastAnalysisData);
     });
   }
-  var fileFilterEl = document.getElementById('analysisFileFilter');
+  const fileFilterEl = document.getElementById('analysisFileFilter');
   if (fileFilterEl) {
     fileFilterEl.addEventListener('input', function() {
       if (lastAnalysisData) renderAnalysisContent(lastAnalysisData);
@@ -491,39 +494,39 @@
   }
 
   function renderAnalysisContent(data) {
-    var container = document.getElementById('analysisContent');
+    const container = document.getElementById('analysisContent');
     if (!container) { return; }
 
-    var typeFilter = typeFilterEl ? typeFilterEl.value : 'all';
-    var textFilter = colorFilterEl ? colorFilterEl.value.toLowerCase().trim() : '';
-    var fileFilter = fileFilterEl ? fileFilterEl.value.toLowerCase().trim() : '';
+    const typeFilter = typeFilterEl ? typeFilterEl.value : 'all';
+    const textFilter = colorFilterEl ? colorFilterEl.value.toLowerCase().trim() : '';
+    const fileFilter = fileFilterEl ? fileFilterEl.value.toLowerCase().trim() : '';
 
-    var html = '';
+    let html = '';
 
     // Missing Translations
     html += '<div class="pubspec-section">';
     html += '<div class="pubspec-section-title">🌐 Missing Translations</div>';
     
-    var filteredTranslations = [];
+    const filteredTranslations = [];
     if (data.missingTranslations) {
-      for (var i = 0; i < data.missingTranslations.length; i++) {
-        var mt = data.missingTranslations[i];
+      for (let i = 0; i < data.missingTranslations.length; i++) {
+        const mt = data.missingTranslations[i];
         if (fileFilter && !mt.filePath.toLowerCase().includes(fileFilter)) continue;
         filteredTranslations.push(mt);
       }
     }
 
     if (filteredTranslations.length === 0 && data.missingTranslations && data.missingTranslations.length > 0) {
-        html += '<div class="empty-state"><div class="empty-state-text">No translations match the filter!</div></div>';
+        html += '<div class="empty-state"><div class="empty-state-icon">🌐</div><div class="empty-state-text">No translations match the filter!</div></div>';
     } else if (!data.missingTranslations || data.missingTranslations.length === 0) {
       html += '<div class="empty-state"><div class="empty-state-text">All ARB files are fully synced!</div></div>';
     } else {
-      for (var i = 0; i < filteredTranslations.length; i++) {
-        var mt = filteredTranslations[i];
+      for (let i = 0; i < filteredTranslations.length; i++) {
+        const mt = filteredTranslations[i];
         html += '<div class="dep-item" style="flex-direction: column; align-items: flex-start; padding: 8px;">';
         html += '<div class="dep-name" style="margin-bottom: 4px; font-weight: bold;">' + escapeHtml(mt.filePath) + '</div>';
         html += '<div style="display: flex; flex-wrap: wrap; gap: 4px;">';
-        for (var k = 0; k < mt.missingKeys.length; k++) {
+        for (let k = 0; k < mt.missingKeys.length; k++) {
           html += '<span class="dep-badge dep-badge-path" style="margin: 0; background: #5a1d1d; color: #ffb3b3;">' + escapeHtml(mt.missingKeys[k]) + '</span>';
         }
         html += '</div></div>';
@@ -535,13 +538,13 @@
     html += '<div class="pubspec-section">';
     html += '<div class="pubspec-section-title">⚠️ Hardcoded & Duplicated Code</div>';
     
-    var filteredWarnings = [];
+    const filteredWarnings = [];
     if (data.warnings) {
-      for (var w = 0; w < data.warnings.length; w++) {
-        var fileWarn = data.warnings[w];
+      for (let w = 0; w < data.warnings.length; w++) {
+        const fileWarn = data.warnings[w];
         if (fileFilter && !fileWarn.filePath.toLowerCase().includes(fileFilter)) continue;
         
-        var matchingWarns = fileWarn.warnings.filter(function(warn) {
+        const matchingWarns = fileWarn.warnings.filter(function(warn) {
           if (typeFilter !== 'all' && warn.type !== typeFilter) return false;
           if (textFilter && !warn.message.toLowerCase().includes(textFilter)) return false;
           return true;
@@ -561,15 +564,15 @@
     } else if (!data.warnings || data.warnings.length === 0) {
       html += '<div class="empty-state"><div class="empty-state-text">No hardcoded strings or colors found!</div></div>';
     } else {
-      for (var w = 0; w < filteredWarnings.length; w++) {
-        var fileWarn = filteredWarnings[w];
+      for (let w = 0; w < filteredWarnings.length; w++) {
+        const fileWarn = filteredWarnings[w];
         html += '<div class="dep-item analysis-file-link" data-file="' + escapeHtml(fileWarn.filePath) + '" style="flex-direction: column; align-items: flex-start; padding: 8px; cursor: pointer;">';
         html += '<div class="dep-name" style="margin-bottom: 4px; font-weight: bold;">' + escapeHtml(fileWarn.filePath) + ' (' + fileWarn.warnings.length + ')</div>';
-        for (var k = 0; k < fileWarn.warnings.length; k++) {
-          var warn = fileWarn.warnings[k];
-          var bgColor = warn.type === 'hardcoded_text' ? '#3d3800' : 
+        for (let k = 0; k < fileWarn.warnings.length; k++) {
+          const warn = fileWarn.warnings[k];
+          const bgColor = warn.type === 'hardcoded_text' ? '#3d3800' : 
                         warn.type === 'hardcoded_color' ? '#1a3d1a' : '#4d1a4d'; // Purple for duplicated logic
-          var fgColor = warn.type === 'hardcoded_text' ? '#e2c08d' : 
+          const fgColor = warn.type === 'hardcoded_text' ? '#e2c08d' : 
                         warn.type === 'hardcoded_color' ? '#73c991' : '#e699ff';
           html += '<div class="warning-item analysis-warn-link" data-file="' + escapeHtml(fileWarn.filePath) + '" data-line="' + warn.line + '" style="width: 100%; display: flex; justify-content: space-between;">';
           html += '<span>' + escapeHtml(warn.message) + '</span>';
@@ -586,7 +589,7 @@
     // Add click listeners for Analysis tab
     container.querySelectorAll('.analysis-file-link').forEach(function (el) {
       el.addEventListener('click', function () {
-        var file = this.getAttribute('data-file');
+        const file = this.getAttribute('data-file');
         window.vscodeApi.postMessage({ command: 'openFile', file: file, line: 1 });
       });
     });
@@ -594,15 +597,15 @@
     container.querySelectorAll('.analysis-warn-link').forEach(function (el) {
       el.addEventListener('click', function (e) {
         e.stopPropagation(); // prevent triggering the parent file click
-        var file = this.getAttribute('data-file');
-        var line = parseInt(this.getAttribute('data-line') || '1', 10);
+        const file = this.getAttribute('data-file');
+        const line = parseInt(this.getAttribute('data-line') || '1', 10);
         window.vscodeApi.postMessage({ command: 'openFile', file: file, line: line });
       });
     });
   }
 
   function renderPackages(data) {
-    var container = document.getElementById('librariesContent');
+    const container = document.getElementById('librariesContent');
     if (!container) return;
 
     if (!data || data.length === 0) {
@@ -610,9 +613,9 @@
       return;
     }
 
-    var html = '';
-    for (var i = 0; i < data.length; i++) {
-      var pkg = data[i];
+    let html = '';
+    for (let i = 0; i < data.length; i++) {
+      const pkg = data[i];
       html += '<div class="package-item">';
       html += '<div class="package-name">' + escapeHtml(pkg.name) + '</div>';
       html += '<div class="package-version">Version: ' + escapeHtml(pkg.version) + '</div>';
@@ -625,7 +628,7 @@
   }
 
   function renderStats(stats) {
-    var statsBar = document.getElementById('statsBar');
+    const statsBar = document.getElementById('statsBar');
     if (!statsBar) { return; }
     statsBar.innerHTML =
       '<span class="stat-item" data-filter="all">📄 <span class="stat-value">' + stats.files + '</span> files</span>' +
@@ -642,22 +645,22 @@
 
     statsBar.querySelectorAll('.stat-item').forEach(function (item) {
       item.addEventListener('click', function () {
-        var filter = this.getAttribute('data-filter');
+        const filter = this.getAttribute('data-filter');
 
         // Switch to search tab
         document.querySelector('.tab[data-tab="search"]')?.click();
 
         // Update filter buttons
         document.querySelectorAll('.filter-btn').forEach(function (b) { b.classList.remove('active'); });
-        var filterBtn = document.querySelector('.filter-btn[data-filter="' + filter + '"]');
+        const filterBtn = document.querySelector('.filter-btn[data-filter="' + filter + '"]');
         if (filterBtn) filterBtn.classList.add('active');
         currentFilter = filter;
 
         // Clear search input and trigger search
-        var searchInput = document.getElementById('searchInput');
+        const searchInput = document.getElementById('searchInput');
         if (searchInput) searchInput.value = '';
 
-        var appliedFilter = filter === 'all' ? undefined : filter;
+        const appliedFilter = filter === 'all' ? undefined : filter;
         vscode.postMessage({ command: 'search', query: '', filter: appliedFilter });
       });
     });
@@ -667,7 +670,7 @@
 
   function escapeHtml(text) {
     if (!text) { return ''; }
-    var div = document.createElement('div');
+    const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
   }

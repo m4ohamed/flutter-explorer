@@ -1045,7 +1045,7 @@ server.registerTool(
 server.registerTool(
   "flutter_get_code_warnings",
   {
-    description: "Get code warnings (like hardcoded text and colors) from the Dart project with optional filtering",
+    description: "Get code warnings (like hardcoded text, colors, and duplicated code/logic) from the Dart project with optional filtering",
     inputSchema: z.object({
       typeFilter: z.enum(["all", "text", "color", "duplicated_logic"]).optional().describe("Filter by warning type ('all', 'text', 'color', 'duplicated_logic')"),
       searchQuery: z.string().optional().describe("Search text inside the warning message (e.g. #FFFFFF or a word)"),

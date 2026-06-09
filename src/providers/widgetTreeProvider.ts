@@ -22,13 +22,7 @@ export class WidgetTreeProvider {
             return null;
         }
         const fileName = editor.document.fileName;
-        const isSupported = fileName.endsWith('.dart') ||
-                            fileName.endsWith('.ts') || fileName.endsWith('.tsx') ||
-                            fileName.endsWith('.js') || fileName.endsWith('.jsx') ||
-                            fileName.endsWith('.kt') || fileName.endsWith('.java') ||
-                            fileName.endsWith('.xml') || fileName.endsWith('.gradle') ||
-                            fileName.endsWith('.gradle.kts');
-        if (!isSupported) {
+        if (!this.isSupportedFile(fileName)) {
             return null;
         }
         const content = editor.document.getText();
@@ -65,13 +59,7 @@ export class WidgetTreeProvider {
             return { fileName: null, tree: [], classNames: [] };
         }
         const filePath = editor.document.fileName;
-        const isSupported = filePath.endsWith('.dart') ||
-                            filePath.endsWith('.ts') || filePath.endsWith('.tsx') ||
-                            filePath.endsWith('.js') || filePath.endsWith('.jsx') ||
-                            filePath.endsWith('.kt') || filePath.endsWith('.java') ||
-                            filePath.endsWith('.xml') || filePath.endsWith('.gradle') ||
-                            filePath.endsWith('.gradle.kts');
-        if (!isSupported) {
+        if (!this.isSupportedFile(filePath)) {
             return { fileName: null, tree: [], classNames: [] };
         }
         const content = editor.document.getText();
@@ -99,6 +87,12 @@ export class WidgetTreeProvider {
             properties: w.properties,
             children: this.serializeWidgets(w.children),
         }));
+    }
+
+    private isSupportedFile(fileName: string): boolean {
+        return ['.dart', '.ts', '.tsx', '.js', '.jsx', '.kt', '.java', 
+                '.xml', '.gradle', '.gradle.kts']
+            .some(ext => fileName.endsWith(ext));
     }
 }
 

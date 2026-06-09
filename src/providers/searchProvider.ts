@@ -25,7 +25,11 @@ export class SearchProvider {
     }
     /** Get serializable results for webview */
     getSearchResultsForWebview(query: string, filter?: string): WebviewSearchResult[] {
-        const validFilter = filter as any;
+        const VALID_FILTERS = [
+            'class', 'function', 'widget', 'enum', 'mixin', 'translation',
+            'call', 'extension', 'typedef', 'variable', 'constructor', 'property', 'annotation'
+        ] as const;
+        const validFilter = VALID_FILTERS.includes(filter as any) ? (filter as typeof VALID_FILTERS[number]) : undefined;
         const results = this.search(query, validFilter);
         return results.map(r => ({
             name: r.name,

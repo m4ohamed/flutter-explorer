@@ -33,7 +33,7 @@ Flutter Explorer exposes its powerful indexing engine via the **Model Context Pr
 *   `flutter_get_project_structure`: Get the structure of the project (folders and files), specifically focusing on the lib/ directory.
 *   `flutter_get_file_info`: Get detailed information about a specific Dart file.
 *   `flutter_get_pubspec`: Read and analyze the project's pubspec.yaml file.
-*   `flutter_get_code_warnings`: Get all code warnings (like hardcoded text and colors) from the Dart project.
+*   `flutter_get_code_warnings`: Get all code warnings (like hardcoded text, colors, and duplicated code/logic) from the Dart project.
 *   `flutter_get_diagnostics`: Get all VS Code diagnostics (errors and warnings) for the project.
 *   `flutter_get_missing_translations`: Find missing translation keys across all ARB files.
 *   `flutter_update_translation`: Update or add a translation key across all ARB files.
@@ -58,6 +58,15 @@ Flutter Explorer exposes its powerful indexing engine via the **Model Context Pr
 *   `flutter_find_references`: Find all usages/references of a class, function, variable, enum, mixin, extension, or typedef in the project.
 *   `flutter_run_intl_generate`: Manually trigger Intl generation (l10n.dart, messages_*.dart) via the built-in IntlGenerator.
 *   `flutter_rebuild_index`: Manually trigger a full re-index of the Flutter project by the VS Code extension.
+
+### 🤖 Automated AI Skills & Rules Generation
+On activation or when running the Auto-Setup command, the extension automatically generates and distributes tailored AI skills and rules for your favorite AI assistants and editors:
+*   **Cursor**: Generates `.cursor/rules/*.mdc` rule files with globs.
+*   **Claude / Roo Code**: Generates `cline_docs/*.md` workspace documentation.
+*   **Gemini Agent / Antigravity**: Generates global skill folders under `~/.gemini/config/skills/` and appends developer instructions to `~/.gemini/GEMINI.md`.
+*   **Generic Workspace**: Generates standard markdown instructions under `skills/`.
+
+This allows your AI coding assistants to instantly learn how and when to use the MCP tools, utilizing built-in step-by-step workflows for exploration, issue debugging, and translation management.
 
 ---
 

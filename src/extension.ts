@@ -221,7 +221,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(
         vscode.workspace.onDidChangeTextDocument(async (e) => {
             if (e.document === vscode.window.activeTextEditor?.document &&
-                (e.document.fileName.match(/\.(dart|ts|tsx|js|jsx|kt|java|xml|gradle)$/))) {
+                (e.document.fileName.match(/\.(dart|ts|tsx|js|jsx|kt|java|xml|gradle|kts)$/))) {
                 sidebarProvider.postMessage({
                     command: 'widgetTree',
                     data: await widgetTreeProvider.getTreeDataForWebview(),
@@ -281,6 +281,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             console.error('Error building reverse dependencies:', err);
         });
     } else {
+        context.subscriptions.push(fileWatcher);
         // Build index without blocking on reverse dependencies
         vscode.window.withProgress(
             {
@@ -291,11 +292,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             async (progress) => {
                 await indexManager.buildFullIndex(progress);
                 updateStatusBar(indexManager);
+                fileWatcher.start();
             },
         );
-
-        fileWatcher.start();
-        context.subscriptions.push(fileWatcher);
     }
     vscode.window.showInformationMessage('Flutter Explorer is ready! 🚀');
 

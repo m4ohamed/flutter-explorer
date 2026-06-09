@@ -182,7 +182,7 @@ function setupControlListeners(): void {
   const checkboxes = [
     "filter-file", "filter-class", "filter-widget", "filter-mixin", "filter-enum", "filter-function", "filter-method",
     "filter-extension", "filter-typedef", "filter-variable", "filter-constructor",
-    "rel-imports", "rel-extends", "rel-with", "rel-calls", "rel-contains", "rel-uses_class", "rel-uses_variable"
+    "rel-imports", "rel-extends", "rel-mixes_in", "rel-implements", "rel-calls", "rel-contains", "rel-uses_class", "rel-uses_variable"
   ];
   checkboxes.forEach(id => {
     document.getElementById(id)?.addEventListener("change", () => {
@@ -320,14 +320,17 @@ function applyFilters(): void {
 
     // Contains relations represent physical nesting and should only be drawn if both parent and child are directly visible
     if (relType === "contains") {
-      const src = nodeMap.get(edge.source);
-      const tgt = nodeMap.get(edge.target);
-      if (src && tgt) {
-        filteredEdges.push({
-          source: src,
-          target: tgt,
-          kind: edge.kind
-        } as SimLink);
+      const isRelAllowed = (filters.edges as any)[relType] ?? true;
+      if (isRelAllowed) {
+        const src = nodeMap.get(edge.source);
+        const tgt = nodeMap.get(edge.target);
+        if (src && tgt) {
+          filteredEdges.push({
+            source: src,
+            target: tgt,
+            kind: edge.kind
+          } as SimLink);
+        }
       }
       return;
     }
@@ -589,7 +592,8 @@ function focusOnNode(node: SimNode): void {
   // Pan and Zoom to node position
   const width = window.innerWidth;
   const height = window.innerHeight;
-  const scale = 1.4; // Zoom close
+  const currentTransform = d3.zoomTransform(svg.node()!);
+  const scale = Math.max(currentTransform.k, 1.4);
   
   svg.transition().duration(750).call(
     zoomBehavior.transform as any,

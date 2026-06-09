@@ -27,7 +27,9 @@ import {
   MixinUsage
 } from './dartParser';
 
-export class JsTsParser {
+import { BaseParser } from './baseParser.js';
+
+export class JsTsParser extends BaseParser<DartFileInfo> {
   /**
    * A simple regex-based parser for JavaScript and TypeScript files.
    * Maps TS/JS syntax to DartFileInfo structure.
@@ -196,19 +198,17 @@ export class JsTsParser {
       }
 
       // 2. Warnings (Hardcoded text & colors)
-      const textMatch = line.match(P.hardText);
+      // For JSX we use a regex to find text between tags: />([\w\s.,!?]{3,})</
+      const textMatch = line.match(/>\s*([a-zA-Z0-9\s.,!?]{3,})\s*</);
       if (textMatch) {
-        const idx = textMatch.index ?? -1;
-        // Only consider if not inside comments/strings in masked source
-        if (idx !== -1 && maskedLine[idx] === ' ' && !trimmed.includes('import') && !trimmed.includes('require')) {
-          const matchedStr = textMatch[0];
-          if (!trimmed.includes('console.log') && !trimmed.includes('t(') && !trimmed.includes('i18n')) {
-            result.warnings.push({
-              type: 'hardcoded_text',
-              message: `Hardcoded text: ${matchedStr}`,
-              line: lineNum
-            });
-          }
+        const matchedStr = textMatch[1].trim();
+        // Exclude common programming keywords or single letters
+        if (matchedStr.length > 2 && !['import', 'require', 'const', 'let', 'var', 'return'].includes(matchedStr) && !trimmed.includes('console.log') && !trimmed.includes('t(') && !trimmed.includes('i18n')) {
+          result.warnings.push({
+            type: 'hardcoded_text',
+            message: `Hardcoded text: ${matchedStr}`,
+            line: lineNum
+          });
         }
       }
       const colorMatch = maskedLine.match(P.hardColor);
@@ -592,13 +592,61 @@ export class JsTsParser {
       }
     }
 
+    if (filePath.endsWith('.tsx') || filePath.endsWith('.jsx')) {
+      result.widgets = this.parseJsxToWidgetTree(maskedLines.join('\n'));
+    }
+
     this.analyzeUsages(maskedLines, result);
     this.extractFunctionCalls(maskedLines, result, lines);
 
     return result;
   }
 
-  private preprocessSource(content: string): string {
+  private parseJsxToWidgetTree(maskedContent: string): import('./dartParser').WidgetInfo[] {
+    const rootWidgets: import('./dartParser').WidgetInfo[] = [];
+    const stack: { widget: import('./dartParser').WidgetInfo; depth: number }[] = [];
+
+    // Simple JSX tag parser that finds start tags, self-closing tags, and end tags.
+    const tagRegex = /<(\/?)([a-zA-Z][a-zA-Z0-9_.]*)([^>]*?)?(\/?)>/g;
+
+    let match: RegExpExecArray | null;
+    while ((match = tagRegex.exec(maskedContent)) !== null) {
+      const isEnd = !!match[1];
+      const tagName = match[2];
+      const isSelfClosing = !!match[4];
+
+      let lineNum = 1;
+      for (let i = 0; i < match.index; i++) {
+        if (maskedContent[i] === '\n') lineNum++;
+      }
+
+      if (!isEnd) {
+        const widget: import('./dartParser').WidgetInfo = {
+          name: tagName,
+          line: lineNum,
+          properties: [],
+          children: []
+        };
+
+        if (stack.length === 0) {
+          rootWidgets.push(widget);
+        } else {
+          stack[stack.length - 1].widget.children.push(widget);
+        }
+
+        if (!isSelfClosing) {
+          stack.push({ widget, depth: stack.length });
+        }
+      } else {
+        if (stack.length > 0 && stack[stack.length - 1].widget.name === tagName) {
+          stack.pop();
+        }
+      }
+    }
+    return rootWidgets;
+  }
+
+  public preprocessSource(content: string): string {
     let resultStr = content;
 
     // 1. Template Literals backticks (replace contents with spaces while preserving ${expressions})
@@ -628,8 +676,8 @@ export class JsTsParser {
     return resultStr
       // Single/double quoted strings
       .replace(/(["'])((?:\\.|(?!\1)[^\\])*)\1/g, m => m.replace(/[^\n]/g, ' '))
-      // JSX/TSX tags
-      .replace(/<\/?[A-Za-z][A-Za-z0-9]*[^>]*>/g, m => m.replace(/[^\n]/g, ' '))
+      // JSX/TSX tags (non-greedy)
+      .replace(/<\/?[A-Za-z][A-Za-z0-9]*[^>]*?>/g, m => m.replace(/[^\n]/g, ' '))
       // Regex literals
       .replace(/([^/])\/([^/*\n][^/\n]*)\/([gimyuy]*)\b/g, (match, prefix, pattern, flags) => {
         return prefix + '/' + ' '.repeat(pattern.length) + '/' + ' '.repeat(flags.length);
@@ -882,95 +930,5 @@ export class JsTsParser {
     }
   }
 
-  extractCodeBlock(
-    content: string,
-    elementType: 'class' | 'function' | 'method' | 'enum' | 'mixin' | 'extension',
-    name: string,
-    parentClass?: string,
-    parsedInfo?: DartFileInfo
-  ): { body: string; startLine: number; endLine: number; comments: string[] } | null {
 
-    const parsed = parsedInfo ?? this.parse('__extract__', content);
-    const lines = content.split('\n');
-
-    let startLine = -1;
-    let endLine = -1;
-
-    switch (elementType) {
-      case 'class': {
-        const cls = parsed.classes.find(c => c.name === name);
-        if (cls) { startLine = cls.line; endLine = cls.lineEnd ?? -1; }
-        break;
-      }
-      case 'enum': {
-        const enm = parsed.enums.find(e => e.name === name);
-        if (enm) { startLine = enm.line; endLine = -1; }
-        break;
-      }
-      case 'mixin': {
-        const mix = parsed.mixins.find(m => m.name === name);
-        if (mix) { startLine = mix.line; endLine = -1; }
-        break;
-      }
-      case 'function': {
-        const fn = parsed.functions.find(f => f.name === name && !f.parentClass);
-        if (fn) { startLine = fn.line; endLine = fn.lineEnd ?? -1; }
-        break;
-      }
-      case 'method': {
-        let fn = parsed.functions.find(f => f.name === name && f.parentClass === parentClass);
-        if (!fn) {
-          for (const cls of parsed.classes) {
-            const m = cls.methods.find(m => m.name === name);
-            if (m && (!parentClass || cls.name === parentClass)) { fn = m; break; }
-          }
-        }
-        if (fn) { startLine = fn.line; endLine = fn.lineEnd ?? -1; }
-        break;
-      }
-    }
-
-    if (startLine === -1) return null;
-
-    if (endLine === -1) {
-      const masked = this.preprocessSource(content);
-      const maskedLines = masked.split('\n');
-      let depth = 0;
-      let started = false;
-      for (let i = startLine - 1; i < maskedLines.length; i++) {
-        const mLine = maskedLines[i];
-
-        if (!started && mLine.trim().endsWith(';')) {
-          endLine = i + 1;
-          break;
-        }
-
-        for (const ch of mLine) {
-          if (ch === '{') { depth++; started = true; }
-          else if (ch === '}') {
-            depth--;
-            if (started && depth === 0) { endLine = i + 1; break; }
-          }
-        }
-        if (endLine !== -1) break;
-
-        if (i > startLine + 500) break;
-      }
-    }
-
-    if (endLine === -1) return null;
-
-    const comments: string[] = [];
-    for (let i = startLine - 2; i >= 0; i--) {
-      const t = lines[i].trim();
-      if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) {
-        comments.unshift(t);
-      } else {
-        break;
-      }
-    }
-
-    const body = lines.slice(startLine - 1, endLine).join('\n');
-    return { body, startLine, endLine, comments };
-  }
 }

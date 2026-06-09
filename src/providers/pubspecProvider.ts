@@ -183,7 +183,7 @@ export class PubspecProvider {
             dependencies: [], devDependencies: [], flutterAssets: [],
             flutterFonts: [], warnings: [],
         };
-        let section: 'none' | 'dependencies' | 'dev_dependencies' | 'flutter' | 'assets' | 'fonts' = 'none';
+        let section: 'none' | 'environment' | 'dependencies' | 'dev_dependencies' | 'flutter' | 'assets' | 'fonts' = 'none';
         let indentLevel = 0;
         for (const line of lines) {
             const trimmed = line.trim();
@@ -197,6 +197,7 @@ export class PubspecProvider {
                 if (versionMatch) { data.version = versionMatch[1].trim(); continue; }
                 const descMatch = trimmed.match(/^description:\s*(.+)/);
                 if (descMatch) { data.description = descMatch[1].trim(); continue; }
+                if (trimmed === 'environment:') { section = 'environment'; indentLevel = indent; continue; }
                 if (trimmed === 'dependencies:') { section = 'dependencies'; indentLevel = indent; continue; }
                 if (trimmed === 'dev_dependencies:') { section = 'dev_dependencies'; indentLevel = indent; continue; }
                 if (trimmed === 'flutter:') { section = 'flutter'; indentLevel = indent; continue; }
@@ -204,26 +205,28 @@ export class PubspecProvider {
                 if (!trimmed.startsWith(' ') && trimmed.endsWith(':')) { section = 'none'; }
             }
             // Environment/SDK constraint
-            if (trimmed.startsWith('sdk:') && indent > 0) {
+            if (section === 'environment' && trimmed.startsWith('sdk:') && indent > indentLevel) {
                 const sdkMatch = trimmed.match(/^sdk:\s*['"]?(.+?)['"]?\s*$/);
                 if (sdkMatch) { data.sdkConstraint = sdkMatch[1]; }
                 continue;
             }
             // Dependencies
             if ((section === 'dependencies' || section === 'dev_dependencies') && indent > indentLevel) {
-                const depMatch = trimmed.match(/^(\w[\w_]*)\s*:\s*(.+)?/);
-                if (depMatch) {
-                    const dep: PubspecDep = {
-                        name: depMatch[1],
-                        version: depMatch[2]?.trim() || 'any',
-                        isPath: false,
-                        isGit: false,
-                    };
-                    if (dep.version === 'any' || dep.version === '') {
-                        data.warnings.push(`⚠️ "${dep.name}" uses 'any' version — consider pinning a version`);
+                if (indent === indentLevel + 2) {
+                    const depMatch = trimmed.match(/^(\w[\w_]*)\s*:\s*(.+)?/);
+                    if (depMatch) {
+                        const dep: PubspecDep = {
+                            name: depMatch[1],
+                            version: depMatch[2]?.trim() || 'any',
+                            isPath: false,
+                            isGit: false,
+                        };
+                        if (dep.version === 'any' || dep.version === '') {
+                            data.warnings.push(`⚠️ "${dep.name}" uses 'any' version — consider pinning a version`);
+                        }
+                        if (section === 'dependencies') { data.dependencies.push(dep); }
+                        else { data.devDependencies.push(dep); }
                     }
-                    if (section === 'dependencies') { data.dependencies.push(dep); }
-                    else { data.devDependencies.push(dep); }
                 }
                 // Path dependency
                 if (trimmed.startsWith('path:')) {

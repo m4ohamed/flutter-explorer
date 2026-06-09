@@ -65,37 +65,49 @@ export class PubspecLockProvider {
         
         let currentPackage: Partial<PackageInfo> | null = null;
         let inDescription = false;
+        let currentSection: 'none' | 'packages' | 'sdks' | 'other' = 'none';
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
             const trimmed = line.trim();
+            if (trimmed === '') continue;
             
-            // Detect package name (starts with exactly 2 spaces)
-            if (line.startsWith('  ') && !line.startsWith('    ') && trimmed.endsWith(':')) {
+            // Detect top-level sections (no leading spaces/tabs and ends with :)
+            if (!line.startsWith(' ') && !line.startsWith('\t') && trimmed.endsWith(':')) {
+                const secName = trimmed.substring(0, trimmed.length - 1);
+                if (secName === 'packages') currentSection = 'packages';
+                else if (secName === 'sdks') currentSection = 'sdks';
+                else currentSection = 'other';
+                currentPackage = null;
+                continue;
+            }
+
+            if (currentSection !== 'packages') continue;
+            
+            // Detect package name (starts with exactly 2 spaces or 1 tab)
+            const isPackageHeader = (line.startsWith('  ') && !line.startsWith('    ') && trimmed.endsWith(':')) ||
+                                    (line.startsWith('\t') && !line.startsWith('\t\t') && trimmed.endsWith(':'));
+            if (isPackageHeader) {
                 // Save previous package if valid
                 if (currentPackage && currentPackage.name && currentPackage.version) {
                     packages.push(currentPackage as PackageInfo);
                 }
                 
                 const name = trimmed.substring(0, trimmed.length - 1);
-                if (name === 'packages' || name === 'sdks') {
-                    currentPackage = null;
-                } else {
-                    currentPackage = {
-                        name,
-                        version: '',
-                        source: 'unknown',
-                        dependencyType: 'transitive',
-                        description: {}
-                    };
-                }
+                currentPackage = {
+                    name,
+                    version: '',
+                    source: 'unknown',
+                    dependencyType: 'transitive',
+                    description: {}
+                };
                 inDescription = false;
                 continue;
             }
 
             if (!currentPackage) continue;
 
-            // Detect properties (starts with 4 or more spaces)
+            // Detect properties (starts with 4 or more spaces or 2 or more tabs)
             if (trimmed.startsWith('version:')) {
                 currentPackage.version = trimmed.replace('version:', '').replace(/"/g, '').trim();
             } else if (trimmed.startsWith('source:')) {
@@ -110,7 +122,7 @@ export class PubspecLockProvider {
                 else currentPackage.dependencyType = 'transitive';
             } else if (trimmed.startsWith('description:')) {
                 inDescription = true;
-            } else if (inDescription && line.startsWith('      ')) {
+            } else if (inDescription && (line.startsWith('      ') || line.startsWith('\t\t\t'))) {
                 const parts = trimmed.split(':');
                 if (parts.length >= 2) {
                     const key = parts[0].trim();

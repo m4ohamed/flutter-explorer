@@ -30,7 +30,7 @@ export class CodeAnalyzer {
       if (!line || line.startsWith('//') || line.startsWith('*')) continue;
 
       // Validation checks
-      if (line.includes('if') && (line.includes('== null') || line.includes('=== null') || line.includes('isEmpty') || line.includes('!'))) {
+      if (line.includes('if') && (line.includes('== null') || line.includes('=== null') || line.includes('isEmpty') || line.match(/!\w+/))) {
         steps.push({
           step: stepNumber++,
           description: this.extractDescription(line, 'validation'),
@@ -113,7 +113,7 @@ export class CodeAnalyzer {
       case 'validation':
         if (cleaned.includes('== null') || cleaned.includes('=== null')) return 'Check if value is null';
         if (cleaned.includes('isEmpty')) return 'Check if collection is empty';
-        if (cleaned.includes('!')) return 'Negation check';
+        if (cleaned.match(/!\w+/)) return 'Negation check';
         return 'Validation check';
       case 'data_fetch':
         if (cleaned.includes('Hive') || cleaned.includes('box.get')) return 'Fetch data from local storage (Hive)';

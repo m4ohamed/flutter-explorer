@@ -13,6 +13,10 @@ async function setupGeminiMd(homedir: string): Promise<void> {
         const geminiMdPath = path.join(geminiDir, 'GEMINI.md');
         const ruleHeader = "# 📑 تعليمات وقواعد التطوير البرمجي لـ Gemini Agent";
         
+        const skillPath = path.join(homedir, '.gemini', 'config', 'skills', 'flutter-explorer-mcp', 'SKILL.md').replace(/\\/g, '/');
+        const formattedPath = skillPath.startsWith('/') ? skillPath : `/${skillPath}`;
+        const skillUrl = `file://${formattedPath}`;
+
         const content = `${ruleHeader}
 
 مجموعة من القواعد الأساسية والإلزامية لضمان جودة الأكواد، وتسريع عملية التطوير، وتفادي الأخطاء المتكررة. **يجب قراءة هذا الملف وملفات الأخطاء والدروس عند بدء أي جلسة عمل.**
@@ -23,6 +27,7 @@ async function setupGeminiMd(homedir: string): Promise<void> {
 1. **قراءة ملف الأخطاء**: قم فوراً بفتح وقراءة [error.md](./error.md) لفحص المشاكل السابقة وتجنبها.
 2. **قراءة ملف الدروس**: قم بفتح [lessons.md](./lessons.md) لاستيعاب الأنماط البرمجية الخاطئة والمصححة حتى لا تكررها رياضياً.
 3. **استكشاف الفهرس**: احرص على استخدام أدوات الـ MCP الخاصة بالمشروع \`@mcp:flutter-explorer-mcp:\` بشكل أساسي ومستمر للبحث عن المراجع، وفهم البنية، واستكشاف العلاقات البرمجية لضمان أقصى درجات الدقة والتوافق.
+4. **الاعتماد على المهارات (Skills)**: قبل البدء بأي مهمة متخصصة، قم بالرجوع إلى وقراءة ملفات الإرشادات الخاصة بالمهارات المتاحة (تجدها في مجلد \`skills/\` أو المسار العالمي \`~/.gemini/config/skills/\`). على سبيل المثال، اقرأ ملف المهارة الشامل لـ [flutter-explorer-mcp](${skillUrl}) لفهم سير العمل والأدوات وقواعد معالجة الأخطاء.
 
 ---
 

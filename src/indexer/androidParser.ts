@@ -27,8 +27,9 @@ import {
   EnumUsage,
   MixinUsage
 } from './dartParser';
+import { BaseParser } from './baseParser.js';
 
-export class AndroidParser {
+export class AndroidParser extends BaseParser<DartFileInfo> {
   /**
    * A regex-based parser for Android files (.kt, .java, .xml, .gradle).
    * Maps syntax to DartFileInfo structure.
@@ -590,13 +591,18 @@ export class AndroidParser {
       const fMatch = trimmed.match(/fun\s+(\w+)\s*\(/);
       if (fMatch) { curFunc = fMatch[1]; funcBrace = bDepth - 1; }
 
-      for (const sym of symbols) {
-        if (sym.pattern.test(mLine)) {
-          // Skip if this line is the definition itself
-          const isDef = trimmed.includes(`class ${sym.name}`) || trimmed.includes(`fun ${sym.name}`) || trimmed.includes(`enum class ${sym.name}`) || trimmed.includes(`interface ${sym.name}`);
-          if (isDef) continue;
+      const words = mLine.match(/\b[A-Za-z_]\w*\b/g);
+      if (!words) continue;
+      const uniqueWords = new Set(words);
 
-          if (sym.kind === 'class') {
+      for (const word of uniqueWords) {
+        for (const sym of symbols) {
+          if (sym.name === word) {
+            // Skip if this line is the definition itself
+            const isDef = trimmed.includes(`class ${sym.name}`) || trimmed.includes(`fun ${sym.name}`) || trimmed.includes(`enum class ${sym.name}`) || trimmed.includes(`interface ${sym.name}`);
+            if (isDef) continue;
+
+            if (sym.kind === 'class') {
             const usage = classUsageMap.get(sym.name);
             if (usage) {
               if (curCls && !usage.usedByClasses.includes(curCls)) usage.usedByClasses.push(curCls);
@@ -616,6 +622,7 @@ export class AndroidParser {
           } else if (sym.kind === 'mixin') {
             const usage = mixinUsageMap.get(sym.name);
             if (usage && !usage.usedInFiles.includes(result.filePath)) usage.usedInFiles.push(result.filePath);
+          }
           }
         }
       }
@@ -643,6 +650,14 @@ export class AndroidParser {
     const lines = content.split('\n');
     const masked = this.preprocessXml(content);
     const maskedLines = masked.split('\n');
+
+    const getLineNum = (index: number): number => {
+      let count = 1;
+      for (let i = 0; i < index; i++) {
+        if (content[i] === '\n') count++;
+      }
+      return count;
+    };
 
     // 1. Check if it's a layout file
     const isLayoutFile = filePath.toLowerCase().includes('layout/') || content.trim().startsWith('<layout') || content.trim().startsWith('<RelativeLayout') || content.trim().startsWith('<LinearLayout') || content.trim().startsWith('<ConstraintLayout') || content.trim().startsWith('<FrameLayout') || content.trim().startsWith('<androidx.');
@@ -693,7 +708,7 @@ export class AndroidParser {
         const type = match[1];
         const name = match[2];
         const value = match[3].trim();
-        const lineNum = content.substring(0, match.index).split('\n').length;
+        const lineNum = getLineNum(match.index);
 
         result.variables.push({
           name,
@@ -718,7 +733,7 @@ export class AndroidParser {
       const permissionRegex = /<uses-permission\s+android:name="([^"]+)"\s*\/>/g;
       let permMatch: RegExpExecArray | null;
       while ((permMatch = permissionRegex.exec(content)) !== null) {
-        const lineNum = content.substring(0, permMatch.index).split('\n').length;
+        const lineNum = getLineNum(permMatch.index);
         result.imports.push({
           path: permMatch[1],
           alias: null,
@@ -737,7 +752,7 @@ export class AndroidParser {
         if (name.startsWith('.')) {
           name = packageName ? packageName + name : name.substring(1);
         }
-        const lineNum = content.substring(0, compMatch.index).split('\n').length;
+        const lineNum = getLineNum(compMatch.index);
 
         result.classes.push({
           name,
@@ -775,7 +790,10 @@ export class AndroidParser {
       // Skip XML declarations/comments/namespaces
       if (tagName.startsWith('?') || tagName.startsWith('!')) continue;
 
-      const lineNum = content.substring(0, match.index).split('\n').length;
+      let lineNum = 1;
+      for (let i = 0; i < match.index; i++) {
+        if (content[i] === '\n') lineNum++;
+      }
 
       if (!isEnd) {
         // Parse attributes
@@ -829,7 +847,10 @@ export class AndroidParser {
     let depMatch: RegExpExecArray | null;
     while ((depMatch = depRegex.exec(content)) !== null) {
       const depName = depMatch[1];
-      const lineNum = content.substring(0, depMatch.index).split('\n').length;
+      let lineNum = 1;
+      for (let i = 0; i < depMatch.index; i++) {
+        if (content[i] === '\n') lineNum++;
+      }
 
       result.imports.push({
         path: depName,
@@ -844,7 +865,10 @@ export class AndroidParser {
     const catalogDepRegex = /(?:implementation|api|kapt|testImplementation)\s*\(?\s*libs\.([\w.]+)\s*\)?/g;
     while ((depMatch = catalogDepRegex.exec(content)) !== null) {
       const depName = `libs.${depMatch[1]}`;
-      const lineNum = content.substring(0, depMatch.index).split('\n').length;
+      let lineNum = 1;
+      for (let i = 0; i < depMatch.index; i++) {
+        if (content[i] === '\n') lineNum++;
+      }
 
       result.imports.push({
         path: depName,
@@ -887,105 +911,7 @@ export class AndroidParser {
     return result;
   }
 
-  /**
-   * Extract code block for specific elements (identical behavior to DartParser & JsTsParser)
-   */
-  extractCodeBlock(
-    content: string,
-    elementType: 'class' | 'function' | 'method' | 'enum' | 'mixin' | 'extension',
-    name: string,
-    parentClass?: string,
-    parsedInfo?: DartFileInfo
-  ): { body: string; startLine: number; endLine: number; comments: string[] } | null {
-    const parsed = parsedInfo ?? this.parse('__extract__', content);
-    const lines = content.split('\n');
-
-    let startLine = -1;
-    let endLine = -1;
-
-    switch (elementType) {
-      case 'class': {
-        const cls = parsed.classes.find(c => c.name === name);
-        if (cls) { startLine = cls.line; endLine = cls.lineEnd ?? -1; }
-        break;
-      }
-      case 'enum': {
-        const enm = parsed.enums.find(e => e.name === name);
-        if (enm) { startLine = enm.line; endLine = -1; }
-        break;
-      }
-      case 'mixin': {
-        const mix = parsed.mixins.find(m => m.name === name);
-        if (mix) { startLine = mix.line; endLine = -1; }
-        break;
-      }
-      case 'function': {
-        const fn = parsed.functions.find(f => f.name === name && !f.parentClass);
-        if (fn) { startLine = fn.line; endLine = fn.lineEnd ?? -1; }
-        break;
-      }
-      case 'method': {
-        let fn = parsed.functions.find(f => f.name === name && f.parentClass === parentClass);
-        if (!fn) {
-          for (const cls of parsed.classes) {
-            const m = cls.methods.find(m => m.name === name);
-            if (m && (!parentClass || cls.name === parentClass)) { fn = m; break; }
-          }
-        }
-        if (fn) { startLine = fn.line; endLine = fn.lineEnd ?? -1; }
-        break;
-      }
-    }
-
-    if (startLine === -1) return null;
-
-    if (endLine === -1) {
-      const ext = path.extname(parsed.filePath).toLowerCase();
-      const masked = ext === '.xml' ? this.preprocessXml(content) : this.preprocessKotlinJava(content);
-      const maskedLines = masked.split('\n');
-      let depth = 0;
-      let started = false;
-      for (let i = startLine - 1; i < maskedLines.length; i++) {
-        const mLine = maskedLines[i];
-
-        if (!started && mLine.trim().endsWith(';')) {
-          endLine = i + 1;
-          break;
-        }
-
-        for (const ch of mLine) {
-          if (ch === '{' || (ext === '.xml' && ch === '<' && !mLine.includes('</') && !mLine.includes('/>'))) {
-            depth++;
-            started = true;
-          } else if (ch === '}' || (ext === '.xml' && ch === '>')) {
-            if (started) {
-              depth--;
-              if (depth === 0) { endLine = i + 1; break; }
-            }
-          }
-        }
-        if (endLine !== -1) break;
-        if (i > startLine + 500) break;
-      }
-    }
-
-    if (endLine === -1) return null;
-
-    const comments: string[] = [];
-    for (let i = startLine - 2; i >= 0; i--) {
-      const t = lines[i].trim();
-      if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*') || t.startsWith('<!--')) {
-        comments.unshift(t);
-      } else {
-        break;
-      }
-    }
-
-    return {
-      body: lines.slice(startLine - 1, endLine).join('\n'),
-      startLine,
-      endLine,
-      comments
-    };
+  public preprocessSource(content: string): string {
+    return this.preprocessKotlinJava(content);
   }
 }

@@ -18,7 +18,12 @@ export class ArbEditor {
       const files = fs.readdirSync(dir);
       for (const file of files) {
         const fullPath = path.join(dir, file);
-        const stat = fs.statSync(fullPath);
+        let stat;
+        try {
+          stat = fs.statSync(fullPath);
+        } catch (e) {
+          continue;
+        }
         if (stat.isDirectory()) {
           walkDir(fullPath);
         } else if (file.endsWith('.arb')) {
@@ -61,7 +66,10 @@ export class ArbEditor {
       let value = '';
       if (arbFile.toLowerCase().includes('_ar.arb') || arbFile.toLowerCase().includes('ar.arb')) {
         value = arValue;
+      } else if (arbFile.toLowerCase().includes('_en.arb') || arbFile.toLowerCase().includes('en.arb')) {
+        value = enValue;
       } else {
+        // Fallback for other locales - assuming English as default
         value = enValue;
       }
       

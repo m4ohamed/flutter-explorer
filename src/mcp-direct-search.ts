@@ -59,7 +59,12 @@ export class DirectSearch {
         const files = fs.readdirSync(this.projectRoot);
         for (const file of files) {
           if (/^(App|index|main)\.(ts|tsx|js|jsx)$/.test(file)) {
-             sourceFiles.push(file);
+            try {
+              const stat = fs.statSync(path.join(this.projectRoot, file));
+              if (!stat.isDirectory()) {
+                sourceFiles.push(file);
+              }
+            } catch (e) {}
           }
         }
       } catch (e) {}
@@ -246,6 +251,7 @@ export class DirectSearch {
         if (searchMode === 'definitions' || searchMode === 'both') {
           for (let i = 0; i < lines.length; i++) {
             const line = lines[i].trim();
+            // Note: This regex is broad and acts as a fallback. It might match some generic assignments.
             const varMatch = line.match(/^(?:export\s+)?(?:final|const|let|var|late)?\s*(?:final|const)?\s*(?:[\w<>\[\]?,\s]+)?\s+(\w+)\s*(?:=\s*[^;]+)?;/);
             if (varMatch && varMatch[1].toLowerCase().includes(q)) {
               results.push({

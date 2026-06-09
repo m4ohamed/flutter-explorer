@@ -238,23 +238,6 @@ interface WebviewMessage {
     file?: string;
     line?: number;
 }
-interface WebviewSearchResult {
-    name: string;
-    type: string;
-    subType: string;
-    file: string;
-    line: number;
-    relativePath: string;
-    isPrivate: boolean;
-    usageCount?: number;
-}
-function getSearchResultsForWebview(results: SearchResult[], rootPath: string): WebviewSearchResult[] {
-    return results.map(r => ({
-        ...r,
-        relativePath: path.relative(rootPath, r.file),
-        usageCount: r.usageCount
-    }));
-}
 function getNonce(): string {
     let text = '';
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';

@@ -203,6 +203,8 @@ export class FileWatcher implements vscode.Disposable {
         for (const timer of this.debounceTimers.values()) { clearTimeout(timer); }
         this.debounceTimers.clear();
         for (const w of this.watchers) { w.dispose(); }
+        this.watchers = [];
         for (const d of this.disposables) { d.dispose(); }
+        this.disposables = [];
     }
 }

@@ -14,24 +14,7 @@ body {
     overflow-x: hidden;
 }
 
-/* Custom Scrollbar for VS Code Webview */
-::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-}
-::-webkit-scrollbar-track {
-    background: transparent;
-}
-::-webkit-scrollbar-thumb {
-    background: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4));
-    border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-    background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.7));
-}
-::-webkit-scrollbar-thumb:active {
-    background: var(--vscode-scrollbarSlider-activeBackground, rgba(191, 191, 191, 0.4));
-}
+
 
 .container {
     display: flex;

@@ -151,6 +151,20 @@ void main(List<String> args) async {
                   'isPrivate': ext.isPrivate,
                   'line': lineInfo.getLocation(ext.nameOffset != -1 ? ext.nameOffset : declaration.offset).lineNumber,
                 });
+              } else if (declaration is GenericTypeAlias) {
+                final typedef_ = declaration.declaredElement!;
+                (fileInfo['typedefs'] as List).add({
+                  'name': typedef_.name,
+                  'isPrivate': typedef_.isPrivate,
+                  'line': lineInfo.getLocation(typedef_.nameOffset).lineNumber,
+                });
+              } else if (declaration is FunctionTypeAlias) {
+                final typedef_ = declaration.declaredElement!;
+                (fileInfo['typedefs'] as List).add({
+                  'name': typedef_.name,
+                  'isPrivate': typedef_.isPrivate,
+                  'line': lineInfo.getLocation(typedef_.nameOffset).lineNumber,
+                });
 
               } else if (declaration is TopLevelVariableDeclaration) {
                 for (final variable in declaration.variables.variables) {
@@ -201,12 +215,30 @@ class WidgetTreeVisitor extends RecursiveAstVisitor<void> {
 
   @override
   void visitInstanceCreationExpression(InstanceCreationExpression node) {
-    final name = (node.constructorName.type as dynamic).name.toString();
+    String name = '';
+    try {
+      final dynamic t = node.constructorName.type;
+      try {
+        name = t.name2?.lexeme?.toString() ?? '';
+      } catch (_) {
+        try {
+          name = t.name?.name?.toString() ?? '';
+        } catch (_) {
+          name = t.toString().split('<').first;
+        }
+      }
+      if (name.isEmpty) {
+        name = t.toString().split('<').first;
+      }
+    } catch (e) {
+      super.visitInstanceCreationExpression(node);
+      return;
+    }
 
     
     // Heuristic for Widgets: Starts with UpperCase, not common non-widget types
     if (name.isNotEmpty && name[0] == name[0].toUpperCase() && 
-        !['String', 'int', 'double', 'bool', 'List', 'Map', 'Set', 'Future', 'Stream'].contains(name)) {
+        !['String', 'int', 'double', 'bool', 'List', 'Map', 'Set', 'Future', 'Stream', 'Duration', 'DateTime', 'TextEditingController', 'GlobalKey', 'AnimationController', 'ScrollController'].contains(name)) {
       
       final widget = {
         'name': name,
@@ -248,8 +280,8 @@ class WidgetTreeVisitor extends RecursiveAstVisitor<void> {
   bool _isInsideBuildMethod(AstNode node) {
     AstNode? parent = node.parent;
     while (parent != null) {
-      if (parent is MethodDeclaration && (parent as dynamic).name.toString() == 'build') {
-        return true;
+      if (parent is MethodDeclaration) {
+        if (parent.name.lexeme == 'build') return true;
       }
 
       parent = parent.parent;

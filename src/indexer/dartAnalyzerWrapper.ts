@@ -46,7 +46,7 @@ export async function analyzeWithDart(
 
 
         return new Promise((resolve) => {
-            const child = spawn('dart', [toolsPath, projectPath], { shell: true });
+            const child = spawn('dart', [`"${toolsPath}"`, `"${projectPath}"`], { shell: true });
             let stdoutData = '';
             let stderrData = '';
 
@@ -148,22 +148,10 @@ async function checkDartSdk(): Promise<boolean> {
         exec('dart --version', (error) => {
             if (!error) {
                 resolve(true);
-                return;
+            } else {
+                console.warn('[FlutterExplorer] Dart SDK not found or failed to run. Falling back to regex parser.');
+                resolve(false);
             }
-
-            // Use 'where' on Windows or 'which' on POSIX to find the dart executable
-            const command = process.platform === 'win32' ? 'where dart' : 'which dart';
-
-            exec(command, (whereError, stdout) => {
-                if (!whereError && stdout.trim()) {
-                    const dartPath = stdout.trim().split('\r\n')[0].split('\n')[0];
-                    console.log(`[FlutterExplorer] Found Dart SDK via path search: ${dartPath}`);
-                    resolve(true);
-                } else {
-                    console.warn('[FlutterExplorer] Dart SDK not found in PATH. Falling back to regex parser.');
-                    resolve(false);
-                }
-            });
         });
     });
 }
