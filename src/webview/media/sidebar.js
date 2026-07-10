@@ -93,6 +93,13 @@
     });
   }
 
+  const compareParsers = document.getElementById('compareParsers');
+  if (compareParsers) {
+    compareParsers.addEventListener('click', function () {
+      vscode.postMessage({ command: 'compareParsers' });
+    });
+  }
+
   const refreshLibraries = document.getElementById('refreshLibraries');
   if (refreshLibraries) {
     refreshLibraries.addEventListener('click', function () {

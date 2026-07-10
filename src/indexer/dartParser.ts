@@ -1,9 +1,5 @@
 import * as crypto from 'crypto';
-
-/**
- * Dart File Parser - Regex-based extraction of classes, functions, widgets,
- * imports, exports, enums, and mixins from Dart source files.
- */
+import { BaseParser } from './baseParser.js';
 export interface ClassInfo {
   name: string;
   type: string;
@@ -36,7 +32,10 @@ export interface WidgetInfo {
   name: string;
   line: number;
   children: WidgetInfo[];
-  properties: { name: string; value: string }[];
+  properties: {
+    name: string;
+    value: string;
+  }[];
   bodyHash?: string;
   bodyLength?: number;
 }
@@ -74,7 +73,6 @@ export interface FunctionCall {
   isChained: boolean;
   receiver?: string;
 }
-
 export interface ExtensionTypeInfo {
   name: string;
   representationType: string;
@@ -86,7 +84,6 @@ export interface ExtensionTypeInfo {
   methods: FunctionInfo[];
   properties: PropertyInfo[];
 }
-
 export interface ExtensionInfo {
   name: string;
   onType: string;
@@ -95,14 +92,12 @@ export interface ExtensionInfo {
   line: number;
   isPrivate: boolean;
 }
-
 export interface TypedefInfo {
   name: string;
   signature: string;
   line: number;
   isPrivate: boolean;
 }
-
 export interface VariableInfo {
   name: string;
   type: string;
@@ -113,7 +108,6 @@ export interface VariableInfo {
   isPrivate: boolean;
   isTopLevel: boolean;
 }
-
 export interface ConstructorInfo {
   name: string;
   className: string;
@@ -122,7 +116,6 @@ export interface ConstructorInfo {
   params: string;
   line: number;
 }
-
 export interface PropertyInfo {
   name: string;
   type: string;
@@ -135,7 +128,6 @@ export interface PropertyInfo {
   isSetter: boolean;
   line: number;
 }
-
 export interface AnnotationInfo {
   name: string;
   target: string;
@@ -144,15 +136,15 @@ export interface AnnotationInfo {
 }
 export interface ClassUsage {
   className: string;
-  usedInFiles: string[]; // Files that use this class
-  usedByClasses: string[]; // Classes that use this class
-  usedByFunctions: string[]; // Functions that use this class
-  confidence: 'high' | 'medium' | 'low'; // Confidence level
+  usedInFiles: string[];
+  usedByClasses: string[];
+  usedByFunctions: string[];
+  confidence: 'high' | 'medium' | 'low';
 }
 export interface FunctionUsage {
   functionName: string;
   parentClass: string | null;
-  calledByFunctions: string[]; // Functions that call this function
+  calledByFunctions: string[];
   calledInFiles: string[];
   confidence: 'high' | 'medium' | 'low';
 }
@@ -221,7 +213,6 @@ export interface DartFileInfo {
   annotationUsages: AnnotationUsage[];
   enumUsages: EnumUsage[];
   mixinUsages: MixinUsage[];
-  // New elements
   extensions: ExtensionInfo[];
   typedefs: TypedefInfo[];
   variables: VariableInfo[];
@@ -245,10 +236,11 @@ const SKIP_METHODS = new Set([
 const RESERVED = new Set([
   'class', 'enum', 'mixin', 'if', 'for', 'while', 'switch', 'catch', 'try', 'return',
 ]);
-import { BaseParser } from './baseParser.js';
-
+const NON_DEF_KEYWORDS = new Set([
+  'return', 'await', 'throw', 'yield', 'new', 'else', 'case',
+  'in', 'is', 'as', 'if', 'for', 'while', 'switch', 'catch', 'assert', 'final', 'var', 'const',
+]);
 export class DartParser extends BaseParser<DartFileInfo> {
-  // All RegExps created once and reused — never inside loops
   private static readonly P = {
     import_: /^import\s+['"]([^'"]+)['"]\s*(?:as\s+(\w+))?\s*(?:show\s+([\w,\s]+))?\s*(?:hide\s+([\w,\s]+))?\s*;/,
     export_: /^export\s+['"]([^'"]+)['"]\s*;/,
@@ -265,8 +257,8 @@ export class DartParser extends BaseParser<DartFileInfo> {
     ctor: /^\s*(const\s+)?(factory\s+)?(\w+)(?:\.(\w+))?\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(?::[^{;]*)?([\{;])/,
     buildMethod: /(?:Widget|Route|PreferredSizeWidget|StatelessWidget|StatefulWidget)\s+(\w+)\s*\(([^)]*)\)/,
     method: /^\s*(static\s+)?(\w[\w<>\[\]?,\s]*?)\s+(\w+)\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
-    getter: /^\s+(\w+)\s+get\s+(\w+)\s*(=>|\{)/,
-    setter: /^\s+(\w+)\s+set\s+(\w+)\s*\(([^)]*)\)/,
+    getter: /^\s*(static\s+)?([\w<>\[\]?,\s]+?)\s+get\s+(\w+)\s*(=>|\{)/,
+    setter: /^\s*(static\s+)?(\w+)\s+set\s+(\w+)\s*\(([^)]*)\)/,
     field: /^\s+(final|const|late)?\s*(final|const)?\s*(static\s+)?([\w<>\[\]?,\s]+?)\s+(\w+)\s*(=\s*[^;]+)?;/,
     topVar: /^(final|const|late)?\s*(final|const)?\s*([\w<>\[\]?,\s]+?)\s+(\w+)\s*(=\s*[^;]+)?;/,
     topFunc: /^(\w[\w<>\[\]?,\s]*?)\s+(\w+)\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
@@ -274,39 +266,34 @@ export class DartParser extends BaseParser<DartFileInfo> {
     classDef: /class\s+(\w+)/,
     funcDef: /([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(/,
   } as const;
-
-  /**
-   * Mask string literals and comments with spaces so regex passes never
-   * produce false positives from content inside strings or comments.
-   * The masked source has identical line/column positions to the original.
-   *
-   * Fixes: false positives in usages, function calls, and warnings
-   * (e.g.  print("class User");  or  // fetchData()  )
-   */
   public preprocessSource(content: string): string {
     return content
-      // Raw strings أولاً (r'...' و r"..." و r'''...''' و r"""...""")
-      .replace(/r'''[\s\S]*?'''|r"""[\s\S]*?"""/g,
-        m => m.replace(/[^\n]/g, ' '))
-      .replace(/r'[^']*'|r"[^"]*"/g,
-        m => m.replace(/[^\n]/g, ' '))
-      // Triple-quoted strings
-      .replace(/'''[\s\S]*?'''|"""[\s\S]*?"""/g,
-        m => m.replace(/[^\n]/g, ' '))
-      // Single/double quoted strings
-      .replace(/(["'])((?:\\.|(?!\1)[^\\])*)\1/g,
-        m => m.replace(/[^\n]/g, ' '))
-      // Line comments
+      .replace(/r'''[\s\S]*?'''|r"""[\s\S]*?"""/g, m => m.replace(/[^\n]/g, ' '))
+      .replace(/r'[^']*'|r"[^"]*"/g, m => m.replace(/[^\n]/g, ' '))
+      .replace(/'''[\s\S]*?'''|"""[\s\S]*?"""/g, m => m.replace(/[^\n]/g, ' '))
+      .replace(/(["'])((?:\\.|(?!\1)[^\\])*)\1/g, m => m.replace(/[^\n]/g, ' '))
       .replace(/\/\/[^\n]*/g, m => ' '.repeat(m.length))
-      // Nested block comments (Dart يدعمها)
-      .replace(/\/\*(?:[^*]|\*(?!\/))*\*\//g,
-        m => m.replace(/[^\n]/g, ' '));
+      .replace(/\/\*(?:[^*]|\*(?!\/))*\*\//g, m => m.replace(/[^\n]/g, ' '));
   }
-
+  private findContainer(
+    result: DartFileInfo,
+    name: string
+  ): ClassInfo | ExtensionInfo | ExtensionTypeInfo | undefined {
+    return result.classes.find(c => c.name === name)
+      ?? result.extensions.find(e => e.name === name)
+      ?? result.extensionTypes.find(et => et.name === name);
+  }
+  private attachMethod(result: DartFileInfo, containerName: string, method: FunctionInfo): void {
+    this.findContainer(result, containerName)?.methods.push(method);
+  }
+  private attachProperty(result: DartFileInfo, containerName: string, prop: PropertyInfo): void {
+    this.findContainer(result, containerName)?.properties.push(prop);
+  }
   parse(filePath: string, content: string): DartFileInfo {
     try {
       return this._parseInternal(filePath, content);
-    } catch (err) {
+    }
+    catch (err) {
       console.error(`[DartParser] Failed to parse ${filePath}:`, err);
       return {
         filePath, classes: [], functions: [], functionCalls: [],
@@ -320,15 +307,10 @@ export class DartParser extends BaseParser<DartFileInfo> {
       };
     }
   }
-
   private _parseInternal(filePath: string, content: string): DartFileInfo {
     const lines = content.split('\n');
-
-    // FIX (preprocessing): use masked source for all regex work
-    // so strings and comments never produce false positives
     const masked = this.preprocessSource(content);
     const maskedLines = masked.split('\n');
-
     const result: DartFileInfo = {
       filePath, classes: [], functions: [], functionCalls: [],
       imports: [], exports: [], widgets: [], enums: [], mixins: [], warnings: [],
@@ -341,45 +323,41 @@ export class DartParser extends BaseParser<DartFileInfo> {
       annotations: [],
       extensionTypes: [],
     };
-
-    // FIX (scope stack): replaces fragile currentClass / currentFunction booleans.
-    // Correctly handles nested closures, anonymous functions, and inline callbacks.
     interface ScopeFrame {
       type: 'class' | 'function' | 'closure' | 'extensionType';
       name: string;
-      braceDepth: number; // braceDepth at which this scope OPENED
+      braceDepth: number;
       ref?: ClassInfo | FunctionInfo | ExtensionTypeInfo | ExtensionInfo;
     }
     const scopeStack: ScopeFrame[] = [];
-
     const currentClass = (): string | null => {
       for (let i = scopeStack.length - 1; i >= 0; i--)
-        if (scopeStack[i].type === 'class' || scopeStack[i].type === 'extensionType') return scopeStack[i].name;
+        if (scopeStack[i].type === 'class' || scopeStack[i].type === 'extensionType')
+          return scopeStack[i].name;
       return null;
     };
     const currentFunction = (): string | null => {
       for (let i = scopeStack.length - 1; i >= 0; i--)
-        if (scopeStack[i].type === 'function') return scopeStack[i].name;
+        if (scopeStack[i].type === 'function')
+          return scopeStack[i].name;
       return null;
     };
-
     let braceDepth = 0;
     let inBuildMethod = false;
     let buildBraceStart = 0;
     let buildLines: string[] = [];
-
-    const P = DartParser.P; // shorthand
-
-    // Helper to sync braces and pop scopes — handles current line or multiple lines
+    const P = DartParser.P;
     const syncBraces = (lineIdx: number, count: number = 1) => {
       for (let k = 0; k < count; k++) {
         const idx = lineIdx + k;
-        if (idx >= maskedLines.length) break;
+        if (idx >= maskedLines.length)
+          break;
         const mLine = maskedLines[idx];
         for (const ch of mLine) {
           if (ch === '{') {
             braceDepth++;
-          } else if (ch === '}') {
+          }
+          else if (ch === '}') {
             braceDepth--;
             while (scopeStack.length > 0 && scopeStack[scopeStack.length - 1].braceDepth >= braceDepth) {
               const popped = scopeStack.pop();
@@ -389,31 +367,35 @@ export class DartParser extends BaseParser<DartFileInfo> {
                 if (!actualRef) {
                   if (popped.type === 'class') {
                     actualRef = result.classes.find(c => c.name === popped.name && c.lineEnd === undefined);
-                  } else if (popped.type === 'extensionType') {
+                  }
+                  else if (popped.type === 'extensionType') {
                     actualRef = result.extensionTypes.find(e => e.name === popped.name && e.lineEnd === undefined);
-                  } else if (popped.type === 'function') {
+                  }
+                  else if (popped.type === 'function') {
                     actualRef = result.functions.find(f => f.name === popped.name && f.lineEnd === undefined);
                     if (!actualRef) {
                       for (const cls of result.classes) {
                         actualRef = cls.methods.find(f => f.name === popped.name && f.lineEnd === undefined);
-                        if (actualRef) break;
+                        if (actualRef)
+                          break;
                       }
                       if (!actualRef) {
                         for (const ext of result.extensions) {
                           actualRef = ext.methods.find(f => f.name === popped.name && f.lineEnd === undefined);
-                          if (actualRef) break;
+                          if (actualRef)
+                            break;
                         }
                       }
                       if (!actualRef) {
                         for (const et of result.extensionTypes) {
                           actualRef = et.methods.find(f => f.name === popped.name && f.lineEnd === undefined);
-                          if (actualRef) break;
+                          if (actualRef)
+                            break;
                         }
                       }
                     }
                   }
                 }
-
                 if (actualRef) {
                   actualRef.lineEnd = lineNum_;
                   const startLine = actualRef.line - 1;
@@ -421,7 +403,6 @@ export class DartParser extends BaseParser<DartFileInfo> {
                   if (startLine >= 0 && endLine < maskedLines.length && startLine <= endLine) {
                     const bodyLines = maskedLines.slice(startLine, endLine + 1);
                     const rawBody = bodyLines.join(' ');
-                    // Ignore function/class name, strip all whitespace
                     const normalizedBody = rawBody.replace(new RegExp(`\\b${popped.name}\\b`, 'g'), '').replace(/\s+/g, '');
                     actualRef.bodyLength = normalizedBody.length;
                     actualRef.bodyHash = crypto.createHash('md5').update(normalizedBody).digest('hex');
@@ -432,25 +413,23 @@ export class DartParser extends BaseParser<DartFileInfo> {
             if (inBuildMethod && braceDepth <= buildBraceStart) {
               inBuildMethod = false;
               const wt = this.parseWidgetTree(buildLines.join('\n'), true);
-              if (wt.length > 0) result.widgets.push(...wt);
+              if (wt.length > 0)
+                result.widgets.push(...wt);
               buildLines = [];
             }
           }
         }
       }
     };
-
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];        // original (for display / warnings)
-      const maskedLine = maskedLines[i];  // masked (for all regex matching)
+      const line = lines[i];
+      const maskedLine = maskedLines[i];
       const trimmed = maskedLine.trim();
       const lineNum = i + 1;
-
-      if (trimmed === '') continue;
-      // skip lines that are entirely masked comments (all spaces after trim)
-      if (/^\s*$/.test(trimmed)) continue;
-
-      // Imports — use masked line
+      if (trimmed === '')
+        continue;
+      if (/^\s*$/.test(trimmed))
+        continue;
       const imp = trimmed.match(P.import_);
       if (imp) {
         result.imports.push({
@@ -459,22 +438,27 @@ export class DartParser extends BaseParser<DartFileInfo> {
           hideNames: imp[4] ? imp[4].split(',').map(s => s.trim()) : [],
           line: lineNum,
         });
-        syncBraces(i); continue;
+        syncBraces(i);
+        continue;
       }
-
       const exp = trimmed.match(P.export_);
-      if (exp) { result.exports.push(exp[1]); syncBraces(i); continue; }
-
-      if (trimmed.startsWith('import ') || trimmed.startsWith('export ')) { syncBraces(i); continue; }
-
-      // Hardcoded text/color — use ORIGINAL line (we want real content for message)
-      // but only if it isn't inside a string/comment
+      if (exp) {
+        result.exports.push(exp[1]);
+        syncBraces(i);
+        continue;
+      }
+      if (trimmed.startsWith('import ') || trimmed.startsWith('export ')) {
+        syncBraces(i);
+        continue;
+      }
       const textMatch = line.match(P.hardText);
       if (textMatch) {
         const idx = textMatch.index ?? -1;
         if (idx !== -1 && maskedLine[idx] === 'T') {
           const matchedStr = textMatch[0];
-          if (!matchedStr.includes('.tr') && !matchedStr.includes('S.of') && !matchedStr.includes('Intl.message')) {
+          const afterMatch = line.substring(idx + matchedStr.length, idx + matchedStr.length + 40);
+          const fullContext = matchedStr + afterMatch;
+          if (!fullContext.includes('.tr') && !fullContext.includes('S.of') && !fullContext.includes('Intl.message')) {
             result.warnings.push({ type: 'hardcoded_text', message: `Hardcoded text: ${matchedStr}`, line: lineNum });
           }
         }
@@ -483,32 +467,27 @@ export class DartParser extends BaseParser<DartFileInfo> {
       if (colorMatch && !filePath.toLowerCase().includes('theme') && !filePath.toLowerCase().includes('color')) {
         result.warnings.push({ type: 'hardcoded_color', message: `Hardcoded color: ${colorMatch[0]}`, line: lineNum });
       }
-
-      // Enums
       const enm = trimmed.match(P.enum_);
       if (enm) {
         result.enums.push({ name: enm[1], values: this.extractEnumValues(lines, i, maskedLines), line: lineNum, isPrivate: enm[1].startsWith('_') });
-        syncBraces(i); continue;
+        syncBraces(i);
+        continue;
       }
-
-      // Mixins
       const mix = trimmed.match(P.mixin_);
       if (mix) {
         result.mixins.push({ name: mix[1], on: mix[2] || null, line: lineNum, isPrivate: mix[1].startsWith('_') });
-        syncBraces(i); continue;
+        syncBraces(i);
+        continue;
       }
-
-      // Extensions
       const extMatch = trimmed.match(P.extension_);
       if (extMatch) {
         const name = extMatch[1] || `UnnamedExtension_${lineNum}`;
         const newExt: ExtensionInfo = { name, onType: extMatch[2].trim(), methods: [], properties: [], line: lineNum, isPrivate: name.startsWith('_') };
         result.extensions.push(newExt);
         scopeStack.push({ type: 'class', name, braceDepth, ref: newExt });
-        syncBraces(i); continue;
+        syncBraces(i);
+        continue;
       }
-
-      // Typedefs (new and old)
       if (!currentClass()) {
         const td = trimmed.match(P.typedef_);
         if (td) {
@@ -516,7 +495,8 @@ export class DartParser extends BaseParser<DartFileInfo> {
             name: td[1], signature: td[2].trim(),
             line: lineNum, isPrivate: td[1].startsWith('_'),
           });
-          syncBraces(i); continue;
+          syncBraces(i);
+          continue;
         }
         const tdOld = trimmed.match(P.typedefOld_);
         if (tdOld) {
@@ -524,26 +504,29 @@ export class DartParser extends BaseParser<DartFileInfo> {
             name: tdOld[2], signature: `${tdOld[1].trim()} Function(${tdOld[3].trim()})`,
             line: lineNum, isPrivate: tdOld[2].startsWith('_'),
           });
-          syncBraces(i); continue;
+          syncBraces(i);
+          continue;
         }
       }
-
-      // Annotations
       const annotationMatch = trimmed.match(P.annotation);
       if (annotationMatch) {
         const nextMasked = maskedLines[i + 1]?.trim() || '';
-        let target = 'unknown'; let targetName = '';
+        let target = 'unknown';
+        let targetName = '';
         if (nextMasked.match(/^(class|enum|mixin)\s+(\w+)/)) {
-          target = 'class'; targetName = nextMasked.match(/^(class|enum|mixin)\s+(\w+)/)?.[2] || '';
-        } else if (nextMasked.match(/^\s*(static\s+)?[\w<>\[\]?,\s]+\s+(\w+)\s*\(/)) {
-          target = 'function'; targetName = nextMasked.match(/^\s*(static\s+)?[\w<>\[\]?,\s]+\s+(\w+)\s*\(/)?.[2] || '';
-        } else if (nextMasked.match(/^\s+(final|const|late)?\s*(final|const)?\s*[\w<>\[\]?,\s]+\s+(\w+)\s*=/)) {
-          target = 'field'; targetName = nextMasked.match(/^\s+(final|const|late)?\s*(final|const)?\s*[\w<>\[\]?,\s]+\s+(\w+)\s*=/)?.[3] || '';
+          target = 'class';
+          targetName = nextMasked.match(/^(class|enum|mixin)\s+(\w+)/)?.[2] || '';
+        }
+        else if (nextMasked.match(/^\s*(static\s+)?[\w<>\[\]?,\s]+\s+(\w+)\s*\(/)) {
+          target = 'function';
+          targetName = nextMasked.match(/^\s*(static\s+)?[\w<>\[\]?,\s]+\s+(\w+)\s*\(/)?.[2] || '';
+        }
+        else if (nextMasked.match(/^\s+(final|const|late)?\s*(final|const)?\s*[\w<>\[\]?,\s]+\s+(\w+)\s*=/)) {
+          target = 'field';
+          targetName = nextMasked.match(/^\s+(final|const|late)?\s*(final|const)?\s*[\w<>\[\]?,\s]+\s+(\w+)\s*=/)?.[3] || '';
         }
         result.annotations.push({ name: annotationMatch[1], target, targetName, line: lineNum });
       }
-
-      // Extension types (Dart 3.3+)
       if (!currentClass()) {
         const extType = trimmed.match(P.extensionType_);
         if (extType) {
@@ -562,20 +545,20 @@ export class DartParser extends BaseParser<DartFileInfo> {
           continue;
         }
       }
-
-      // Classes - use lookahead for multi-line support
       const lookahead = maskedLines.slice(i, i + 5).join('\n');
       const cls = lookahead.match(P.class_);
       if (cls && !cls[0].includes('(') && !cls[0].includes(')')) {
-        const name = cls[3]; // with mixin class support, name is index 3
+        const name = cls[3];
         const ext = cls[4]?.trim() || null;
         let type: ClassInfo['type'] = 'plain';
         if (ext) {
-          if (WIDGET_BASE_CLASSES.has(ext)) type = ext as ClassInfo['type'];
-          else if (STATE_BASE_PATTERN.test(ext)) type = 'State';
-          else if (NOTIFIER_CLASSES.has(ext)) type = 'ChangeNotifier';
+          if (WIDGET_BASE_CLASSES.has(ext))
+            type = ext as ClassInfo['type'];
+          else if (STATE_BASE_PATTERN.test(ext))
+            type = 'State';
+          else if (NOTIFIER_CLASSES.has(ext))
+            type = 'ChangeNotifier';
         }
-
         const newCls: ClassInfo = {
           name, type, line: lineNum, extendsClass: ext,
           mixins: cls[5] ? cls[5].split(',').map(s => s.trim()) : [],
@@ -585,15 +568,11 @@ export class DartParser extends BaseParser<DartFileInfo> {
         };
         result.classes.push(newCls);
         scopeStack.push({ type: 'class', name, braceDepth, ref: newCls });
-
         const headerLines = cls[0].split('\n').length;
         syncBraces(i, headerLines);
         i += headerLines - 1;
         continue;
       }
-
-      // If we are inside a class but its type is still 'plain', 
-      // check if this line contains 'extends' or 'with' that identifies it as a Widget/State
       const ccName = currentClass();
       if (ccName) {
         const currentCls = result.classes.find(c => c.name === ccName && c.type === 'plain');
@@ -601,16 +580,14 @@ export class DartParser extends BaseParser<DartFileInfo> {
           const extMatch = trimmed.match(/extends\s+([\w<>,\s]+)/);
           if (extMatch) {
             const ext = extMatch[1].trim();
-            if (WIDGET_BASE_CLASSES.has(ext)) currentCls.type = ext as any;
-            else if (STATE_BASE_PATTERN.test(ext)) currentCls.type = 'State';
+            if (WIDGET_BASE_CLASSES.has(ext))
+              currentCls.type = ext as any;
+            else if (STATE_BASE_PATTERN.test(ext))
+              currentCls.type = 'State';
           }
         }
       }
-
-      // Track braces — syncBraces handles current line AND scope popping
       syncBraces(i);
-
-      // Widget-returning method detection
       if (currentClass() && P.buildMethod.test(trimmed)) {
         inBuildMethod = true;
         buildBraceStart = braceDepth - 1;
@@ -621,9 +598,10 @@ export class DartParser extends BaseParser<DartFileInfo> {
         }
         continue;
       }
-      if (inBuildMethod) { buildLines.push(maskedLine); continue; }
-
-      // Methods and Properties inside a class/extension
+      if (inBuildMethod) {
+        buildLines.push(maskedLine);
+        continue;
+      }
       const cc = currentClass();
       if (cc) {
         const mLookahead = maskedLines.slice(i, i + 8).join('\n');
@@ -638,11 +616,11 @@ export class DartParser extends BaseParser<DartFileInfo> {
             line: lineNum,
           });
           const hLines = ctorMatch[0].split('\n').length;
-          if (hLines > 1) syncBraces(i + 1, hLines - 1);
+          if (hLines > 1)
+            syncBraces(i + 1, hLines - 1);
           i += hLines - 1;
           continue;
         }
-
         const methodMatch = mLookahead.match(P.method);
         if (methodMatch && !SKIP_METHODS.has(methodMatch[3]) && !RESERVED.has(methodMatch[3])) {
           const methodInfo: FunctionInfo = {
@@ -650,65 +628,34 @@ export class DartParser extends BaseParser<DartFileInfo> {
             line: lineNum, isPrivate: methodMatch[3].startsWith('_'),
             isAsync: !!methodMatch[5], isStatic: !!methodMatch[1], parentClass: cc,
           };
-          const parentCls = result.classes.find(c => c.name === cc);
-          if (parentCls) parentCls.methods.push(methodInfo);
-          else {
-            const e = result.extensions.find(ex => ex.name === cc);
-            if (e) e.methods.push(methodInfo);
-            else {
-              const et = result.extensionTypes.find(ext => ext.name === cc);
-              if (et) et.methods.push(methodInfo);
-            }
-          }
-
+          this.attachMethod(result, cc, methodInfo);
           const hLines = methodMatch[0].split('\n').length;
-          if (hLines > 1) syncBraces(i + 1, hLines - 1);
-
+          if (hLines > 1)
+            syncBraces(i + 1, hLines - 1);
           scopeStack.push({ type: 'function', name: methodMatch[3], braceDepth: braceDepth - 1, ref: methodInfo });
           i += hLines - 1;
           continue;
         }
-
         const getterMatch = maskedLine.match(P.getter);
         if (getterMatch) {
           const prop: PropertyInfo = {
-            name: getterMatch[2], type: getterMatch[1].trim(), className: cc,
-            isFinal: false, isConst: false, isStatic: false, isPrivate: getterMatch[2].startsWith('_'),
+            name: getterMatch[3], type: getterMatch[2].trim(), className: cc,
+            isFinal: false, isConst: false, isStatic: !!getterMatch[1], isPrivate: getterMatch[3].startsWith('_'),
             isGetter: true, isSetter: false, line: lineNum,
           };
           result.properties.push(prop);
-          const parentCls = result.classes.find(c => c.name === cc);
-          if (parentCls) parentCls.properties.push(prop);
-          else {
-            const e = result.extensions.find(ex => ex.name === cc);
-            if (e) e.properties.push(prop);
-            else {
-              const et = result.extensionTypes.find(ext => ext.name === cc);
-              if (et) et.properties.push(prop);
-            }
-          }
+          this.attachProperty(result, cc, prop);
         }
-
         const setterMatch = maskedLine.match(P.setter);
         if (setterMatch) {
           const prop: PropertyInfo = {
-            name: setterMatch[2], type: setterMatch[3].trim(), className: cc,
-            isFinal: false, isConst: false, isStatic: false, isPrivate: setterMatch[2].startsWith('_'),
+            name: setterMatch[3], type: setterMatch[4].trim(), className: cc,
+            isFinal: false, isConst: false, isStatic: !!setterMatch[1], isPrivate: setterMatch[3].startsWith('_'),
             isGetter: false, isSetter: true, line: lineNum,
           };
           result.properties.push(prop);
-          const parentCls = result.classes.find(c => c.name === cc);
-          if (parentCls) parentCls.properties.push(prop);
-          else {
-            const e = result.extensions.find(ex => ex.name === cc);
-            if (e) e.properties.push(prop);
-            else {
-              const et = result.extensionTypes.find(ext => ext.name === cc);
-              if (et) et.properties.push(prop);
-            }
-          }
+          this.attachProperty(result, cc, prop);
         }
-
         const fieldMatch = maskedLine.match(P.field);
         if (fieldMatch && !fieldMatch[5].includes('(') && !SKIP_METHODS.has(fieldMatch[5]) && !fieldMatch[0].includes('=>')) {
           const prop: PropertyInfo = {
@@ -719,20 +666,9 @@ export class DartParser extends BaseParser<DartFileInfo> {
             isGetter: false, isSetter: false, line: lineNum,
           };
           result.properties.push(prop);
-          const parentCls = result.classes.find(c => c.name === cc);
-          if (parentCls) parentCls.properties.push(prop);
-          else {
-            const e = result.extensions.find(ex => ex.name === cc);
-            if (e) e.properties.push(prop);
-            else {
-              const et = result.extensionTypes.find(ext => ext.name === cc);
-              if (et) et.properties.push(prop);
-            }
-          }
+          this.attachProperty(result, cc, prop);
         }
       }
-
-      // Top-level functions and variables - ORDER MATTERS: check functions first
       if (!currentClass()) {
         const fLookahead = maskedLines.slice(i, i + 8).join('\n');
         const f = fLookahead.match(P.topFunc);
@@ -743,13 +679,13 @@ export class DartParser extends BaseParser<DartFileInfo> {
             isAsync: !!f[4], isStatic: false, parentClass: null,
           };
           result.functions.push(newFunc);
-
           const hLines = f[0].split('\n').length;
-          if (hLines > 1) syncBraces(i + 1, hLines - 1);
-
+          if (hLines > 1)
+            syncBraces(i + 1, hLines - 1);
           scopeStack.push({ type: 'function', name: f[2], braceDepth: braceDepth - 1, ref: newFunc });
           i += hLines - 1;
-        } else {
+        }
+        else {
           const varMatch = trimmed.match(P.topVar);
           if (varMatch && !RESERVED.has(varMatch[4])) {
             result.variables.push({
@@ -765,107 +701,176 @@ export class DartParser extends BaseParser<DartFileInfo> {
     }
     this.analyzeUsages(maskedLines, result);
     this.extractFunctionCalls(maskedLines, result, lines);
+    this.detectDuplicatedLogic(result);
     return result;
   }
   private extractEnumValues(lines: string[], startIndex: number, maskedLines?: string[]): string[] {
-    const values: string[] = [];
     const safeLines = maskedLines ?? lines;
-    let depth = 0; let started = false;
+    let depth = 0;
+    let started = false;
+    let raw = '';
+    outer:
     for (let i = startIndex; i < safeLines.length; i++) {
-      for (const ch of safeLines[i]) {
-        if (ch === '{') { depth++; started = true; }
-        else if (ch === '}') { depth--; if (started && depth === 0) { return values; } }
-      }
-      if (started && depth === 1) {
-        const t = lines[i].trim();
-        if (t && !t.startsWith('{') && !t.startsWith('//')) {
-          const v = t.match(/^(\w+)/);
-          if (v) { values.push(v[1]); }
+      const line = safeLines[i];
+      for (const ch of line) {
+        if (ch === '{') {
+          depth++;
+          if (depth === 1) {
+            started = true;
+            continue;
+          }
         }
+        else if (ch === '}') {
+          depth--;
+          if (started && depth === 0)
+            break outer;
+        }
+        else if (ch === ';' && depth === 1) {
+          break outer;
+        }
+        if (started && depth >= 1)
+          raw += ch;
+      }
+      if (started)
+        raw += '\n';
+    }
+    const values: string[] = [];
+    let level = 0;
+    let current = '';
+    const flush = () => {
+      const cleaned = current.replace(/@\w+(\([^)]*\))?/g, '').trim();
+      const m = cleaned.match(/^(\w+)/);
+      if (m && !RESERVED.has(m[1]))
+        values.push(m[1]);
+      current = '';
+    };
+    for (const ch of raw) {
+      if (ch === '(' || ch === '<' || ch === '[')
+        level++;
+      else if (ch === ')' || ch === '>' || ch === ']')
+        level--;
+      if (ch === ',' && level === 0)
+        flush();
+      else
+        current += ch;
+    }
+    if (current.trim())
+      flush();
+    return values;
+  }
+  private detectDuplicatedLogic(result: DartFileInfo): void {
+    const MIN_BODY_LENGTH = 80;
+    const byHash = new Map<string, { name: string; line: number }[]>();
+    const collect = (fns: FunctionInfo[], scope: string | null) => {
+      for (const f of fns) {
+        if (!f.bodyHash || (f.bodyLength ?? 0) < MIN_BODY_LENGTH)
+          continue;
+        const label = scope ? `${scope}.${f.name}` : f.name;
+        const arr = byHash.get(f.bodyHash) ?? [];
+        arr.push({ name: label, line: f.line });
+        byHash.set(f.bodyHash, arr);
+      }
+    };
+    collect(result.functions, null);
+    for (const c of result.classes)
+      collect(c.methods, c.name);
+    for (const e of result.extensions)
+      collect(e.methods, e.name);
+    for (const et of result.extensionTypes)
+      collect(et.methods, et.name);
+    for (const entries of byHash.values()) {
+      if (entries.length < 2)
+        continue;
+      for (const entry of entries) {
+        const others = entries
+          .filter(o => o !== entry)
+          .map(o => `'${o.name}' (line ${o.line})`)
+          .join(', ');
+        result.warnings.push({
+          type: 'duplicated_logic',
+          message: `Duplicated logic: '${entry.name}' has the same body as ${others}`,
+          line: entry.line,
+        });
       }
     }
-    return values;
   }
   parseWidgetTree(content: string, isMasked: boolean = false): WidgetInfo[] {
     const widgets: WidgetInfo[] = [];
     const masked = isMasked ? content : this.preprocessSource(content);
-    const lines = content.split('\n'); // for original display
-    const maskedLines = masked.split('\n'); // for name detection
-    const stack: { widget: WidgetInfo; depth: number }[] = [];
-
+    const lines = content.split('\n');
+    const maskedLines = masked.split('\n');
+    const stack: {
+      widget: WidgetInfo;
+      depth: number;
+    }[] = [];
     for (let i = 0; i < maskedLines.length; i++) {
       const mLine = maskedLines[i];
       const trimmedMasked = mLine.trim();
-      if (!trimmedMasked || trimmedMasked.startsWith('//') || trimmedMasked.startsWith('*')) continue;
-
+      if (!trimmedMasked || trimmedMasked.startsWith('//') || trimmedMasked.startsWith('*'))
+        continue;
       const matches = trimmedMasked.matchAll(/(?:\b|return\s+|=>\s+)([A-Z]\w+)(?:\.\w+)?\s*\(/g);
-
       for (const wm of matches) {
         const indent = mLine.length - mLine.trimStart().length;
         const name = wm[1];
-        if (RESERVED.has(name.toLowerCase())) continue;
-
-        // Extract detail from ORIGINAL content to keep the text values
+        if (RESERVED.has(name.toLowerCase()))
+          continue;
         let detail = '';
         const originalTrimmed = lines[i].trim();
         const lineRemaining = originalTrimmed.substring(wm.index! + wm[0].length);
         const detailMatch = lineRemaining.match(/^(['"])(.*?)\1/);
-        if (detailMatch) detail = detailMatch[2];
+        if (detailMatch)
+          detail = detailMatch[2];
         else {
           const iconMatch = lineRemaining.match(/^(Icons\.\w+)/);
-          if (iconMatch) detail = iconMatch[1];
+          if (iconMatch)
+            detail = iconMatch[1];
         }
-
         const widget: WidgetInfo = {
           name,
           line: i + 1,
           children: [],
           properties: detail ? [{ name: 'detail', value: detail }] : []
         };
-
-        // Pop stack based on indentation or logical nesting
         while (stack.length > 0 && stack[stack.length - 1].depth >= indent) {
           stack.pop();
         }
-
         if (stack.length > 0) {
           stack[stack.length - 1].widget.children.push(widget);
-        } else {
+        }
+        else {
           widgets.push(widget);
         }
-
         stack.push({ widget, depth: indent });
       }
     }
     return widgets;
   }
   private analyzeUsages(maskedLines: string[], result: DartFileInfo): void {
-    // ── Build one pattern per named symbol ───────────────────────────────────
-    type SymbolKind =
-      | 'class' | 'function' | 'extension' | 'typedef'
-      | 'variable' | 'enum' | 'mixin' | 'extensionType';
-
+    type SymbolKind = 'class' | 'function' | 'extension' | 'typedef' | 'variable' | 'enum' | 'mixin' | 'extensionType';
     interface SymbolEntry {
       kind: SymbolKind;
       name: string;
-      pattern: RegExp;          // \bNAME\b
-      defSnippets: string[];    // substrings that mark the definition line → skip
+      pattern: RegExp;
+      defSnippets: string[];
     }
-
     const symbols: SymbolEntry[] = [];
-    const addSymbol = (kind: SymbolKind, name: string, defSnippets: string[]) =>
-      symbols.push({ kind, name, pattern: new RegExp(`\\b${name}\\b`), defSnippets });
-
-    for (const c of result.classes) addSymbol('class', c.name, [`class ${c.name}`, `extends ${c.name}`]);
-    for (const f of result.functions) addSymbol('function', f.name, [`${f.name}(`]);
-    for (const e of result.extensions) addSymbol('extension', e.name, [`extension ${e.name}`]);
-    for (const t of result.typedefs) addSymbol('typedef', t.name, [`typedef ${t.name}`]);
-    for (const v of result.variables) addSymbol('variable', v.name, [`${v.name} =`, `${v.name}=`]);
-    for (const e of result.enums) addSymbol('enum', e.name, [`enum ${e.name}`]);
-    for (const m of result.mixins) addSymbol('mixin', m.name, [`mixin ${m.name}`]);
-    for (const et of result.extensionTypes) addSymbol('class', et.name, [`extension type ${et.name}`]);
-
-    // Pre-build usage containers
+    const addSymbol = (kind: SymbolKind, name: string, defSnippets: string[]) => symbols.push({ kind, name, pattern: new RegExp(`\\b${name}\\b`), defSnippets });
+    for (const c of result.classes)
+      addSymbol('class', c.name, [`class ${c.name}`, `extends ${c.name}`]);
+    for (const f of result.functions)
+      addSymbol('function', f.name, [`${f.name}(`]);
+    for (const e of result.extensions)
+      addSymbol('extension', e.name, [`extension ${e.name}`]);
+    for (const t of result.typedefs)
+      addSymbol('typedef', t.name, [`typedef ${t.name}`]);
+    for (const v of result.variables)
+      addSymbol('variable', v.name, [`${v.name} =`, `${v.name}=`]);
+    for (const e of result.enums)
+      addSymbol('enum', e.name, [`enum ${e.name}`]);
+    for (const m of result.mixins)
+      addSymbol('mixin', m.name, [`mixin ${m.name}`]);
+    for (const et of result.extensionTypes)
+      addSymbol('class', et.name, [`extension type ${et.name}`]);
     const classUsageMap = new Map(result.classes.map(c => [c.name, { className: c.name, usedInFiles: [result.filePath], usedByClasses: [] as string[], usedByFunctions: [] as string[], confidence: 'medium' as const }]));
     const funcUsageMap = new Map(result.functions.map(f => [f.name, { functionName: f.name, parentClass: f.parentClass, calledByFunctions: [] as string[], calledInFiles: [result.filePath], confidence: 'medium' as const }]));
     const extUsageMap = new Map(result.extensions.map(e => [e.name, { extensionName: e.name, usedInFiles: [] as string[], confidence: 'medium' as const }]));
@@ -873,100 +878,111 @@ export class DartParser extends BaseParser<DartFileInfo> {
     const varUsageMap = new Map(result.variables.map(v => [v.name, { variableName: v.name, usedInFiles: [] as string[], confidence: 'medium' as const }]));
     const enumUsageMap = new Map(result.enums.map(e => [e.name, { enumName: e.name, usedInFiles: [] as string[], confidence: 'medium' as const }]));
     const mixinUsageMap = new Map(result.mixins.map(m => [m.name, { mixinName: m.name, usedInFiles: [] as string[], confidence: 'medium' as const }]));
-
     const symbolMap = new Map<string, SymbolEntry[]>();
     for (const sym of symbols) {
       let arr = symbolMap.get(sym.name);
-      if (!arr) { arr = []; symbolMap.set(sym.name, arr); }
+      if (!arr) {
+        arr = [];
+        symbolMap.set(sym.name, arr);
+      }
       arr.push(sym);
     }
-
-    // ── Single pass over all lines with inline context awareness (O(n)) ───────
     let curCls: string | null = null;
     let curFunc: string | null = null;
     let bDepth = 0;
     let clsBrace = 0;
     let funcBrace = 0;
-
     for (let i = 0; i < maskedLines.length; i++) {
       const mLine = maskedLines[i];
       const trimmed = mLine.trim();
-
-      // Track scope for context
       for (const ch of mLine) {
-        if (ch === '{') bDepth++;
+        if (ch === '{')
+          bDepth++;
         else if (ch === '}') {
           bDepth--;
-          if (curCls && bDepth <= clsBrace) curCls = null;
-          if (curFunc && bDepth <= funcBrace) curFunc = null;
+          if (curCls && bDepth <= clsBrace)
+            curCls = null;
+          if (curFunc && bDepth <= funcBrace)
+            curFunc = null;
         }
       }
-
-      // Detect scope entry (using simple patterns for faster O(n) context tracking)
       const cMatch = trimmed.match(/^(class|mixin|extension\s+type|extension|enum)\s+(?:const\s+)?(\w+)/);
-      if (cMatch) { curCls = cMatch[2]; clsBrace = bDepth - 1; }
+      if (cMatch) {
+        curCls = cMatch[2];
+        clsBrace = bDepth - 1;
+      }
       const fMatch = trimmed.match(DartParser.P.funcDef);
-      if (fMatch && !RESERVED.has(fMatch[2])) { curFunc = fMatch[2]; funcBrace = bDepth - 1; }
-
+      if (fMatch && !RESERVED.has(fMatch[2])) {
+        const firstWord = fMatch[1].trim().split(/\s+/)[0];
+        if (!NON_DEF_KEYWORDS.has(firstWord)) {
+          curFunc = fMatch[2];
+          funcBrace = bDepth - 1;
+        }
+      }
       const ctx = {
         type: curFunc ? 'function' : (curCls ? 'class' : 'none') as any,
         name: curFunc || curCls || ''
       };
-
       const words = mLine.match(/\b[A-Za-z_]\w*\b/g);
-      if (!words) continue;
+      if (!words)
+        continue;
       const uniqueWords = new Set(words);
-
       for (const word of uniqueWords) {
         const syms = symbolMap.get(word);
-        if (!syms) continue;
-
+        if (!syms)
+          continue;
         for (const sym of syms) {
-          if (sym.defSnippets.some(s => mLine.includes(s))) continue;
-
+          if (sym.defSnippets.some(s => mLine.includes(s)))
+            continue;
           switch (sym.kind) {
             case 'class': {
               const u = classUsageMap.get(sym.name)!;
-              if (ctx.type === 'class' && ctx.name !== sym.name && !u.usedByClasses.includes(ctx.name)) u.usedByClasses.push(ctx.name);
-              if (ctx.type === 'function' && !u.usedByFunctions.includes(ctx.name)) u.usedByFunctions.push(ctx.name);
+              if (ctx.type === 'class' && ctx.name !== sym.name && !u.usedByClasses.includes(ctx.name))
+                u.usedByClasses.push(ctx.name);
+              if (ctx.type === 'function' && !u.usedByFunctions.includes(ctx.name))
+                u.usedByFunctions.push(ctx.name);
               break;
             }
             case 'function': {
               const u = funcUsageMap.get(sym.name)!;
-              if (ctx.type === 'function' && ctx.name !== sym.name && !u.calledByFunctions.includes(ctx.name)) u.calledByFunctions.push(ctx.name);
+              if (ctx.type === 'function' && ctx.name !== sym.name && !u.calledByFunctions.includes(ctx.name))
+                u.calledByFunctions.push(ctx.name);
               break;
             }
             case 'extension': {
               const u = extUsageMap.get(sym.name)!;
-              if (!u.usedInFiles.includes(result.filePath)) u.usedInFiles.push(result.filePath);
+              if (!u.usedInFiles.includes(result.filePath))
+                u.usedInFiles.push(result.filePath);
               break;
             }
             case 'typedef': {
               const u = typedefUsageMap.get(sym.name)!;
-              if (!u.usedInFiles.includes(result.filePath)) u.usedInFiles.push(result.filePath);
+              if (!u.usedInFiles.includes(result.filePath))
+                u.usedInFiles.push(result.filePath);
               break;
             }
             case 'variable': {
               const u = varUsageMap.get(sym.name)!;
-              if (!u.usedInFiles.includes(result.filePath)) u.usedInFiles.push(result.filePath);
+              if (!u.usedInFiles.includes(result.filePath))
+                u.usedInFiles.push(result.filePath);
               break;
             }
             case 'enum': {
               const u = enumUsageMap.get(sym.name)!;
-              if (!u.usedInFiles.includes(result.filePath)) u.usedInFiles.push(result.filePath);
+              if (!u.usedInFiles.includes(result.filePath))
+                u.usedInFiles.push(result.filePath);
               break;
             }
             case 'mixin': {
               const u = mixinUsageMap.get(sym.name)!;
-              if (!u.usedInFiles.includes(result.filePath)) u.usedInFiles.push(result.filePath);
+              if (!u.usedInFiles.includes(result.filePath))
+                u.usedInFiles.push(result.filePath);
               break;
             }
           }
         }
       }
     }
-
-    // ── Flush to result ───────────────────────────────────────────────────────
     result.classUsages = [...classUsageMap.values()];
     result.functionUsages = [...funcUsageMap.values()];
     result.extensionUsages = [...extUsageMap.values()];
@@ -974,39 +990,54 @@ export class DartParser extends BaseParser<DartFileInfo> {
     result.variableUsages = [...varUsageMap.values()];
     result.enumUsages = [...enumUsageMap.values()];
     result.mixinUsages = [...mixinUsageMap.values()];
-
-    // Annotations are binary (present = used)
     for (const a of result.annotations) {
       if (!result.annotationUsages.find(au => au.annotationName === a.name))
         result.annotationUsages.push({ annotationName: a.name, usedInFiles: [result.filePath], confidence: 'medium' });
     }
-
-    // Constructors & properties — unchanged logic, still fast (small sets)
-    for (const c of result.constructors) {
+    const ctorEntries = result.constructors.map(c => {
       const fullName = c.name === c.className ? c.className : `${c.className}.${c.name}`;
-      const pattern = new RegExp(`\\b${fullName.replace('.', '\\.')}\\b`);
-      const usage: ConstructorUsage = { constructorName: c.name, className: c.className, usedInFiles: [], confidence: 'medium' };
-      for (const ml of maskedLines) {
-        if (pattern.test(ml) && !ml.includes(`${fullName}(`) && !usage.usedInFiles.includes(result.filePath))
-          usage.usedInFiles.push(result.filePath);
+      return {
+        fullName,
+        pattern: new RegExp(`\\b${fullName.replace('.', '\\.')}\\b`),
+        usage: { constructorName: c.name, className: c.className, usedInFiles: [] as string[], confidence: 'medium' as const },
+      };
+    });
+    const propEntries = result.properties.map(p => ({
+      name: p.name,
+      pattern: new RegExp(`\\b${p.name}\\b`),
+      usage: { propertyName: p.name, className: p.className, usedInFiles: [] as string[], confidence: 'medium' as const },
+    }));
+    let pendingCtors = ctorEntries.length;
+    let pendingProps = propEntries.length;
+    for (const ml of maskedLines) {
+      if (pendingCtors === 0 && pendingProps === 0)
+        break;
+      if (pendingCtors > 0) {
+        for (const e of ctorEntries) {
+          if (e.usage.usedInFiles.length > 0)
+            continue;
+          if (e.pattern.test(ml) && !ml.includes(`${e.fullName}(`)) {
+            e.usage.usedInFiles.push(result.filePath);
+            pendingCtors--;
+          }
+        }
       }
-      result.constructorUsages.push(usage);
-    }
-
-    for (const p of result.properties) {
-      const pattern = new RegExp(`\\b${p.name}\\b`);
-      const usage: PropertyUsage = { propertyName: p.name, className: p.className, usedInFiles: [], confidence: 'medium' };
-      for (const ml of maskedLines) {
-        if (pattern.test(ml) && !ml.includes(`${p.name};`) && !ml.includes(`get ${p.name}`) && !usage.usedInFiles.includes(result.filePath))
-          usage.usedInFiles.push(result.filePath);
+      if (pendingProps > 0) {
+        for (const e of propEntries) {
+          if (e.usage.usedInFiles.length > 0)
+            continue;
+          if (e.pattern.test(ml) && !ml.includes(`${e.name};`) && !ml.includes(`get ${e.name}`)) {
+            e.usage.usedInFiles.push(result.filePath);
+            pendingProps--;
+          }
+        }
       }
-      result.propertyUsages.push(usage);
     }
+    result.constructorUsages.push(...ctorEntries.map(e => e.usage));
+    result.propertyUsages.push(...propEntries.map(e => e.usage));
   }
-
   private extractFunctionCalls(maskedLines: string[], result: DartFileInfo, originalLines?: string[]): void {
     const lines = originalLines ?? maskedLines;
-
     const classNameSet = new Set(result.classes.map(c => c.name));
     const RESERVED_CALLS = new Set([
       'print', 'setState', 'Navigator', 'Scaffold', 'Container', 'Text',
@@ -1015,52 +1046,58 @@ export class DartParser extends BaseParser<DartFileInfo> {
       'throw', 'finally', 'break', 'continue', 'import', 'export', 'library',
       'part', 'of', 'show', 'hide', 'as', 'is', 'assert', 'rethrow',
     ]);
-
-    // Rebuild a minimal scope tracker just for call context
     let callCurrentClass: string | null = null;
     let callCurrentFunction: string | null = null;
     let callBraceDepth = 0;
     let callClassBrace = 0;
     let callFuncBrace = 0;
     const callPatLocal = new RegExp(DartParser.P.callPat.source, 'g');
-
     for (let i = 0; i < maskedLines.length; i++) {
       const mLine = maskedLines[i];
       const trimmed = mLine.trim();
       const lineNum = i + 1;
-
-      if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) continue;
-      if (trimmed.match(/^(class|enum|mixin|import|export)\s/)) continue;
-
-      // Track scope for context
+      if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*'))
+        continue;
+      if (trimmed.match(/^(class|enum|mixin|import|export)\s/))
+        continue;
       for (const ch of mLine) {
-        if (ch === '{') callBraceDepth++;
+        if (ch === '{')
+          callBraceDepth++;
         else if (ch === '}') {
           callBraceDepth--;
-          if (callCurrentClass && callBraceDepth <= callClassBrace) callCurrentClass = null;
-          if (callCurrentFunction && callBraceDepth <= callFuncBrace) callCurrentFunction = null;
+          if (callCurrentClass && callBraceDepth <= callClassBrace)
+            callCurrentClass = null;
+          if (callCurrentFunction && callBraceDepth <= callFuncBrace)
+            callCurrentFunction = null;
         }
       }
       const classM = trimmed.match(DartParser.P.class_);
-      if (classM) { callCurrentClass = classM[3]; callClassBrace = callBraceDepth - 1; continue; }
+      if (classM) {
+        callCurrentClass = classM[3];
+        callClassBrace = callBraceDepth - 1;
+        continue;
+      }
       const funcM = trimmed.match(DartParser.P.method);
-      if (funcM) { callCurrentFunction = funcM[3]; callFuncBrace = callBraceDepth - 1; }
-
-      if (trimmed.match(/^\s*(static\s+)?[\w<>\[\]?,\s]+\s+\w+\s*\([^)]*\)\s*(async\s*)?\{/)) continue;
-
+      if (funcM) {
+        callCurrentFunction = funcM[3];
+        callFuncBrace = callBraceDepth - 1;
+      }
+      if (trimmed.match(/^\s*(static\s+)?[\w<>\[\]?,\s]+\s+\w+\s*\([^)]*\)\s*(async\s*)?\{/))
+        continue;
       callPatLocal.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = callPatLocal.exec(mLine)) !== null) {
         const receiver = match[1];
         const funcName = match[2];
-        if (RESERVED_CALLS.has(funcName)) continue;
-        if (funcName === callCurrentFunction) continue;
-        if (classNameSet.has(funcName) && mLine.includes(`new ${funcName}`)) continue;
-
+        if (RESERVED_CALLS.has(funcName))
+          continue;
+        if (funcName === callCurrentFunction)
+          continue;
+        if (classNameSet.has(funcName) && mLine.includes(`new ${funcName}`))
+          continue;
         const contextStart = Math.max(0, i - 1);
         const contextEnd = Math.min(lines.length - 1, i + 1);
         const context = lines.slice(contextStart, contextEnd + 1).join('\n').trim();
-
         result.functionCalls.push({
           name: funcName,
           line: lineNum,
@@ -1074,10 +1111,4 @@ export class DartParser extends BaseParser<DartFileInfo> {
       }
     }
   }
-
-
-
-
-
 }
-

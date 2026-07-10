@@ -91,6 +91,11 @@
                 "title": "Flutter Intl: Remove locale"
             },
             {
+                "command": "flutterExplorer.compareParsers",
+                "title": "Flutter Explorer: Compare Regex and SDK Parsers",
+                "icon": "$(diff)"
+            },
+            {
                 "command": "flutterExplorer.openSettings",
                 "title": "Open Flutter Explorer Settings",
                 "icon": "$(settings-gear)"
@@ -99,9 +104,14 @@
         "menus": {
             "view/title": [
                 {
+                    "command": "flutterExplorer.compareParsers",
+                    "when": "view == flutterExplorer.sidebar",
+                    "group": "navigation@1"
+                },
+                {
                     "command": "flutterExplorer.openSettings",
                     "when": "view == flutterExplorer.sidebar",
-                    "group": "navigation"
+                    "group": "navigation@2"
                 }
             ]
         },

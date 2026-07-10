@@ -128,6 +128,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }),
     );
 
+    context.subscriptions.push(
+        vscode.commands.registerCommand('flutterExplorer.compareParsers', async () => {
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Comparing Regex & SDK Parsers...',
+                    cancellable: false,
+                },
+                async (progress) => {
+                    await indexManager.compareParsersAndWriteReport(progress);
+                }
+            );
+        }),
+    );
+
     // ─── Intl Generator Commands ───────────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('flutterExplorer.intlInitialize', async () => {

@@ -78,6 +78,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     this.postMessage({ command: 'analysisData', data: { missingTranslations, warnings } });
                     break;
                 }
+                case 'compareParsers': {
+                    vscode.commands.executeCommand('flutterExplorer.compareParsers');
+                    break;
+                }
                 case 'getStats': {
                     const stats = this.indexManager.getStats();
                     this.postMessage({ command: 'stats', data: stats });
@@ -203,7 +207,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <div class="tab-content" id="tab-analysis">
       <div class="pubspec-header">
         <span>Code Analysis</span>
-        <button class="icon-btn" id="refreshAnalysis" title="Refresh">⟳</button>
+        <div style="display: flex; gap: 4px;">
+          <button class="icon-btn" id="compareParsers" title="Compare Regex and SDK Parsers">⚖</button>
+          <button class="icon-btn" id="refreshAnalysis" title="Refresh">⟳</button>
+        </div>
       </div>
       <div class="analysis-filters">
         <select id="analysisTypeFilter" class="analysis-select" title="Filter by type">

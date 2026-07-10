@@ -1,12 +1,3 @@
-/**
- * Index Manager - Manages the in-memory index and SQLite cache.
- *
- * Changes from original:
- *   - JSON cache replaced by SqliteCache (faster incremental writes)
- *   - BM25Search integrated for better search result ranking
- *   - debouncedSaveCache: waits 2 s after last change before writing
- *   - BM25 index rebuilt after full index; updated incrementally on file changes
- */
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -15,19 +6,15 @@ import { DartParser, DartFileInfo } from './dartParser';
 import { JsTsParser } from './jsTsParser';
 import { AndroidParser } from './androidParser';
 import { analyzeWithDart } from './dartAnalyzerWrapper';
-
 import { PackageIndexer } from './packageIndexer';
 import { PackageInfo } from '../providers/pubspecLockProvider';
 import { SqliteCache } from './sqliteCache';
 import { BM25Search, BM25Document } from './bm25Search';
-
-
 export interface TranslationInfo {
   key: string;
   value: string;
   line: number;
 }
-
 export interface DiagnosticInfo {
   filePath: string;
   line: number;
@@ -36,7 +23,6 @@ export interface DiagnosticInfo {
   severity: 'error' | 'warning' | 'info' | 'hint';
   source: string;
 }
-
 export class IndexManager {
   private index: Map<string, DartFileInfo> = new Map();
   private arbIndex: Map<string, TranslationInfo[]> = new Map();
@@ -48,33 +34,23 @@ export class IndexManager {
   private workspaceRoot: string;
   private onIndexChanged: vscode.EventEmitter<void> = new vscode.EventEmitter<void>();
   public readonly onDidChangeIndex: vscode.Event<void> = this.onIndexChanged.event;
-
-  // ── SQLite cache ────────────────────────────────────────────────────────────
   private sqliteCache: SqliteCache;
-
-  // ── BM25 search ─────────────────────────────────────────────────────────────
   private bm25 = new BM25Search();
   private bm25Dirty = true;
   private fileDocIds = new Map<string, string[]>();
-
-  // ── Timers & state ──────────────────────────────────────────────────────────
   private reverseDepsTimeout: NodeJS.Timeout | null = null;
   private projectName: string | null = null;
   private extensionPath?: string;
   private isIndexing = false;
   private indexingCancellationTokenSource: vscode.CancellationTokenSource | null = null;
   private excludePatterns: RegExp[] = [];
-
-  // ✅ Guard ضد double-dispose
   private _disposed = false;
-
   constructor(workspaceRoot: string, extensionPath?: string) {
     this.workspaceRoot = workspaceRoot;
     this.extensionPath = extensionPath;
     this.sqliteCache = new SqliteCache(workspaceRoot);
     this.loadAnalysisOptionsExcludes();
   }
-
   public globToRegExp(glob: string): RegExp {
     let pattern = glob.replace(/\\/g, '/');
     let regexStr = '^';
@@ -85,77 +61,68 @@ export class IndexManager {
           if (pattern[i + 2] === '/') {
             regexStr += '(?:.*/)?';
             i += 2;
-          } else {
+          }
+          else {
             regexStr += '.*';
             i++;
           }
-        } else {
+        }
+        else {
           regexStr += '[^/]*';
         }
-      } else if (char === '?') {
+      }
+      else if (char === '?') {
         regexStr += '[^/]';
-      } else if (char === '.') {
+      }
+      else if (char === '.') {
         regexStr += '\\.';
-      } else if (char === '/' || char === '\\') {
+      }
+      else if (char === '/' || char === '\\') {
         regexStr += '\\/';
-      } else if (['(', ')', '+', '^', '$', '|', '{', '}', '[', ']'].includes(char)) {
+      }
+      else if (['(', ')', '+', '^', '$', '|', '{', '}', '[', ']'].includes(char)) {
         regexStr += '\\' + char;
-      } else {
+      }
+      else {
         regexStr += char;
       }
     }
     regexStr += '$';
     return new RegExp(regexStr);
   }
-
   public loadAnalysisOptionsExcludes(): void {
     this.excludePatterns = [];
     const optionsPath = path.join(this.workspaceRoot, 'analysis_options.yaml');
     if (!fs.existsSync(optionsPath)) {
       return;
     }
-
     try {
       const content = fs.readFileSync(optionsPath, 'utf8');
       const lines = content.split('\n');
-      
       let inAnalyzer = false;
       let inExclude = false;
       let excludeIndent = -1;
-
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const trimmed = line.trim();
-        
-        // Skip comments and empty lines
         if (trimmed.startsWith('#') || trimmed === '') {
           continue;
         }
-
-        // Get indentation level (number of leading spaces)
         const indent = line.length - line.trimStart().length;
-
-        // Check sections
         if (trimmed.startsWith('analyzer:')) {
           inAnalyzer = true;
           inExclude = false;
           continue;
         }
-
-        // If we are in analyzer, check for exclude
         if (inAnalyzer) {
-          // If we hit another root level or sibling key under analyzer
           if (indent === 0 && !trimmed.startsWith('analyzer:')) {
             inAnalyzer = false;
             inExclude = false;
             continue;
           }
-
           if (trimmed.startsWith('exclude:')) {
             inExclude = true;
             excludeIndent = indent;
-            
-            // Check for inline array: exclude: [ "**.g.dart", "**.freezed.dart" ]
             const inlineArrayMatch = trimmed.match(/exclude:\s*\[(.*)\]/);
             if (inlineArrayMatch) {
               const items = inlineArrayMatch[1]
@@ -165,19 +132,15 @@ export class IndexManager {
               for (const item of items) {
                 this.excludePatterns.push(this.globToRegExp(item));
               }
-              inExclude = false; // inline array handled in one line
+              inExclude = false;
             }
             continue;
           }
-
           if (inExclude) {
-            // If indent is less than or equal to excludeIndent, we have exited the exclude section
             if (indent <= excludeIndent && !trimmed.startsWith('-')) {
               inExclude = false;
               continue;
             }
-
-            // Bulleted list item: - "**/.*" or - **/.*
             if (trimmed.startsWith('-')) {
               const pattern = trimmed.substring(1).trim().replace(/^['"]|['"]$/g, '');
               if (pattern) {
@@ -188,11 +151,11 @@ export class IndexManager {
         }
       }
       console.log(`[FlutterExplorer] Loaded ${this.excludePatterns.length} exclude patterns from analysis_options.yaml`);
-    } catch (e) {
+    }
+    catch (e) {
       console.error('[FlutterExplorer] Failed to parse analysis_options.yaml:', e);
     }
   }
-
   public isFileExcluded(fsPath: string): boolean {
     const relPath = this.relativePath(fsPath).replace(/\\/g, '/');
     for (const pattern of this.excludePatterns) {
@@ -202,48 +165,29 @@ export class IndexManager {
     }
     return false;
   }
-
   public getProjectMode(): 'flutter' | 'web' {
     if (fs.existsSync(path.join(this.workspaceRoot, 'pubspec.yaml'))) {
       return 'flutter';
     }
     return 'web';
   }
-
-  /**
-   * ✅ تنظيف كل الـ resources عند تعطيل الـ extension.
-   * بيتنادى تلقائياً من context.subscriptions في extension.ts.
-   * يحتوي على _disposed guard لمنع double-dispose.
-   */
   public dispose(): void {
-    if (this._disposed) return; // ✅ guard — لو اتنادى تاني مرة مش هيعمل حاجة
+    if (this._disposed)
+      return;
     this._disposed = true;
-
-    // إلغاء أي timers معلقة
     if (this.reverseDepsTimeout) {
       clearTimeout(this.reverseDepsTimeout);
       this.reverseDepsTimeout = null;
     }
-
-    // إلغاء أي indexing جارٍ
     if (this.indexingCancellationTokenSource) {
       this.indexingCancellationTokenSource.cancel();
       this.indexingCancellationTokenSource.dispose();
       this.indexingCancellationTokenSource = null;
     }
-
-    // ✅ إغلاق الـ DB — هذا يُفك القفل فوراً ويمنع "database locked" عند إعادة التشغيل
     this.sqliteCache.close();
-
     console.log('[FlutterExplorer] IndexManager disposed cleanly.');
   }
-
-  // ── Concurrency Helper ──────────────────────────────────────────────────────
-  private async runConcurrent<T>(
-    items: T[],
-    concurrency: number,
-    worker: (item: T, index: number) => Promise<void>
-  ): Promise<void> {
+  private async runConcurrent<T>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
     let index = 0;
     const execWorker = async (): Promise<void> => {
       while (index < items.length) {
@@ -257,68 +201,62 @@ export class IndexManager {
     }
     await Promise.all(workers);
   }
-
-  // ── Full index ──────────────────────────────────────────────────────────────
-
-  /** Build full index by scanning all Dart files */
-  async buildFullIndex(progress?: vscode.Progress<{ message?: string; increment?: number }>): Promise<void> {
+  async buildFullIndex(progress?: vscode.Progress<{
+    message?: string;
+    increment?: number;
+  }>): Promise<void> {
     if (this.isIndexing) {
-      const choice = await vscode.window.showInformationMessage(
-        'A full re-index is already in progress. What would you like to do?',
-        { modal: true },
-        'Cancel Existing & Start Over',
-        'Continue Current',
-      );
-
+      const choice = await vscode.window.showInformationMessage('A full re-index is already in progress. What would you like to do?', { modal: true }, 'Cancel Existing & Start Over', 'Continue Current');
       if (choice === 'Cancel Existing & Start Over') {
         if (this.indexingCancellationTokenSource) {
           this.indexingCancellationTokenSource.cancel();
           await new Promise(resolve => setTimeout(resolve, 500));
         }
-      } else if (choice === 'Continue Current') {
+      }
+      else if (choice === 'Continue Current') {
         return;
-      } else {
+      }
+      else {
         return;
       }
     }
-
     this.isIndexing = true;
     this.indexingCancellationTokenSource = new vscode.CancellationTokenSource();
     const token = this.indexingCancellationTokenSource.token;
-
-    if (progress) progress.report({ message: 'Discovering project files...' });
-
+    if (progress)
+      progress.report({ message: 'Discovering project files...' });
     try {
       const mode = this.getProjectMode();
       let allFiles: vscode.Uri[] = [];
-
       if (mode === 'flutter') {
         const dartFiles = await vscode.workspace.findFiles('lib/**/*.dart', '**/.*', 10000, token);
-        if (token.isCancellationRequested) return;
+        if (token.isCancellationRequested)
+          return;
         const androidFiles = await vscode.workspace.findFiles('android/app/**/*.{dart,kt,java,xml,gradle}', '**/.*', 1000, token);
-        if (token.isCancellationRequested) return;
+        if (token.isCancellationRequested)
+          return;
         const arbFiles = await vscode.workspace.findFiles('lib/**/*.arb', '**/.*', 500, token);
-        if (token.isCancellationRequested) return;
+        if (token.isCancellationRequested)
+          return;
         allFiles = [...dartFiles, ...androidFiles, ...arbFiles].filter(uri => !this.isFileExcluded(uri.fsPath));
-      } else {
+      }
+      else {
         const excludePattern = '**/{node_modules,out,dist,build,.git,.next}/**';
         allFiles = (await vscode.workspace.findFiles('**/*.{ts,tsx,js,jsx}', excludePattern, 10000, token)).filter(uri => !this.isFileExcluded(uri.fsPath));
       }
-
       const total = allFiles.length;
-      if (progress) progress.report({ message: `Found ${total} files to index.` });
-
+      if (progress)
+        progress.report({ message: `Found ${total} files to index.` });
       this.index.clear();
       this.arbIndex.clear();
       await this.sqliteCache.clearAll();
       this.projectName = await this._loadProjectName();
-
       const useDartAnalyzer = mode === 'flutter' && vscode.workspace.getConfiguration('flutterExplorer').get<boolean>('useDartAnalyzer', true);
       const concurrency = vscode.workspace.getConfiguration('flutterExplorer').get<number>('indexingConcurrency', 3);
       let dartFilesAnalyzed = false;
-
       if (useDartAnalyzer) {
-        if (progress) progress.report({ message: 'Initializing Dart SDK Analyzer (discovering packages)...' });
+        if (progress)
+          progress.report({ message: 'Initializing Dart SDK Analyzer (discovering packages)...' });
         const dartResults = await analyzeWithDart(this.workspaceRoot, this.extensionPath, (msg, current, totalFiles) => {
           if (progress) {
             progress.report({
@@ -327,37 +265,38 @@ export class IndexManager {
             });
           }
         });
-
-        if (token.isCancellationRequested) return;
-
+        if (token.isCancellationRequested)
+          return;
         if (dartResults && dartResults.length > 0) {
-          const filesToUpsert: Array<{ relPath: string; hash: string | undefined; info: DartFileInfo }> = [];
+          const filesToUpsert: Array<{
+            relPath: string;
+            hash: string | undefined;
+            info: DartFileInfo;
+          }> = [];
           let completedPostCount = 0;
           const activePostFiles = new Set<string>();
-
           await this.runConcurrent(dartResults, concurrency, async (info, i) => {
-            if (token.isCancellationRequested) return;
+            if (token.isCancellationRequested)
+              return;
             const fileName = path.basename(info.filePath);
             activePostFiles.add(fileName);
             if (progress) {
               const remaining = dartResults.length - completedPostCount;
               progress.report({ message: `Saving Dart SDK Cache: [${Array.from(activePostFiles).join(', ')}] (${completedPostCount}/${dartResults.length} done, ${remaining} remaining)...` });
             }
-
             try {
               const fullPath = path.join(this.workspaceRoot, info.filePath);
               const content = await fs.promises.readFile(fullPath, 'utf8');
               info.contentHash = this.computeHash(content);
-
-              // Extract warnings (hardcoded text and colors) using custom parser rules
               const parsedInfo = this.parser.parse(info.filePath, content);
               info.warnings = parsedInfo.warnings;
-
               this.index.set(info.filePath, info);
               filesToUpsert.push({ relPath: info.filePath, hash: info.contentHash, info });
-            } catch (e) {
+            }
+            catch (e) {
               console.error(`Failed to post-process analyzed file ${info.filePath}:`, e);
-            } finally {
+            }
+            finally {
               activePostFiles.delete(fileName);
               completedPostCount++;
               if (progress) {
@@ -366,21 +305,24 @@ export class IndexManager {
               }
             }
           });
-
-          if (token.isCancellationRequested) return;
+          if (token.isCancellationRequested)
+            return;
           if (filesToUpsert.length > 0) {
             await this.sqliteCache.batchUpsertDartFiles(filesToUpsert);
           }
           dartFilesAnalyzed = true;
         }
       }
-
-      const dartFilesToUpsert: Array<{ relPath: string; hash: string | undefined; info: DartFileInfo }> = [];
+      const dartFilesToUpsert: Array<{
+        relPath: string;
+        hash: string | undefined;
+        info: DartFileInfo;
+      }> = [];
       let completedCount = 0;
       const activeFiles = new Set<string>();
-
       await this.runConcurrent(allFiles, concurrency, async (uri, i) => {
-        if (token.isCancellationRequested) return;
+        if (token.isCancellationRequested)
+          return;
         const fileName = path.basename(uri.fsPath);
         activeFiles.add(fileName);
         if (progress) {
@@ -389,10 +331,8 @@ export class IndexManager {
             message: `Indexing: [${Array.from(activeFiles).join(', ')}] (${completedCount}/${total} done, ${remaining} remaining)...`,
           });
         }
-
         try {
           const relPath = this.relativePath(uri.fsPath);
-
           if (uri.fsPath.endsWith('.dart')) {
             if (!dartFilesAnalyzed) {
               const content = await this.readFile(uri);
@@ -401,27 +341,31 @@ export class IndexManager {
               this.index.set(relPath, info);
               dartFilesToUpsert.push({ relPath, hash: info.contentHash, info });
             }
-          } else if (uri.fsPath.endsWith('.ts') || uri.fsPath.endsWith('.tsx') || uri.fsPath.endsWith('.js') || uri.fsPath.endsWith('.jsx')) {
+          }
+          else if (uri.fsPath.endsWith('.ts') || uri.fsPath.endsWith('.tsx') || uri.fsPath.endsWith('.js') || uri.fsPath.endsWith('.jsx')) {
             const content = await this.readFile(uri);
             const info = this.jsTsParser.parse(relPath, content);
             info.contentHash = this.computeHash(content);
             this.index.set(relPath, info);
             dartFilesToUpsert.push({ relPath, hash: info.contentHash, info });
-          } else if (uri.fsPath.endsWith('.arb')) {
+          }
+          else if (uri.fsPath.endsWith('.arb')) {
             const content = await this.readFile(uri);
             const translations = this.parseArb(content);
             this.arbIndex.set(relPath, translations);
             await this.sqliteCache.upsertArbFile(relPath, translations);
-          } else if (uri.fsPath.endsWith('.kt') || uri.fsPath.endsWith('.java') || uri.fsPath.endsWith('.xml') || uri.fsPath.endsWith('.gradle') || uri.fsPath.endsWith('.gradle.kts')) {
+          }
+          else if (uri.fsPath.endsWith('.kt') || uri.fsPath.endsWith('.java') || uri.fsPath.endsWith('.xml') || uri.fsPath.endsWith('.gradle') || uri.fsPath.endsWith('.gradle.kts')) {
             const content = await this.readFile(uri);
             const info = this.androidParser.parse(relPath, content);
             info.contentHash = this.computeHash(content);
             this.index.set(relPath, info);
             dartFilesToUpsert.push({ relPath, hash: info.contentHash, info });
           }
-        } catch {
-          // skip unreadable files
-        } finally {
+        }
+        catch {
+        }
+        finally {
           activeFiles.delete(fileName);
           completedCount++;
           if (progress) {
@@ -433,36 +377,27 @@ export class IndexManager {
           }
         }
       });
-
-      if (token.isCancellationRequested) return;
+      if (token.isCancellationRequested)
+        return;
       if (dartFilesToUpsert.length > 0) {
         await this.sqliteCache.batchUpsertDartFiles(dartFilesToUpsert);
       }
-
       this.packages = PackageIndexer.indexPackages(this.workspaceRoot);
       await this.sqliteCache.setMeta('packages', this.packages);
-
       this._rebuildBM25();
       this.bm25Dirty = false;
-
       if (this.shouldBuildReverseDeps()) {
-        this.buildReverseDependencies().catch(e =>
-          console.error('Error building reverse dependencies:', e)
-        );
+        this.buildReverseDependencies().catch(e => console.error('Error building reverse dependencies:', e));
       }
-
       this.sqliteCache.checkpoint();
       this.onIndexChanged.fire();
-    } finally {
+    }
+    finally {
       this.isIndexing = false;
       this.indexingCancellationTokenSource?.dispose();
       this.indexingCancellationTokenSource = null;
     }
   }
-
-  // ── Incremental update ──────────────────────────────────────────────────────
-
-  /** Update a single file in the index */
   async updateFile(uri: vscode.Uri): Promise<void> {
     const relPath = this.relativePath(uri.fsPath);
     if (this.isFileExcluded(uri.fsPath)) {
@@ -474,124 +409,107 @@ export class IndexManager {
     try {
       const content = await this.readFile(uri);
       const newHash = this.computeHash(content);
-
       if (uri.fsPath.endsWith('.dart')) {
         const cached = await this.sqliteCache.getDartFile(relPath);
-        if (cached && cached.hash === newHash) return;
-
+        if (cached && cached.hash === newHash)
+          return;
         const info = this.parser.parse(relPath, content);
         info.contentHash = newHash;
         this.index.set(relPath, info);
-
         await this.sqliteCache.upsertDartFile(relPath, newHash, info);
         this._upsertBM25ForFile(relPath, info);
-
-      } else if (uri.fsPath.endsWith('.ts') || uri.fsPath.endsWith('.tsx') || uri.fsPath.endsWith('.js') || uri.fsPath.endsWith('.jsx')) {
+      }
+      else if (uri.fsPath.endsWith('.ts') || uri.fsPath.endsWith('.tsx') || uri.fsPath.endsWith('.js') || uri.fsPath.endsWith('.jsx')) {
         const cached = await this.sqliteCache.getDartFile(relPath);
-        if (cached && cached.hash === newHash) return;
-
+        if (cached && cached.hash === newHash)
+          return;
         const info = this.jsTsParser.parse(relPath, content);
         info.contentHash = newHash;
         this.index.set(relPath, info);
-
         await this.sqliteCache.upsertDartFile(relPath, newHash, info);
         this._upsertBM25ForFile(relPath, info);
-
-      } else if (uri.fsPath.endsWith('.kt') || uri.fsPath.endsWith('.java') || uri.fsPath.endsWith('.xml') || uri.fsPath.endsWith('.gradle') || uri.fsPath.endsWith('.gradle.kts')) {
+      }
+      else if (uri.fsPath.endsWith('.kt') || uri.fsPath.endsWith('.java') || uri.fsPath.endsWith('.xml') || uri.fsPath.endsWith('.gradle') || uri.fsPath.endsWith('.gradle.kts')) {
         const cached = await this.sqliteCache.getDartFile(relPath);
-        if (cached && cached.hash === newHash) return;
-
+        if (cached && cached.hash === newHash)
+          return;
         const info = this.androidParser.parse(relPath, content);
         info.contentHash = newHash;
         this.index.set(relPath, info);
-
         await this.sqliteCache.upsertDartFile(relPath, newHash, info);
         this._upsertBM25ForFile(relPath, info);
-
-      } else if (uri.fsPath.endsWith('.arb')) {
+      }
+      else if (uri.fsPath.endsWith('.arb')) {
         const translations = this.parseArb(content);
         this.arbIndex.set(relPath, translations);
         await this.sqliteCache.upsertArbFile(relPath, translations);
       }
-
       if (this.shouldBuildReverseDeps()) {
         this._debounceReverseDeps();
       }
-
       this.onIndexChanged.fire();
-    } catch {
-      // file may have been deleted between event and processing
+    }
+    catch {
     }
   }
-
-  /** Remove a file from the index */
   async removeFile(uri: vscode.Uri): Promise<void> {
     const relPath = this.relativePath(uri.fsPath);
     this.index.delete(relPath);
     this.arbIndex.delete(relPath);
-
     await this.sqliteCache.deleteDartFile(relPath);
     await this.sqliteCache.deleteArbFile(relPath);
-
     this._removeBM25ForFile(relPath);
-
     this.onIndexChanged.fire();
   }
-
-  /** Load index from SQLite cache at startup */
   async loadCache(): Promise<boolean> {
     this.projectName = await this._loadProjectName();
     const dartRows = await this.sqliteCache.getAllDartFiles();
     const arbRows = await this.sqliteCache.getAllArbFiles();
-
     if (dartRows.length === 0 && arbRows.length === 0) {
       return false;
     }
-
     for (const row of dartRows) {
       this.index.set(row.path, row.info);
     }
-
     for (const row of arbRows) {
       this.arbIndex.set(row.path, row.translations);
     }
-
     this.packages = (await this.sqliteCache.getMeta<PackageInfo[]>('packages')) ?? [];
     this.diagnostics = (await this.sqliteCache.getMeta<DiagnosticInfo[]>('diagnostics')) ?? [];
-
     this._rebuildBM25();
     this.bm25Dirty = false;
-
     this.onIndexChanged.fire();
     const source = this.sqliteCache.isAvailable ? 'SQLite' : 'JSON Cache';
     console.log(`[FlutterExplorer] Loaded ${dartRows.length} dart files and ${arbRows.length} arb files from ${source}.`);
     return true;
   }
-
-  // ── Diagnostics ─────────────────────────────────────────────────────────────
-
   public updateDiagnostics(diagnostics: DiagnosticInfo[]): void {
     this.diagnostics = diagnostics;
     this.sqliteCache.setMeta('diagnostics', diagnostics);
   }
-
   public getDiagnostics(): DiagnosticInfo[] {
     return this.diagnostics;
   }
-
-  // ── Stats ────────────────────────────────────────────────────────────────────
-
   getStats(): {
-    files: number; classes: number; functions: number; widgets: number;
-    enums: number; mixins: number; calls: number; translations: number;
-    extensions: number; typedefs: number; variables: number;
-    constructors: number; properties: number; annotations: number;
+    files: number;
+    classes: number;
+    functions: number;
+    widgets: number;
+    enums: number;
+    mixins: number;
+    calls: number;
+    translations: number;
+    extensions: number;
+    typedefs: number;
+    variables: number;
+    constructors: number;
+    properties: number;
+    annotations: number;
     extensionTypes: number;
   } {
     let classes = 0, functions = 0, widgets = 0, enums = 0, mixins = 0, calls = 0;
     let extensions = 0, typedefs = 0, variables = 0, constructors = 0, properties = 0, annotations = 0;
     let extensionTypes = 0;
-
     for (const info of this.index.values()) {
       classes += (info.classes || []).length;
       functions += (info.functions || []).length;
@@ -611,8 +529,8 @@ export class IndexManager {
       extensionTypes += (info.extensionTypes?.length ?? 0);
     }
     let translations = 0;
-    for (const arb of this.arbIndex.values()) translations += arb.length;
-
+    for (const arb of this.arbIndex.values())
+      translations += arb.length;
     return {
       files: this.index.size + this.arbIndex.size,
       classes, functions, widgets, enums, mixins, calls, translations,
@@ -620,18 +538,9 @@ export class IndexManager {
       extensionTypes,
     };
   }
-
-  // ── Search with BM25 re-ranking ─────────────────────────────────────────────
-
-  search(
-    query: string,
-    filter?: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation'
-      | 'call' | 'extension' | 'typedef' | 'variable' | 'constructor'
-      | 'property' | 'annotation' | 'file' | 'extensionType'
-  ): SearchResult[] {
+  search(query: string, filter?: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call' | 'extension' | 'typedef' | 'variable' | 'constructor' | 'property' | 'annotation' | 'file' | 'extensionType'): SearchResult[] {
     const results: SearchResult[] = [];
     const q = query.toLowerCase();
-
     if (!filter || filter !== 'translation') {
       for (const info of this.index.values()) {
         if (!filter || filter === 'class') {
@@ -732,7 +641,6 @@ export class IndexManager {
         }
       }
     }
-
     if (!filter || filter === 'file') {
       for (const filePath of this.index.keys()) {
         const fileName = path.basename(filePath);
@@ -745,7 +653,6 @@ export class IndexManager {
           results.push({ name: fileName, type: 'file', subType: filePath, file: filePath, line: 1, isPrivate: false });
       }
     }
-
     if (!filter || filter === 'translation') {
       for (const [filePath, translations] of this.arbIndex.entries()) {
         for (const t of translations) {
@@ -754,71 +661,60 @@ export class IndexManager {
         }
       }
     }
-
     if (this.bm25Dirty) {
       this._rebuildBM25();
     }
-
     if (this.bm25.isBuilt && query.trim().length > 0) {
       const candidateIds = results.map(r => this._bm25Id(r));
       const scores = this.bm25.scoreMany(candidateIds, query);
-
       results.sort((a, b) => {
         const scoreA = scores.get(this._bm25Id(a)) ?? 0;
         const scoreB = scores.get(this._bm25Id(b)) ?? 0;
-        if (scoreB !== scoreA) return scoreB - scoreA;
+        if (scoreB !== scoreA)
+          return scoreB - scoreA;
         const aStarts = a.name.toLowerCase().startsWith(q) ? 0 : 1;
         const bStarts = b.name.toLowerCase().startsWith(q) ? 0 : 1;
-        if (aStarts !== bStarts) return aStarts - bStarts;
-        return a.name.localeCompare(b.name);
-      });
-    } else {
-      results.sort((a, b) => {
-        const aStarts = a.name.toLowerCase().startsWith(q) ? 0 : 1;
-        const bStarts = b.name.toLowerCase().startsWith(q) ? 0 : 1;
-        if (aStarts !== bStarts) return aStarts - bStarts;
+        if (aStarts !== bStarts)
+          return aStarts - bStarts;
         return a.name.localeCompare(b.name);
       });
     }
-
+    else {
+      results.sort((a, b) => {
+        const aStarts = a.name.toLowerCase().startsWith(q) ? 0 : 1;
+        const bStarts = b.name.toLowerCase().startsWith(q) ? 0 : 1;
+        if (aStarts !== bStarts)
+          return aStarts - bStarts;
+        return a.name.localeCompare(b.name);
+      });
+    }
     return results.slice(0, 500);
   }
-
-  // ── Getters ──────────────────────────────────────────────────────────────────
-
   getAllFiles(): DartFileInfo[] {
     return [...this.index.values()];
   }
-
   public getAllPackages(): PackageInfo[] {
     return this.packages;
   }
-
   getFile(relPath: string): DartFileInfo | undefined {
     return this.index.get(relPath);
   }
-
-  // ── Dependency graph ─────────────────────────────────────────────────────────
-
   getDependencyGraph(): DependencyNode[] {
     const nodes = new Map<string, DependencyNode>();
-
     for (const info of this.index.values()) {
       if (!nodes.has(info.filePath))
         nodes.set(info.filePath, { file: info.filePath, imports: [], importedBy: [] });
-
       const node = nodes.get(info.filePath)!;
       for (const imp of info.imports) {
         let resolved: string | null = null;
-
         if (imp.path.startsWith('package:')) {
           if (this.projectName && imp.path.startsWith(`package:${this.projectName}/`)) {
             resolved = 'lib/' + imp.path.substring(`package:${this.projectName}/`.length);
           }
-        } else if (!imp.path.startsWith('dart:')) {
+        }
+        else if (!imp.path.startsWith('dart:')) {
           resolved = this.resolveImportPath(info.filePath, imp.path);
         }
-
         if (resolved && this.index.has(resolved)) {
           node.imports.push(resolved);
           if (!nodes.has(resolved))
@@ -827,30 +723,31 @@ export class IndexManager {
         }
       }
     }
-
     return [...nodes.values()];
   }
-
-  getDetailedGraph(): { nodes: any[], edges: any[] } {
+  getDetailedGraph(): {
+    nodes: any[];
+    edges: any[];
+  } {
     const nodes: any[] = [];
     const edges: any[] = [];
     const seenNodes = new Set<string>();
-
-    // Pre-build lookup indexes to resolve method calls to their definitions correctly
     const classMethods = new Map<string, Set<string>>();
     const topLevelFunctions = new Set<string>();
     const classAncestors = new Map<string, string[]>();
     const allClassNames = new Set<string>();
     const allMixinNames = new Set<string>();
     const allEnumNames = new Set<string>();
-
     for (const info of this.index.values()) {
       for (const cls of info.classes || []) {
         allClassNames.add(cls.name);
         const ancestors: string[] = [];
-        if (cls.extendsClass) ancestors.push(cls.extendsClass);
-        for (const m of cls.mixins || []) ancestors.push(m);
-        for (const impl of cls.implements || []) ancestors.push(impl);
+        if (cls.extendsClass)
+          ancestors.push(cls.extendsClass);
+        for (const m of cls.mixins || [])
+          ancestors.push(m);
+        for (const impl of cls.implements || [])
+          ancestors.push(impl);
         if (ancestors.length > 0) {
           classAncestors.set(cls.name, ancestors);
         }
@@ -861,7 +758,8 @@ export class IndexManager {
             classMethods.set(fn.parentClass, new Set());
           }
           classMethods.get(fn.parentClass)!.add(fn.name);
-        } else {
+        }
+        else {
           topLevelFunctions.add(fn.name);
         }
       }
@@ -872,40 +770,37 @@ export class IndexManager {
         allEnumNames.add(e.name);
       }
     }
-
-    // Helper to find the class (either the class itself or an ancestor) defining a method
     function resolveClassMethodOwner(clsName: string, methodName: string, visited = new Set<string>()): string | null {
-      if (visited.has(clsName)) return null;
+      if (visited.has(clsName))
+        return null;
       visited.add(clsName);
-
       const methods = classMethods.get(clsName);
-      if (methods && methods.has(methodName)) return clsName;
-
+      if (methods && methods.has(methodName))
+        return clsName;
       const ancestors = classAncestors.get(clsName);
       if (ancestors) {
         for (const parent of ancestors) {
           const owner = resolveClassMethodOwner(parent, methodName, visited);
-          if (owner) return owner;
+          if (owner)
+            return owner;
         }
       }
       return null;
     }
-
     const addNode = (id: string, name: string, type: string, file?: string, line?: number) => {
       if (!seenNodes.has(id)) {
         seenNodes.add(id);
         const node: any = { id, name, type };
-        if (file) node.file = file;
-        if (line !== undefined) node.line = line;
+        if (file)
+          node.file = file;
+        if (line !== undefined)
+          node.line = line;
         nodes.push(node);
       }
     };
-
     for (const [filePath, info] of this.index.entries()) {
       const fileId = `file:${filePath}`;
       addNode(fileId, path.basename(filePath), 'file', filePath);
-
-      // ── Imports → file-to-file edges ──────────────────────────────────────
       for (const imp of info.imports || []) {
         if (imp.path && !imp.path.startsWith('dart:')) {
           const resolvedPath = this.resolveImportPath(filePath, imp.path);
@@ -915,13 +810,10 @@ export class IndexManager {
           }
         }
       }
-
-      // ── Classes ────────────────────────────────────────────────────────────
       for (const cls of info.classes || []) {
         const classId = `class:${cls.name}`;
         addNode(classId, cls.name, 'class', filePath, cls.line);
         edges.push({ source: fileId, target: classId, type: 'contains' });
-
         if (cls.extendsClass) {
           edges.push({ source: classId, target: `class:${cls.extendsClass}`, type: 'extends' });
         }
@@ -932,37 +824,27 @@ export class IndexManager {
           edges.push({ source: classId, target: `class:${mx}`, type: 'mixes_in' });
         }
       }
-
-      // ── Functions & Methods ────────────────────────────────────────────────
       for (const func of info.functions || []) {
         const funcId = func.parentClass ? `method:${func.parentClass}.${func.name}` : `func:${func.name}`;
         addNode(funcId, func.name, func.parentClass ? 'method' : 'function', filePath, func.line);
         const parentId = func.parentClass ? `class:${func.parentClass}` : fileId;
         edges.push({ source: parentId, target: funcId, type: 'contains' });
       }
-
-      // ── Widgets ────────────────────────────────────────────────────────────
       for (const w of info.widgets || []) {
-        const wId = `class:${w.name}`; // resolve to class ID for consistency
+        const wId = `class:${w.name}`;
         addNode(wId, w.name, 'widget', filePath, w.line);
         edges.push({ source: fileId, target: wId, type: 'contains' });
       }
-
-      // ── Enums ──────────────────────────────────────────────────────────────
       for (const en of info.enums || []) {
         const eId = `enum:${en.name}`;
         addNode(eId, en.name, 'enum', filePath, en.line);
         edges.push({ source: fileId, target: eId, type: 'contains' });
       }
-
-      // ── Mixins ─────────────────────────────────────────────────────────────
       for (const m of info.mixins || []) {
         const mxId = `mixin:${m.name}`;
         addNode(mxId, m.name, 'mixin', filePath, m.line);
         edges.push({ source: fileId, target: mxId, type: 'contains' });
       }
-
-      // ── Extensions ─────────────────────────────────────────────────────────
       for (const ext of info.extensions || []) {
         const extId = `extension:${ext.name}`;
         addNode(extId, ext.name, 'extension', filePath, ext.line);
@@ -971,106 +853,97 @@ export class IndexManager {
           edges.push({ source: extId, target: `class:${ext.onType}`, type: 'extends' });
         }
       }
-
-      // ── Typedefs ───────────────────────────────────────────────────────────
       for (const td of info.typedefs || []) {
         const tdId = `typedef:${td.name}`;
         addNode(tdId, td.name, 'typedef', filePath, td.line);
         edges.push({ source: fileId, target: tdId, type: 'contains' });
       }
-
-      // ── Variables (top-level) ──────────────────────────────────────────────
       for (const v of info.variables || []) {
         const vId = `variable:${v.name}`;
         addNode(vId, v.name, 'variable', filePath, v.line);
         edges.push({ source: fileId, target: vId, type: 'contains' });
       }
-
-      // ── Constructors ───────────────────────────────────────────────────────
       for (const ctor of info.constructors || []) {
         const ctorId = `constructor:${ctor.className}.${ctor.name || 'new'}`;
         addNode(ctorId, `${ctor.className}.${ctor.name || 'new'}`, 'constructor', filePath, ctor.line);
         const parentClass = `class:${ctor.className}`;
         edges.push({ source: parentClass, target: ctorId, type: 'contains' });
       }
-
-      // ── Function Calls → call edges ────────────────────────────────────────
       for (const call of info.functionCalls || []) {
         let callerId: string;
         if (call.callerClass && call.callerFunction) {
           callerId = `method:${call.callerClass}.${call.callerFunction}`;
-        } else if (call.callerFunction) {
+        }
+        else if (call.callerFunction) {
           callerId = `func:${call.callerFunction}`;
-        } else if (call.callerClass) {
+        }
+        else if (call.callerClass) {
           callerId = `class:${call.callerClass}`;
-        } else {
+        }
+        else {
           callerId = fileId;
         }
-
         let calleeId: string | null = null;
         const callName = call.name;
-
-        // 1. Heuristic receiver resolution
         if (call.receiver) {
           const rx = call.receiver;
           if (allClassNames.has(rx)) {
             const owner = resolveClassMethodOwner(rx, callName);
             if (owner) {
               calleeId = `method:${owner}.${callName}`;
-            } else {
+            }
+            else {
               calleeId = `class:${rx}`;
             }
-          } else if (allMixinNames.has(rx)) {
+          }
+          else if (allMixinNames.has(rx)) {
             calleeId = `mixin:${rx}`;
-          } else if (allEnumNames.has(rx)) {
+          }
+          else if (allEnumNames.has(rx)) {
             calleeId = `enum:${rx}`;
-          } else if (rx !== 'this' && rx !== 'super') {
+          }
+          else if (rx !== 'this' && rx !== 'super') {
             const pascalRx = rx.charAt(0).toUpperCase() + rx.slice(1);
             if (allClassNames.has(pascalRx)) {
               const owner = resolveClassMethodOwner(pascalRx, callName);
               if (owner) {
                 calleeId = `method:${owner}.${callName}`;
-              } else {
+              }
+              else {
                 calleeId = `method:${pascalRx}.${callName}`;
               }
             }
           }
         }
-
-        // 2. Resolve no-receiver, this, or super
         if (!calleeId) {
           if (allClassNames.has(callName)) {
             calleeId = `class:${callName}`;
-          } else if (allMixinNames.has(callName)) {
+          }
+          else if (allMixinNames.has(callName)) {
             calleeId = `mixin:${callName}`;
-          } else if (allEnumNames.has(callName)) {
+          }
+          else if (allEnumNames.has(callName)) {
             calleeId = `enum:${callName}`;
-          } else if (call.callerClass) {
+          }
+          else if (call.callerClass) {
             const owner = resolveClassMethodOwner(call.callerClass, callName);
             if (owner) {
               calleeId = `method:${owner}.${callName}`;
             }
           }
         }
-
-        // 3. Resolve to top-level function if defined
         if (!calleeId) {
           if (topLevelFunctions.has(callName)) {
             calleeId = `func:${callName}`;
           }
         }
-
-        // 4. Default fallback
         if (!calleeId) {
           calleeId = `func:${callName}`;
         }
-
         if (callerId !== calleeId) {
           edges.push({ source: callerId, target: calleeId, type: 'calls' });
         }
       }
-
-      // ── Class usages → cross-file edges ────────────────────────────────────
       for (const usage of info.classUsages || []) {
         for (const usedFile of usage.usedInFiles || []) {
           if (usedFile !== filePath && this.index.has(usedFile)) {
@@ -1078,8 +951,6 @@ export class IndexManager {
           }
         }
       }
-
-      // ── Variable usages → cross-file edges ─────────────────────────────────
       for (const usage of info.variableUsages || []) {
         for (const usedFile of usage.usedInFiles || []) {
           if (usedFile !== filePath && this.index.has(usedFile)) {
@@ -1088,10 +959,8 @@ export class IndexManager {
         }
       }
     }
-
     return { nodes, edges };
   }
-
   parseWidgetTreeForContent(filePath: string, content: string): DartFileInfo {
     if (filePath.endsWith('.ts') || filePath.endsWith('.tsx') || filePath.endsWith('.js') || filePath.endsWith('.jsx') || filePath.endsWith('.md') || filePath.endsWith('.css') || filePath.endsWith('.scss') || filePath.endsWith('.json')) {
       return this.jsTsParser.parse(filePath, content);
@@ -1101,40 +970,52 @@ export class IndexManager {
     }
     return this.parser.parse(filePath, content);
   }
-
-  getWarnings(): { filePath: string; warnings: import('./dartParser').WarningInfo[] }[] {
-    const results: { filePath: string; warnings: import('./dartParser').WarningInfo[] }[] = [];
-    
-    // Group by bodyHash to find duplicates
-    const hashGroups = new Map<string, { type: string, name: string, filePath: string, line: number }[]>();
-    
+  getWarnings(): {
+    filePath: string;
+    warnings: import('./dartParser').WarningInfo[];
+  }[] {
+    const results: {
+      filePath: string;
+      warnings: import('./dartParser').WarningInfo[];
+    }[] = [];
+    const hashGroups = new Map<string, {
+      type: string;
+      name: string;
+      filePath: string;
+      line: number;
+    }[]>();
     for (const [filePath, info] of this.index.entries()) {
       const processItem = (item: any, type: string) => {
         if (item.bodyHash && item.bodyLength && item.bodyLength >= 50) {
-          if (!hashGroups.has(item.bodyHash)) hashGroups.set(item.bodyHash, []);
+          if (!hashGroups.has(item.bodyHash))
+            hashGroups.set(item.bodyHash, []);
           hashGroups.get(item.bodyHash)!.push({ type, name: item.name, filePath, line: item.line });
         }
       };
-      
-      for (const c of info.classes || []) processItem(c, 'class');
-      for (const f of info.functions || []) processItem(f, 'function');
+      for (const c of info.classes || [])
+        processItem(c, 'class');
+      for (const f of info.functions || [])
+        processItem(f, 'function');
       for (const c of info.classes || []) {
-        for (const m of c.methods || []) processItem(m, 'method');
+        for (const m of c.methods || [])
+          processItem(m, 'method');
       }
       for (const e of info.extensions || []) {
-        for (const m of e.methods || []) processItem(m, 'method');
+        for (const m of e.methods || [])
+          processItem(m, 'method');
       }
       for (const et of info.extensionTypes || []) {
-        for (const m of et.methods || []) processItem(m, 'method');
+        for (const m of et.methods || [])
+          processItem(m, 'method');
       }
     }
-    
     const duplicateWarningsByFile = new Map<string, import('./dartParser').WarningInfo[]>();
     for (const group of hashGroups.values()) {
       if (group.length > 1) {
         for (const item of group) {
-          if (!duplicateWarningsByFile.has(item.filePath)) duplicateWarningsByFile.set(item.filePath, []);
-          const others = group.filter(g => g !== item).slice(0, 3); // limit to 3 to avoid huge messages
+          if (!duplicateWarningsByFile.has(item.filePath))
+            duplicateWarningsByFile.set(item.filePath, []);
+          const others = group.filter(g => g !== item).slice(0, 3);
           const otherNames = others.map(g => `'${g.name}' in ${path.basename(g.filePath)}`).join(', ');
           const extra = group.length > 4 ? ` and ${group.length - 4} more` : '';
           duplicateWarningsByFile.get(item.filePath)!.push({
@@ -1145,7 +1026,6 @@ export class IndexManager {
         }
       }
     }
-
     for (const [filePath, info] of this.index.entries()) {
       const fileWarnings = [...(info.warnings || [])];
       const duplicates = duplicateWarningsByFile.get(filePath);
@@ -1158,31 +1038,41 @@ export class IndexManager {
     }
     return results;
   }
-
-  analyzeTranslations(): { filePath: string; missingKeys: string[] }[] {
+  analyzeTranslations(): {
+    filePath: string;
+    missingKeys: string[];
+  }[] {
     const allKeys = new Set<string>();
     const fileKeys = new Map<string, Set<string>>();
-
     for (const [filePath, translations] of this.arbIndex.entries()) {
       const keys = new Set<string>();
-      for (const t of translations) { allKeys.add(t.key); keys.add(t.key); }
+      for (const t of translations) {
+        allKeys.add(t.key);
+        keys.add(t.key);
+      }
       fileKeys.set(filePath, keys);
     }
-
-    const results: { filePath: string; missingKeys: string[] }[] = [];
+    const results: {
+      filePath: string;
+      missingKeys: string[];
+    }[] = [];
     for (const [filePath, keys] of fileKeys.entries()) {
       const missing: string[] = [];
-      for (const k of allKeys) { if (!keys.has(k)) missing.push(k); }
-      if (missing.length > 0) results.push({ filePath, missingKeys: missing });
+      for (const k of allKeys) {
+        if (!keys.has(k))
+          missing.push(k);
+      }
+      if (missing.length > 0)
+        results.push({ filePath, missingKeys: missing });
     }
     return results;
   }
-
   public async buildReverseDependencies(): Promise<void> {
-    if (this._disposed) return;
-
+    if (this._disposed)
+      return;
     for (const [filePath, info] of this.index.entries()) {
-      if (this._disposed) return;
+      if (this._disposed)
+        return;
       for (const imp of info.imports) {
         if (!imp.path.startsWith('dart:')) {
           const resolved = this.resolveImportPath(filePath, imp.path);
@@ -1190,7 +1080,8 @@ export class IndexManager {
           if (importedFile) {
             const addFile = (usages: any[], fp: string) => {
               for (const u of usages ?? []) {
-                if (!u.usedInFiles.includes(fp)) u.usedInFiles.push(fp);
+                if (!u.usedInFiles.includes(fp))
+                  u.usedInFiles.push(fp);
               }
             };
             addFile(importedFile.classUsages, filePath);
@@ -1207,30 +1098,23 @@ export class IndexManager {
         }
       }
     }
-
-    if (this._disposed) return;
-
+    if (this._disposed)
+      return;
     const filesToUpdate = Array.from(this.index.entries()).map(([relPath, info]) => ({
       relPath,
       hash: info.contentHash,
       info
     }));
     await this.sqliteCache.batchUpsertDartFiles(filesToUpdate);
-
-    if (this._disposed) return;
-
+    if (this._disposed)
+      return;
     this.sqliteCache.checkpoint();
   }
-
   public relativePath(absPath: string): string {
     return path.relative(this.workspaceRoot, absPath).replace(/\\/g, '/');
   }
-
-  // ── BM25 helpers ─────────────────────────────────────────────────────────────
-
   private _extractBM25Docs(info: DartFileInfo, filePath: string): BM25Document[] {
     const docs: BM25Document[] = [];
-
     for (const cls of info.classes) {
       docs.push({
         id: this._bm25Id({ name: cls.name, file: filePath, line: cls.line, type: 'class' } as any),
@@ -1310,20 +1194,16 @@ export class IndexManager {
         fields: { name: et.name, path: filePath, comments: et.representationType },
       });
     }
-
     return docs;
   }
-
   private _rebuildBM25(): void {
     const docs: BM25Document[] = [];
     this.fileDocIds.clear();
-
     for (const info of this.index.values()) {
       const extracted = this._extractBM25Docs(info, info.filePath);
       docs.push(...extracted);
       this.fileDocIds.set(info.filePath, extracted.map(d => d.id));
     }
-
     for (const [filePath, translations] of this.arbIndex.entries()) {
       const arbIds: string[] = [];
       for (const t of translations) {
@@ -1336,11 +1216,9 @@ export class IndexManager {
       }
       this.fileDocIds.set(filePath, arbIds);
     }
-
     this.bm25.buildIndex(docs);
     this.bm25Dirty = false;
   }
-
   private _upsertBM25ForFile(relPath: string, info: DartFileInfo): void {
     this._removeBM25ForFile(relPath);
     const docs = this._extractBM25Docs(info, relPath);
@@ -1351,41 +1229,38 @@ export class IndexManager {
     }
     this.fileDocIds.set(relPath, ids);
   }
-
   private _removeBM25ForFile(relPath: string): void {
     const ids = this.fileDocIds.get(relPath);
-    if (!ids) return;
+    if (!ids)
+      return;
     for (const id of ids) {
       this.bm25.removeDocument(id);
     }
     this.fileDocIds.delete(relPath);
   }
-
-  private _bm25Id(r: { name: string; file: string; line: number; type: string }): string {
+  private _bm25Id(r: {
+    name: string;
+    file: string;
+    line: number;
+    type: string;
+  }): string {
     return `${r.file}:${r.line}:${r.name}:${r.type}`;
   }
-
-  // ── Other helpers ─────────────────────────────────────────────────────────
-
   private shouldBuildReverseDeps(): boolean {
     return vscode.workspace.getConfiguration('flutterExplorer')
       .get<boolean>('enableReverseDependencies', true);
   }
-
   private _debounceReverseDeps(): void {
-    if (this.reverseDepsTimeout) clearTimeout(this.reverseDepsTimeout);
+    if (this.reverseDepsTimeout)
+      clearTimeout(this.reverseDepsTimeout);
     this.reverseDepsTimeout = setTimeout(() => {
       this.reverseDepsTimeout = null;
-      this.buildReverseDependencies().catch(e =>
-        console.error('Error building reverse dependencies:', e)
-      );
+      this.buildReverseDependencies().catch(e => console.error('Error building reverse dependencies:', e));
     }, 2000);
   }
-
   private computeHash(content: string): string {
     return crypto.createHash('md5').update(content).digest('hex');
   }
-
   private resolveImportPath(fromFile: string, importPath: string): string {
     if (importPath.startsWith('package:')) {
       if (this.projectName && importPath.startsWith(`package:${this.projectName}/`)) {
@@ -1396,58 +1271,56 @@ export class IndexManager {
     const dir = path.dirname(fromFile);
     return path.posix.normalize(path.posix.join(dir, importPath));
   }
-
   private async readFile(uri: vscode.Uri): Promise<string> {
     const bytes = await vscode.workspace.fs.readFile(uri);
     return Buffer.from(bytes).toString('utf-8');
   }
-
   private parseArb(content: string): TranslationInfo[] {
     const translations: TranslationInfo[] = [];
     try {
       const data = JSON.parse(content);
       const lines = content.split('\n');
       for (const [key, value] of Object.entries(data)) {
-        if (key.startsWith('@') || typeof value !== 'string') continue;
+        if (key.startsWith('@') || typeof value !== 'string')
+          continue;
         let lineNum = 1;
         const searchStr = `"${key}"`;
         for (let i = 0; i < lines.length; i++) {
-          if (lines[i].includes(searchStr)) { lineNum = i + 1; break; }
+          if (lines[i].includes(searchStr)) {
+            lineNum = i + 1;
+            break;
+          }
         }
         translations.push({ key, value, line: lineNum });
       }
-    } catch { /* ignore JSON errors */ }
+    }
+    catch { }
     return translations;
   }
-
-  // ── Impact Analysis (Blast Radius) ──────────────────────────────────────────
-
   public getImpactAnalysis(filePath: string): any {
     const relPath = this.relativePath(filePath);
     const fileInfo = this.index.get(relPath);
-    if (!fileInfo) return { error: "File not indexed" };
-
+    if (!fileInfo)
+      return { error: "File not indexed" };
     const targets = new Set<string>();
-    for (const cls of fileInfo.classes) targets.add(cls.name);
-    for (const func of fileInfo.functions) targets.add(func.name);
-
+    for (const cls of fileInfo.classes)
+      targets.add(cls.name);
+    for (const func of fileInfo.functions)
+      targets.add(func.name);
     const affectedFlows: any[] = [];
     const entryPoints = this._findEntryPoints();
-
     for (const ep of entryPoints) {
       const path = this._findPathToTargets(ep, targets);
       if (path) {
         affectedFlows.push({ entryPoint: ep.name, path: path });
       }
     }
-
     return {
       targetFile: relPath,
       entitiesCount: targets.size,
       affectedFlows: affectedFlows
     };
   }
-
   private _findEntryPoints(): any[] {
     const entryPoints: any[] = [];
     for (const [path, info] of this.index.entries()) {
@@ -1457,11 +1330,9 @@ export class IndexManager {
         }
       }
       for (const cls of info.classes) {
-        const isWidget = cls.extendsClass && (
-          cls.extendsClass.includes('Widget') ||
+        const isWidget = cls.extendsClass && (cls.extendsClass.includes('Widget') ||
           cls.extendsClass.includes('State') ||
-          cls.extendsClass.includes('Controller')
-        );
+          cls.extendsClass.includes('Controller'));
         if (isWidget) {
           for (const method of cls.methods) {
             if (method.name === 'build' || method.name === 'initState') {
@@ -1473,27 +1344,26 @@ export class IndexManager {
     }
     return entryPoints;
   }
-
   private _findPathToTargets(start: any, targets: Set<string>, maxDepth = 5): any[] | null {
-    const queue: { node: any; path: any[] }[] = [{ node: start, path: [start] }];
+    const queue: {
+      node: any;
+      path: any[];
+    }[] = [{ node: start, path: [start] }];
     const visited = new Set<string>();
-
     while (queue.length > 0) {
       const { node, path } = queue.shift()!;
       const qname = `${node.filePath}:${node.name}`;
-      if (visited.has(qname)) continue;
+      if (visited.has(qname))
+        continue;
       visited.add(qname);
-
-      if (targets.has(node.name)) return path;
-      if (path.length >= maxDepth) continue;
-
+      if (targets.has(node.name))
+        return path;
+      if (path.length >= maxDepth)
+        continue;
       const fileInfo = this.index.get(node.filePath);
       if (fileInfo) {
-        const calls = fileInfo.functionCalls.filter(c =>
-          c.callerFunction === node.name &&
-          (!node.parentClass || c.callerClass === node.parentClass)
-        );
-
+        const calls = fileInfo.functionCalls.filter(c => c.callerFunction === node.name &&
+          (!node.parentClass || c.callerClass === node.parentClass));
         for (const call of calls) {
           const targetNode = this._resolveCall(call.name);
           if (targetNode) {
@@ -1504,7 +1374,6 @@ export class IndexManager {
     }
     return null;
   }
-
   private _resolveCall(name: string): any | null {
     const dotIdx = name.indexOf('.');
     if (dotIdx !== -1) {
@@ -1514,69 +1383,252 @@ export class IndexManager {
         for (const c of info.classes) {
           if (c.name === clsName) {
             const m = c.methods.find(meth => meth.name === methodName);
-            if (m) return { ...m, filePath: path, kind: 'Method' };
+            if (m)
+              return { ...m, filePath: path, kind: 'Method' };
           }
         }
       }
     }
-
     for (const [path, info] of this.index.entries()) {
       for (const f of info.functions) {
-        if (f.name === name) return { ...f, filePath: path, kind: 'Function' };
+        if (f.name === name)
+          return { ...f, filePath: path, kind: 'Function' };
       }
       for (const c of info.classes) {
-        if (c.name === name) return { ...c, filePath: path, kind: 'Class', name: c.name, line: c.line };
+        if (c.name === name)
+          return { ...c, filePath: path, kind: 'Class', name: c.name, line: c.line };
       }
       for (const et of info.extensionTypes) {
-        if (et.name === name) return { ...et, filePath: path, kind: 'ExtensionType', name: et.name, line: et.line };
+        if (et.name === name)
+          return { ...et, filePath: path, kind: 'ExtensionType', name: et.name, line: et.line };
       }
     }
     return null;
   }
-
   public async ensureProjectName(forFile?: string): Promise<void> {
     if (!this.projectName || forFile) {
       const name = await this._loadProjectName(forFile);
-      if (name) this.projectName = name;
+      if (name)
+        this.projectName = name;
     }
   }
-
   private async _loadProjectName(forFile?: string): Promise<string | null> {
     try {
       let currentDir = forFile ? path.dirname(forFile) : this.workspaceRoot;
       const root = path.parse(currentDir).root;
-
       while (currentDir && currentDir !== root) {
         const pubspecPath = path.join(currentDir, 'pubspec.yaml');
         if (fs.existsSync(pubspecPath)) {
           const content = fs.readFileSync(pubspecPath, 'utf-8');
           const match = content.match(/^name:\s+([\w\-]+)/m);
-          if (match) return match[1];
+          if (match)
+            return match[1];
         }
         currentDir = path.dirname(currentDir);
       }
       return null;
-    } catch (err) {
+    }
+    catch (err) {
       console.error('[FlutterExplorer] Error loading project name:', err);
       return null;
     }
   }
+  public async compareParsersAndWriteReport(progress?: vscode.Progress<{ message?: string; increment?: number }>): Promise<void> {
+    try {
+      if (progress) progress.report({ message: 'Phase 1: Running Dart SDK Analyzer...' });
+      const sdkResults = await analyzeWithDart(this.workspaceRoot, this.extensionPath);
+      if (!sdkResults) {
+        vscode.window.showErrorMessage('Dart SDK Analyzer failed to return results.');
+        return;
+      }
+      if (progress) progress.report({ message: 'Saving SDK Analyzer results to analyze.db...' });
+      const sdkCache = new SqliteCache(this.workspaceRoot, { dbName: 'analyze.db' });
+      await sdkCache.clearAll();
+      const sdkUpserts = sdkResults.map(info => ({
+        relPath: info.filePath,
+        hash: info.contentHash,
+        info
+      }));
+      if (sdkUpserts.length > 0) {
+        await sdkCache.batchUpsertDartFiles(sdkUpserts);
+      }
+      sdkCache.checkpoint();
+      sdkCache.close();
+      if (progress) progress.report({ message: 'Phase 2: Running Regex-based Parser...' });
+      const dartFiles = await vscode.workspace.findFiles('lib/**/*.dart', '**/.*', 10000);
+      const regexResults: DartFileInfo[] = [];
+      const regexUpserts: Array<{ relPath: string; hash: string; info: DartFileInfo }> = [];
+      for (const uri of dartFiles) {
+        const relPath = this.relativePath(uri.fsPath);
+        if (this.isFileExcluded(uri.fsPath))
+          continue;
+        try {
+          const content = await this.readFile(uri);
+          const info = this.parser.parse(relPath, content);
+          info.contentHash = this.computeHash(content);
+          regexResults.push(info);
+          regexUpserts.push({ relPath, hash: info.contentHash, info });
+        }
+        catch (e) {
+          console.error(`Failed to parse ${relPath} with Regex:`, e);
+        }
+      }
+      if (progress) progress.report({ message: 'Saving Regex results to indexer.db...' });
+      const regexCache = new SqliteCache(this.workspaceRoot, { dbName: 'indexer.db' });
+      await regexCache.clearAll();
+      if (regexUpserts.length > 0) {
+        await regexCache.batchUpsertDartFiles(regexUpserts);
+      }
+      regexCache.checkpoint();
+      regexCache.close();
+      if (progress) progress.report({ message: 'Phase 3: Comparing parser results...' });
+      let totalFiles = sdkResults.length;
+      let diffs: string[] = [];
+      let totalClassesSDK = 0;
+      let totalClassesRegex = 0;
+      let totalMethodsSDK = 0;
+      let totalMethodsRegex = 0;
+      let totalFunctionsSDK = 0;
+      let totalFunctionsRegex = 0;
+      for (let idx = 0; idx < sdkResults.length; idx++) {
+        const sdkInfo = sdkResults[idx];
+        const relPath = sdkInfo.filePath;
+        const regexInfo = regexResults.find(r => r.filePath === relPath);
+        if (!regexInfo) {
+          diffs.push(`### 📄 File: \`${relPath}\` (Missed completely by Regex Parser)\n`);
+          continue;
+        }
+        totalClassesSDK += sdkInfo.classes.length;
+        totalClassesRegex += regexInfo.classes.length;
+        totalFunctionsSDK += sdkInfo.functions.length;
+        totalFunctionsRegex += regexInfo.functions.length;
+        sdkInfo.classes.forEach(c => totalMethodsSDK += c.methods.length);
+        regexInfo.classes.forEach(c => totalMethodsRegex += c.methods.length);
+        const fileDiffs: string[] = [];
+        for (const sdkClass of sdkInfo.classes) {
+          const regexClass = regexInfo.classes.find(c => c.name === sdkClass.name);
+          if (!regexClass) {
+            fileDiffs.push(`- ❌ **Missing Class**: Class \`${sdkClass.name}\` (line ${sdkClass.line}) was NOT found by regex parser.`);
+            continue;
+          }
+          const normSDKExt = sdkClass.extendsClass ? sdkClass.extendsClass.replace(/\s+/g, '') : null;
+          const normRegexExt = regexClass.extendsClass ? regexClass.extendsClass.replace(/\s+/g, '') : null;
+          if (normSDKExt !== normRegexExt) {
+            fileDiffs.push(`- ⚠️ **Class \`${sdkClass.name}\`**: mismatched extends class (SDK: \`${sdkClass.extendsClass}\`, Regex: \`${regexClass.extendsClass}\`).`);
+          }
+          for (const sdkMethod of sdkClass.methods) {
+            const regexMethod = regexClass.methods.find(m => m.name === sdkMethod.name);
+            if (!regexMethod) {
+              fileDiffs.push(`  - ❌ **Missing Method**: Method \`${sdkClass.name}.${sdkMethod.name}\` (line ${sdkMethod.line}) was NOT found by regex parser.`);
+              continue;
+            }
+            const normSDKReturn = sdkMethod.returnType.replace(/\s+/g, '');
+            const normRegexReturn = regexMethod.returnType.replace(/\s+/g, '');
+            if (normSDKReturn !== normRegexReturn) {
+              fileDiffs.push(`  - ⚠️ **Method \`${sdkClass.name}.${sdkMethod.name}\`**: mismatched return type (SDK: \`${sdkMethod.returnType}\`, Regex: \`${regexMethod.returnType}\`).`);
+            }
+            const normSDKParams = sdkMethod.params.replace(/\s+/g, '');
+            const normRegexParams = regexMethod.params.replace(/\s+/g, '');
+            if (normSDKParams !== normRegexParams) {
+              fileDiffs.push(`  - ⚠️ **Method \`${sdkClass.name}.${sdkMethod.name}\`**: mismatched params (SDK: \`${sdkMethod.params}\`, Regex: \`${regexMethod.params}\`).`);
+            }
+            if (sdkMethod.isStatic !== regexMethod.isStatic) {
+              fileDiffs.push(`  - ⚠️ **Method \`${sdkClass.name}.${sdkMethod.name}\`**: mismatched static modifier (SDK: ${sdkMethod.isStatic}, Regex: ${regexMethod.isStatic}).`);
+            }
+          }
+          for (const regexMethod of regexClass.methods) {
+            const sdkMethod = sdkClass.methods.find(m => m.name === regexMethod.name);
+            if (!sdkMethod) {
+              fileDiffs.push(`  - ➕ **Extra Method**: Method \`${sdkClass.name}.${regexMethod.name}\` (line ${regexMethod.line}) was extracted by regex but not in SDK (potential false positive).`);
+            }
+          }
+        }
+        for (const regexClass of regexInfo.classes) {
+          const sdkClass = sdkInfo.classes.find(c => c.name === regexClass.name);
+          if (!sdkClass) {
+            fileDiffs.push(`- ➕ **Extra Class**: Class \`${regexClass.name}\` (line ${regexClass.line}) was extracted by regex but not in SDK.`);
+          }
+        }
+        for (const sdkFunc of sdkInfo.functions) {
+          const regexFunc = regexInfo.functions.find(f => f.name === sdkFunc.name);
+          if (!regexFunc) {
+            fileDiffs.push(`- ❌ **Missing Function**: Top-level function \`${sdkFunc.name}\` (line ${sdkFunc.line}) was NOT found by regex parser.`);
+            continue;
+          }
+          const normSDKReturn = sdkFunc.returnType.replace(/\s+/g, '');
+          const normRegexReturn = regexFunc.returnType.replace(/\s+/g, '');
+          if (normSDKReturn !== normRegexReturn) {
+            fileDiffs.push(`- ⚠️ **Function \`${sdkFunc.name}\`**: mismatched return type (SDK: \`${sdkFunc.returnType}\`, Regex: \`${regexFunc.returnType}\`).`);
+          }
+        }
+        for (const regexFunc of regexInfo.functions) {
+          const sdkFunc = sdkInfo.functions.find(f => f.name === regexFunc.name);
+          if (!sdkFunc) {
+            fileDiffs.push(`- ➕ **Extra Function**: Top-level function \`${regexFunc.name}\` (line ${regexFunc.line}) was extracted by regex but not in SDK.`);
+          }
+        }
+        for (const sdkEnum of sdkInfo.enums) {
+          const regexEnum = regexInfo.enums.find(e => e.name === sdkEnum.name);
+          if (!regexEnum) {
+            fileDiffs.push(`- ❌ **Missing Enum**: Enum \`${sdkEnum.name}\` (line ${sdkEnum.line}) was NOT found by regex parser.`);
+            continue;
+          }
+          const sdkVals = sdkEnum.values.join(',');
+          const regexVals = regexEnum.values.join(',');
+          if (sdkVals !== regexVals) {
+            fileDiffs.push(`- ⚠️ **Enum \`${sdkEnum.name}\`**: mismatched values (SDK: \`[${sdkVals}]\`, Regex: \`[${regexVals}]\`).`);
+          }
+        }
+        for (const regexEnum of regexInfo.enums) {
+          const sdkEnum = sdkInfo.enums.find(e => e.name === regexEnum.name);
+          if (!sdkEnum) {
+            fileDiffs.push(`- ➕ **Extra Enum**: Enum \`${regexEnum.name}\` (line ${regexEnum.line}) was extracted by regex but not in SDK.`);
+          }
+        }
+        if (fileDiffs.length > 0) {
+          const fullPath = path.join(this.workspaceRoot, relPath);
+          diffs.push(`### 📄 File: [${relPath}](file:///${fullPath.replace(/\\/g, '/')})\n` + fileDiffs.join('\n') + '\n');
+        }
+      }
+      const reportPath = path.join(this.workspaceRoot, 'parser_comparison_report.md');
+      const timeStr = new Date().toLocaleString();
+      let reportContent = `# Parser Comparison Report\n\n`;
+      reportContent += `Generated on: **${timeStr}**\n\n`;
+      reportContent += `This report compares the findings of the **Regex-based Parser** (\`dartParser.ts\`) against the **Dart SDK Analyzer** (\`tools/dart_analyzer.dart\`) to find discrepancies and improve the regex parser.\n\n`;
+      reportContent += `## 📊 Statistics Summary\n\n`;
+      reportContent += `| Metric | Dart SDK Analyzer (Ground Truth) | Regex Parser (\`dartParser.ts\`) | Difference |\n`;
+      reportContent += `| --- | --- | --- | --- |\n`;
+      reportContent += `| **Analyzed Files** | ${totalFiles} | ${totalFiles} | 0 |\n`;
+      reportContent += `| **Total Classes** | ${totalClassesSDK} | ${totalClassesRegex} | ${totalClassesRegex - totalClassesSDK} |\n`;
+      reportContent += `| **Total Methods** | ${totalMethodsSDK} | ${totalMethodsRegex} | ${totalMethodsRegex - totalMethodsSDK} |\n`;
+      reportContent += `| **Total Top-level Functions** | ${totalFunctionsSDK} | ${totalFunctionsRegex} | ${totalFunctionsRegex - totalFunctionsSDK} |\n\n`;
+      if (diffs.length === 0) {
+        reportContent += `## 🎉 Congratulations!\n\nBoth parsers are in 100% agreement. No structural differences found across the project files!\n`;
+      }
+      else {
+        reportContent += `## 🔍 Detected Discrepancies\n\n`;
+        reportContent += diffs.join('\n');
+      }
+      fs.writeFileSync(reportPath, reportContent, 'utf-8');
+      const doc = await vscode.workspace.openTextDocument(reportPath);
+      await vscode.window.showTextDocument(doc);
+      vscode.window.showInformationMessage('Parser comparison complete! Report opened in editor.');
+    }
+    catch (e) {
+      console.error('compareParsersAndWriteReport failed:', e);
+      vscode.window.showErrorMessage(`Comparison failed: ${e}`);
+    }
+  }
 }
-
-// ── Public interfaces ─────────────────────────────────────────────────────────
-
 export interface SearchResult {
   name: string;
-  type: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation'
-  | 'call' | 'extension' | 'typedef' | 'variable' | 'constructor'
-  | 'property' | 'annotation' | 'file' | 'extensionType';
+  type: 'class' | 'function' | 'widget' | 'enum' | 'mixin' | 'translation' | 'call' | 'extension' | 'typedef' | 'variable' | 'constructor' | 'property' | 'annotation' | 'file' | 'extensionType';
   subType: string;
   file: string;
   line: number;
   isPrivate: boolean;
   usageCount?: number;
 }
-
 export interface DependencyNode {
   file: string;
   imports: string[];

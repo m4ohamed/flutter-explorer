@@ -1,6 +1,25 @@
 export abstract class BaseParser<TFileInfo = any> {
+  private static readonly MAX_BLOCK_SCAN_LINES = 5000;
   abstract parse(filePath: string, content: string): TFileInfo;
   abstract preprocessSource(content: string): string;
+
+  protected findMethodInParsed(
+    parsed: any,
+    name: string,
+    parentClass?: string
+  ): { line: number; lineEnd?: number } | undefined {
+    const containers = [
+      ...(parsed.classes ?? []),
+      ...(parsed.extensions ?? []),
+      ...(parsed.extensionTypes ?? []),
+    ];
+    for (const container of containers) {
+      const m = container.methods?.find((m: any) => m.name === name);
+      if (m && (!parentClass || container.name === parentClass))
+        return m;
+    }
+    return parsed.functions?.find((f: any) => f.name === name && !f.parentClass);
+  }
 
   /**
    * Extract the full body of a class, function, or method from the source code
@@ -22,14 +41,23 @@ export abstract class BaseParser<TFileInfo = any> {
     switch (elementType) {
       case 'class': {
         const cls = parsed.classes?.find((c: any) => c.name === name);
-        if (cls) { startLine = cls.line; endLine = cls.lineEnd ?? -1; }
-        if (endLine === -1) {
-          const ext = parsed.extensions?.find((e: any) =>
-            name === 'unnamed extension' ? !e.name.startsWith('Unnamed') === false : e.name === name
-          );
-          if (ext) { startLine = ext.line; endLine = ext.lineEnd ?? -1; }
-          const et = parsed.extensionTypes?.find((e: any) => e.name === name);
-          if (et) { startLine = et.line; endLine = et.lineEnd ?? -1; }
+        if (cls) {
+          startLine = cls.line;
+          endLine = cls.lineEnd ?? -1;
+          break;
+        }
+        const ext = parsed.extensions?.find((e: any) =>
+          name === 'unnamed extension' ? e.name.startsWith('UnnamedExtension_') : e.name === name
+        );
+        if (ext) {
+          startLine = ext.line;
+          endLine = ext.lineEnd ?? -1;
+          break;
+        }
+        const et = parsed.extensionTypes?.find((e: any) => e.name === name);
+        if (et) {
+          startLine = et.line;
+          endLine = et.lineEnd ?? -1;
         }
         break;
       }
@@ -45,7 +73,7 @@ export abstract class BaseParser<TFileInfo = any> {
       }
       case 'extension': {
         const ext = parsed.extensions?.find((e: any) =>
-          name === 'unnamed extension' ? !e.name.startsWith('Unnamed') === false : e.name === name
+          name === 'unnamed extension' ? e.name.startsWith('UnnamedExtension_') : e.name === name
         );
         if (ext) { startLine = ext.line; endLine = ext.lineEnd ?? -1; }
         break;
@@ -56,25 +84,7 @@ export abstract class BaseParser<TFileInfo = any> {
         break;
       }
       case 'method': {
-        let fn = parsed.functions?.find((f: any) => f.name === name && f.parentClass === parentClass);
-        if (!fn) {
-          for (const cls of (parsed.classes || [])) {
-            const m = cls.methods?.find((m: any) => m.name === name);
-            if (m && (!parentClass || cls.name === parentClass)) { fn = m; break; }
-          }
-        }
-        if (!fn) {
-          for (const e of (parsed.extensions || [])) {
-            const m = e.methods?.find((m: any) => m.name === name);
-            if (m && (!parentClass || e.name === parentClass)) { fn = m; break; }
-          }
-        }
-        if (!fn) {
-          for (const et of (parsed.extensionTypes || [])) {
-            const m = et.methods?.find((m: any) => m.name === name);
-            if (m && (!parentClass || et.name === parentClass)) { fn = m; break; }
-          }
-        }
+        const fn = this.findMethodInParsed(parsed, name, parentClass);
         if (fn) { startLine = fn.line; endLine = fn.lineEnd ?? -1; }
         break;
       }
@@ -104,7 +114,7 @@ export abstract class BaseParser<TFileInfo = any> {
         }
         if (endLine !== -1) break;
 
-        if (i > startLine + 5000) break;
+        if (i > startLine + BaseParser.MAX_BLOCK_SCAN_LINES) break;
       }
     }
 
@@ -113,6 +123,8 @@ export abstract class BaseParser<TFileInfo = any> {
     const comments: string[] = [];
     for (let i = startLine - 2; i >= 0; i--) {
       const t = lines[i].trim();
+      if (t.startsWith('@'))
+        continue;
       if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) {
         comments.unshift(t);
       } else {

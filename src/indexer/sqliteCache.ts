@@ -28,14 +28,15 @@ export class SqliteCache {
         meta: Record<string, any>;
     } = { dartFiles: {}, arbFiles: {}, meta: {} };
 
-    constructor(workspaceRoot: string, options: { readonly?: boolean } = {}) {
+    constructor(workspaceRoot: string, options: { readonly?: boolean; dbName?: string } = {}) {
         this.workspaceRoot = workspaceRoot;
         this.readonlyMode = !!options.readonly;
 
         try {
             const dataDir = ProjectDetector.getDataDir(workspaceRoot);
-            this.jsonPath = path.join(dataDir, 'flutter-explorer.json');
-            const dbPath = path.join(dataDir, 'flutter-explorer.db');
+            const dbFilename = options.dbName || 'flutter-explorer.db';
+            this.jsonPath = path.join(dataDir, dbFilename.replace('.db', '.json'));
+            const dbPath = path.join(dataDir, dbFilename);
 
             // Legacy check: Move from .vscode if exists
             const legacyDir = path.join(workspaceRoot, '.vscode');
