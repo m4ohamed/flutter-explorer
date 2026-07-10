@@ -9,6 +9,7 @@ import { analyzeWithDart } from './dartAnalyzerWrapper';
 import { PackageIndexer } from './packageIndexer';
 import { PackageInfo } from '../providers/pubspecLockProvider';
 import { SqliteCache } from './sqliteCache';
+import { ProjectDetector } from '../utils/projectDetector';
 import { BM25Search, BM25Document } from './bm25Search';
 export interface TranslationInfo {
   key: string;
@@ -1435,53 +1436,111 @@ export class IndexManager {
   }
   public async compareParsersAndWriteReport(progress?: vscode.Progress<{ message?: string; increment?: number }>): Promise<void> {
     try {
-      if (progress) progress.report({ message: 'Phase 1: Running Dart SDK Analyzer...' });
-      const sdkResults = await analyzeWithDart(this.workspaceRoot, this.extensionPath);
-      if (!sdkResults) {
-        vscode.window.showErrorMessage('Dart SDK Analyzer failed to return results.');
-        return;
-      }
-      if (progress) progress.report({ message: 'Saving SDK Analyzer results to analyze.db...' });
-      const sdkCache = new SqliteCache(this.workspaceRoot, { dbName: 'analyze.db' });
-      await sdkCache.clearAll();
-      const sdkUpserts = sdkResults.map(info => ({
-        relPath: info.filePath,
-        hash: info.contentHash,
-        info
-      }));
-      if (sdkUpserts.length > 0) {
-        await sdkCache.batchUpsertDartFiles(sdkUpserts);
-      }
-      sdkCache.checkpoint();
-      sdkCache.close();
-      if (progress) progress.report({ message: 'Phase 2: Running Regex-based Parser...' });
-      const dartFiles = await vscode.workspace.findFiles('lib/**/*.dart', '**/.*', 10000);
-      const regexResults: DartFileInfo[] = [];
-      const regexUpserts: Array<{ relPath: string; hash: string; info: DartFileInfo }> = [];
-      for (const uri of dartFiles) {
-        const relPath = this.relativePath(uri.fsPath);
-        if (this.isFileExcluded(uri.fsPath))
-          continue;
-        try {
-          const content = await this.readFile(uri);
-          const info = this.parser.parse(relPath, content);
-          info.contentHash = this.computeHash(content);
-          regexResults.push(info);
-          regexUpserts.push({ relPath, hash: info.contentHash, info });
+      let sdkResults: DartFileInfo[] = [];
+      let regexResults: DartFileInfo[] = [];
+      const dataDir = ProjectDetector.getDataDir(this.workspaceRoot);
+      const sdkDbPath = path.join(dataDir, 'analyze.db');
+      const regexDbPath = path.join(dataDir, 'indexer.db');
+      let useExisting = false;
+      if (fs.existsSync(sdkDbPath) && fs.existsSync(regexDbPath)) {
+        const choice = await vscode.window.showInformationMessage(
+          'Existing index databases (analyze.db & indexer.db) found. Do you want to run a full re-index or use the existing databases for comparison?',
+          'Use Existing Databases',
+          'Run Full Re-index'
+        );
+        if (choice === 'Use Existing Databases') {
+          useExisting = true;
         }
-        catch (e) {
-          console.error(`Failed to parse ${relPath} with Regex:`, e);
+        else if (!choice) {
+          return;
         }
       }
-      if (progress) progress.report({ message: 'Saving Regex results to indexer.db...' });
-      const regexCache = new SqliteCache(this.workspaceRoot, { dbName: 'indexer.db' });
-      await regexCache.clearAll();
-      if (regexUpserts.length > 0) {
-        await regexCache.batchUpsertDartFiles(regexUpserts);
+      if (useExisting) {
+        if (progress) progress.report({ message: 'Loading existing SDK Analyzer results from analyze.db...' });
+        const sdkCache = new SqliteCache(this.workspaceRoot, { dbName: 'analyze.db', readonly: true });
+        const sdkEntries = await sdkCache.getAllDartFiles();
+        sdkResults = sdkEntries.map(e => e.info);
+        sdkCache.close();
+        if (progress) progress.report({ message: 'Loading existing Regex results from indexer.db...' });
+        const regexCache = new SqliteCache(this.workspaceRoot, { dbName: 'indexer.db', readonly: true });
+        const regexEntries = await regexCache.getAllDartFiles();
+        regexResults = regexEntries.map(e => e.info);
+        regexCache.close();
       }
-      regexCache.checkpoint();
-      regexCache.close();
+      else {
+        if (progress) progress.report({ message: 'Phase 1: Running Dart SDK Analyzer...' });
+        const runResults = await analyzeWithDart(this.workspaceRoot, this.extensionPath);
+        if (!runResults) {
+          vscode.window.showErrorMessage('Dart SDK Analyzer failed to return results.');
+          return;
+        }
+        sdkResults = runResults;
+        for (const info of sdkResults) {
+          info.filePath = info.filePath.replace(/\\/g, '/');
+        }
+        if (progress) progress.report({ message: 'Saving SDK Analyzer results to analyze.db...' });
+        const sdkCache = new SqliteCache(this.workspaceRoot, { dbName: 'analyze.db' });
+        await sdkCache.clearAll();
+        const sdkUpserts = sdkResults.map(info => ({
+          relPath: info.filePath,
+          hash: info.contentHash,
+          info
+        }));
+        if (sdkUpserts.length > 0) {
+          await sdkCache.batchUpsertDartFiles(sdkUpserts);
+        }
+        sdkCache.checkpoint();
+        sdkCache.close();
+        if (progress) progress.report({ message: 'Phase 2: Running Regex-based Parser...' });
+        const dartFiles = await vscode.workspace.findFiles('lib/**/*.dart', '**/.*', 10000);
+        const regexUpserts: Array<{ relPath: string; hash: string; info: DartFileInfo }> = [];
+        for (const uri of dartFiles) {
+          const relPath = this.relativePath(uri.fsPath).replace(/\\/g, '/');
+          if (this.isFileExcluded(uri.fsPath))
+            continue;
+          try {
+            const content = await this.readFile(uri);
+            const info = this.parser.parse(relPath, content);
+            info.filePath = relPath;
+            info.contentHash = this.computeHash(content);
+            regexResults.push(info);
+            regexUpserts.push({ relPath, hash: info.contentHash, info });
+          }
+          catch (e) {
+            console.error(`Failed to parse ${relPath} with Regex:`, e);
+          }
+        }
+        if (progress) progress.report({ message: 'Saving Regex results to indexer.db...' });
+        const regexCache = new SqliteCache(this.workspaceRoot, { dbName: 'indexer.db' });
+        await regexCache.clearAll();
+        if (regexUpserts.length > 0) {
+          await regexCache.batchUpsertDartFiles(regexUpserts);
+        }
+        regexCache.checkpoint();
+        regexCache.close();
+      }
       if (progress) progress.report({ message: 'Phase 3: Comparing parser results...' });
+      const collectWidgets = (widgetsList: any[]): Array<{ name: string; line: number }> => {
+        const result: Array<{ name: string; line: number }> = [];
+        const traverse = (wList: any[]) => {
+          for (const w of wList) {
+            if (w && w.name) {
+              result.push({ name: w.name, line: w.line });
+              if (w.children) traverse(w.children);
+            }
+          }
+        };
+        traverse(widgetsList);
+        return result;
+      };
+      const normalizeParams = (paramStr: string): string => {
+        let clean = paramStr.replace(/[\{\}\s]/g, '');
+        return clean.split(',')
+                    .map(p => p.trim())
+                    .filter(p => p.length > 0)
+                    .sort()
+                    .join(',');
+      };
       let totalFiles = sdkResults.length;
       let diffs: string[] = [];
       let totalClassesSDK = 0;
@@ -1490,6 +1549,8 @@ export class IndexManager {
       let totalMethodsRegex = 0;
       let totalFunctionsSDK = 0;
       let totalFunctionsRegex = 0;
+      let totalWidgetsSDK = 0;
+      let totalWidgetsRegex = 0;
       for (let idx = 0; idx < sdkResults.length; idx++) {
         const sdkInfo = sdkResults[idx];
         const relPath = sdkInfo.filePath;
@@ -1511,7 +1572,8 @@ export class IndexManager {
             fileDiffs.push(`- ❌ **Missing Class**: Class \`${sdkClass.name}\` (line ${sdkClass.line}) was NOT found by regex parser.`);
             continue;
           }
-          const normSDKExt = sdkClass.extendsClass ? sdkClass.extendsClass.replace(/\s+/g, '') : null;
+          const sdkExt = sdkClass.extendsClass === 'Object' ? null : sdkClass.extendsClass;
+          const normSDKExt = sdkExt ? sdkExt.replace(/\s+/g, '') : null;
           const normRegexExt = regexClass.extendsClass ? regexClass.extendsClass.replace(/\s+/g, '') : null;
           if (normSDKExt !== normRegexExt) {
             fileDiffs.push(`- ⚠️ **Class \`${sdkClass.name}\`**: mismatched extends class (SDK: \`${sdkClass.extendsClass}\`, Regex: \`${regexClass.extendsClass}\`).`);
@@ -1527,8 +1589,8 @@ export class IndexManager {
             if (normSDKReturn !== normRegexReturn) {
               fileDiffs.push(`  - ⚠️ **Method \`${sdkClass.name}.${sdkMethod.name}\`**: mismatched return type (SDK: \`${sdkMethod.returnType}\`, Regex: \`${regexMethod.returnType}\`).`);
             }
-            const normSDKParams = sdkMethod.params.replace(/\s+/g, '');
-            const normRegexParams = regexMethod.params.replace(/\s+/g, '');
+            const normSDKParams = normalizeParams(sdkMethod.params);
+            const normRegexParams = normalizeParams(regexMethod.params);
             if (normSDKParams !== normRegexParams) {
               fileDiffs.push(`  - ⚠️ **Method \`${sdkClass.name}.${sdkMethod.name}\`**: mismatched params (SDK: \`${sdkMethod.params}\`, Regex: \`${regexMethod.params}\`).`);
             }
@@ -1585,6 +1647,78 @@ export class IndexManager {
             fileDiffs.push(`- ➕ **Extra Enum**: Enum \`${regexEnum.name}\` (line ${regexEnum.line}) was extracted by regex but not in SDK.`);
           }
         }
+        if (sdkInfo.mixins && regexInfo.mixins) {
+          for (const sdkMixin of sdkInfo.mixins) {
+            const regexMixin = regexInfo.mixins.find(m => m.name === sdkMixin.name);
+            if (!regexMixin) {
+              fileDiffs.push(`- ❌ **Missing Mixin**: Mixin \`${sdkMixin.name}\` (line ${sdkMixin.line}) was NOT found by regex parser.`);
+            }
+          }
+          for (const regexMixin of regexInfo.mixins) {
+            const sdkMixin = sdkInfo.mixins.find(m => m.name === regexMixin.name);
+            if (!sdkMixin) {
+              fileDiffs.push(`- ➕ **Extra Mixin**: Mixin \`${regexMixin.name}\` (line ${regexMixin.line}) was extracted by regex but not in SDK.`);
+            }
+          }
+        }
+        if (sdkInfo.extensions && regexInfo.extensions) {
+          for (const sdkExt of sdkInfo.extensions) {
+            const regexExt = regexInfo.extensions.find(e => e.name === sdkExt.name);
+            if (!regexExt) {
+              fileDiffs.push(`- ❌ **Missing Extension**: Extension \`${sdkExt.name}\` (line ${sdkExt.line}) was NOT found by regex parser.`);
+            }
+          }
+          for (const regexExt of regexInfo.extensions) {
+            const sdkExt = sdkInfo.extensions.find(e => e.name === regexExt.name);
+            if (!sdkExt) {
+              fileDiffs.push(`- ➕ **Extra Extension**: Extension \`${regexExt.name}\` (line ${regexExt.line}) was extracted by regex but not in SDK.`);
+            }
+          }
+        }
+        if (sdkInfo.typedefs && regexInfo.typedefs) {
+          for (const sdkTypedef of sdkInfo.typedefs) {
+            const regexTypedef = regexInfo.typedefs.find(t => t.name === sdkTypedef.name);
+            if (!regexTypedef) {
+              fileDiffs.push(`- ❌ **Missing Typedef**: Typedef \`${sdkTypedef.name}\` (line ${sdkTypedef.line}) was NOT found by regex parser.`);
+            }
+          }
+          for (const regexTypedef of regexInfo.typedefs) {
+            const sdkTypedef = sdkInfo.typedefs.find(t => t.name === regexTypedef.name);
+            if (!sdkTypedef) {
+              fileDiffs.push(`- ➕ **Extra Typedef**: Typedef \`${regexTypedef.name}\` (line ${regexTypedef.line}) was extracted by regex but not in SDK.`);
+            }
+          }
+        }
+        if (sdkInfo.variables && regexInfo.variables) {
+          for (const sdkVar of sdkInfo.variables) {
+            const regexVar = regexInfo.variables.find(v => v.name === sdkVar.name);
+            if (!regexVar) {
+              fileDiffs.push(`- ❌ **Missing Variable**: Top-level variable \`${sdkVar.name}\` (line ${sdkVar.line}) was NOT found by regex parser.`);
+            }
+          }
+          for (const regexVar of regexInfo.variables) {
+            const sdkVar = sdkInfo.variables.find(v => v.name === regexVar.name);
+            if (!sdkVar) {
+              fileDiffs.push(`- ➕ **Extra Variable**: Top-level variable \`${regexVar.name}\` (line ${regexVar.line}) was extracted by regex but not in SDK.`);
+            }
+          }
+        }
+        const sdkWidgets = collectWidgets(sdkInfo.widgets || []);
+        const regexWidgets = collectWidgets(regexInfo.widgets || []);
+        totalWidgetsSDK += sdkWidgets.length;
+        totalWidgetsRegex += regexWidgets.length;
+        for (const sdkWidget of sdkWidgets) {
+          const regexWidget = regexWidgets.find(w => w.name === sdkWidget.name);
+          if (!regexWidget) {
+            fileDiffs.push(`- ❌ **Missing Widget**: Widget \`${sdkWidget.name}\` (line ${sdkWidget.line}) was NOT found by regex parser.`);
+          }
+        }
+        for (const regexWidget of regexWidgets) {
+          const sdkWidget = sdkWidgets.find(w => w.name === regexWidget.name);
+          if (!sdkWidget) {
+            fileDiffs.push(`- ➕ **Extra Widget**: Widget \`${regexWidget.name}\` (line ${regexWidget.line}) was extracted by regex but not in SDK.`);
+          }
+        }
         if (fileDiffs.length > 0) {
           const fullPath = path.join(this.workspaceRoot, relPath);
           diffs.push(`### 📄 File: [${relPath}](file:///${fullPath.replace(/\\/g, '/')})\n` + fileDiffs.join('\n') + '\n');
@@ -1601,7 +1735,8 @@ export class IndexManager {
       reportContent += `| **Analyzed Files** | ${totalFiles} | ${totalFiles} | 0 |\n`;
       reportContent += `| **Total Classes** | ${totalClassesSDK} | ${totalClassesRegex} | ${totalClassesRegex - totalClassesSDK} |\n`;
       reportContent += `| **Total Methods** | ${totalMethodsSDK} | ${totalMethodsRegex} | ${totalMethodsRegex - totalMethodsSDK} |\n`;
-      reportContent += `| **Total Top-level Functions** | ${totalFunctionsSDK} | ${totalFunctionsRegex} | ${totalFunctionsRegex - totalFunctionsSDK} |\n\n`;
+      reportContent += `| **Total Top-level Functions** | ${totalFunctionsSDK} | ${totalFunctionsRegex} | ${totalFunctionsRegex - totalFunctionsSDK} |\n`;
+      reportContent += `| **Total Widgets** | ${totalWidgetsSDK} | ${totalWidgetsRegex} | ${totalWidgetsRegex - totalWidgetsSDK} |\n\n`;
       if (diffs.length === 0) {
         reportContent += `## 🎉 Congratulations!\n\nBoth parsers are in 100% agreement. No structural differences found across the project files!\n`;
       }

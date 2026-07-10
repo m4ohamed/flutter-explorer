@@ -229,12 +229,12 @@ const STATE_BASE_PATTERN = /^(Consumer|Hook|)?State(?:ful)?(?:Widget)?(?:\s*<.*>
 const NOTIFIER_CLASSES = new Set([
   'ChangeNotifier', 'ValueNotifier', 'StateNotifier', 'Notifier', 'AsyncNotifier',
 ]);
-const SKIP_METHODS = new Set([
-  'createState', 'dispose', 'didChangeDependencies',
-  'didUpdateWidget', 'deactivate',
-]);
+const SKIP_METHODS = new Set<string>();
 const RESERVED = new Set([
   'class', 'enum', 'mixin', 'if', 'for', 'while', 'switch', 'catch', 'try', 'return',
+  'import', 'export', 'typedef', 'library', 'part', 'var', 'final', 'const', 'late',
+  'get', 'set', 'void', 'dynamic', 'break', 'continue', 'throw', 'rethrow', 'else',
+  'case', 'default', 'in', 'is', 'as', 'assert', 'true', 'false', 'null', 'this', 'super',
 ]);
 const NON_DEF_KEYWORDS = new Set([
   'return', 'await', 'throw', 'yield', 'new', 'else', 'case',
@@ -242,34 +242,34 @@ const NON_DEF_KEYWORDS = new Set([
 ]);
 export class DartParser extends BaseParser<DartFileInfo> {
   private static readonly P = {
-    import_: /^import\s+['"]([^'"]+)['"]\s*(?:as\s+(\w+))?\s*(?:show\s+([\w,\s]+))?\s*(?:hide\s+([\w,\s]+))?\s*;/,
+    import_: /^import\s+['"]([^'"]+)['"]\s*(?:as\s+([\w$]+))?\s*(?:show\s+([\w$,\s]+))?\s*(?:hide\s+([\w$,\s]+))?\s*;/,
     export_: /^export\s+['"]([^'"]+)['"]\s*;/,
     hardText: /Text\s*\(\s*(['"])(.*?)\1/,
-    hardColor: /Color\s*\(\s*0x[A-Fa-f0-9]{8}\s*\)|Colors\.[a-zA-Z0-9_]+/,
-    enum_: /^enum\s+(\w+)\s*\{/,
-    mixin_: /^mixin\s+(?!class\b)(\w+)(?:\s+on\s+(\w+))?\s*\{/,
-    extension_: /^extension\s+(\w+)?\s+on\s+([\w<>\[\]?,\s]+?)\s*\{/,
-    extensionType_: /^extension\s+type\s+(const\s+)?(\w+)(?:\.(\w+))?\s*\(([\w<>\[\]?,\s]+)\)(?:\s+implements\s+([\w<>,\s]+))?\s*\{/,
-    typedef_: /^typedef\s+(\w+)\s*=\s*([^;]+);/,
-    typedefOld_: /^typedef\s+([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(([^)]*)\);/,
-    annotation: /^@(\w+)/,
-    class_: /^((?:abstract\s+|sealed\s+|base\s+|interface\s+|final\s+)*)(mixin\s+)?class\s+(\w+)(?:\s+extends\s+([\w<>,\s\[\]]+))?(?:\s+with\s+([\w<>,\s\[\]]+))?(?:\s+implements\s+([\w<>,\s\[\]]+))?/,
-    ctor: /^\s*(const\s+)?(factory\s+)?(\w+)(?:\.(\w+))?\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(?::[^{;]*)?([\{;])/,
-    buildMethod: /(?:Widget|Route|PreferredSizeWidget|StatelessWidget|StatefulWidget)\s+(\w+)\s*\(([^)]*)\)/,
-    method: /^\s*(static\s+)?(\w[\w<>\[\]?,\s]*?)\s+(\w+)\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
-    getter: /^\s*(static\s+)?([\w<>\[\]?,\s]+?)\s+get\s+(\w+)\s*(=>|\{)/,
-    setter: /^\s*(static\s+)?(\w+)\s+set\s+(\w+)\s*\(([^)]*)\)/,
-    field: /^\s+(final|const|late)?\s*(final|const)?\s*(static\s+)?([\w<>\[\]?,\s]+?)\s+(\w+)\s*(=\s*[^;]+)?;/,
-    topVar: /^(final|const|late)?\s*(final|const)?\s*([\w<>\[\]?,\s]+?)\s+(\w+)\s*(=\s*[^;]+)?;/,
-    topFunc: /^(\w[\w<>\[\]?,\s]*?)\s+(\w+)\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
+    hardColor: /Color\s*\(\s*0x[A-Fa-f0-9]{8}\s*\)|Colors\.[a-zA-Z0-9_$]+/,
+    enum_: /^enum\s+([\w$]+)\s*\{/,
+    mixin_: /^mixin\s+(?!class\b)([\w$]+)(?:\s+on\s+([\w$]+))?\s*\{/,
+    extension_: /^extension\s+([\w$]+)?\s+on\s+([\w$<>\[\]?,\s]+?)\s*\{/,
+    extensionType_: /^extension\s+type\s+(const\s+)?([\w$]+)(?:\.([\w$]+))?\s*\(([\w$<>\[\]?,\s]+)\)(?:\s+implements\s+([\w$<>,\s]+))?\s*\{/,
+    typedef_: /^typedef\s+([\w$]+)\s*=\s*([^;]+);/,
+    typedefOld_: /^typedef\s+([\w$<>\[\]?,\s]+?)\s+([\w$]+)\s*\(([^)]*)\);/,
+    annotation: /^@([\w$]+)/,
+    class_: /^((?:abstract\s+|sealed\s+|base\s+|interface\s+|final\s+)*)(mixin\s+)?class\s+([\w$]+)(?:\s+extends\s+([\w$<>,\s\[\]]+))?(?:\s+with\s+([\w$<>,\s\[\]]+))?(?:\s+implements\s+([\w$<>,\s\[\]]+))?/,
+    ctor: /^\s*(const\s+)?(factory\s+)?([\w$]+)(?:\.([\w$]+))?\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(?::[^{;]*)?([\{;])/,
+    buildMethod: /(?:Widget|Route|PreferredSizeWidget|StatelessWidget|StatefulWidget)\s+([\w$]+)\s*\(([^)]*)\)/,
+    method: /^\s*(static\s+)?([\w$][\w$<>\[\]?,\s]*?)\s+([\w$]+)\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
+    getter: /^\s*(static\s+)?([\w$<>\[\]?,\s]+?)\s+get\s+([\w$]+)\s*(=>|\{)/,
+    setter: /^\s*(static\s+)?([\w$]+)\s+set\s+([\w$]+)\s*\(([^)]*)\)/,
+    field: /^(?:(static)\s+)?(?:(final|const|late|var)\s+)?(?:(final|const|late|var)\s+)?(?:([\w$<>\[\]?,\s]+?)\s+)?([\w$]+)\s*(?:(=\s*[^;]+|;).*)/,
+    topVar: /^(?:(final|const|late|var)\s+)?(?:(final|const|late|var)\s+)?(?:([\w$<>\[\]?,\s]+?)\s+)?([\w$]+)\s*(?:(=\s*[^;]+|;).*)/,
+    topFunc: /^([\w$][\w$<>\[\]?,\s]*?)\s+([\w$]+)\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
     callPat: /(?:([a-zA-Z_]\w*)\.)?([a-zA-Z_]\w*)\s*\(/g,
-    classDef: /class\s+(\w+)/,
-    funcDef: /([\w<>\[\]?,\s]+?)\s+(\w+)\s*\(/,
+    classDef: /class\s+([\w$]+)/,
+    funcDef: /([\w$<>\[\]?,\s]+?)\s+([\w$]+)\s*\(/,
   } as const;
   public preprocessSource(content: string): string {
     return content
-      .replace(/r'''[\s\S]*?'''|r"""[\s\S]*?"""/g, m => m.replace(/[^\n]/g, ' '))
-      .replace(/r'[^']*'|r"[^"]*"/g, m => m.replace(/[^\n]/g, ' '))
+      .replace(/\br'''[\s\S]*?'''|\br"""[\s\S]*?"""/g, m => m.replace(/[^\n]/g, ' '))
+      .replace(/\br'[^']*'|\br"[^"]*"/g, m => m.replace(/[^\n]/g, ' '))
       .replace(/'''[\s\S]*?'''|"""[\s\S]*?"""/g, m => m.replace(/[^\n]/g, ' '))
       .replace(/(["'])((?:\\.|(?!\1)[^\\])*)\1/g, m => m.replace(/[^\n]/g, ' '))
       .replace(/\/\/[^\n]*/g, m => ' '.repeat(m.length))
@@ -426,6 +426,9 @@ export class DartParser extends BaseParser<DartFileInfo> {
       const maskedLine = maskedLines[i];
       const trimmed = maskedLine.trim();
       const lineNum = i + 1;
+      if (filePath.includes('banner_settings_provider.dart')) {
+        console.log(`LINE ${lineNum} [${trimmed}]: depth=${braceDepth}, stack=${scopeStack.map(s => `${s.type}:${s.name}(${s.braceDepth})`).join(', ')}`);
+      }
       if (trimmed === '')
         continue;
       if (/^\s*$/.test(trimmed))
@@ -589,14 +592,29 @@ export class DartParser extends BaseParser<DartFileInfo> {
       }
       syncBraces(i);
       if (currentClass() && P.buildMethod.test(trimmed)) {
-        inBuildMethod = true;
-        buildBraceStart = braceDepth - 1;
-        buildLines = [];
-        const braceIdx = line.indexOf('{');
-        if (braceIdx !== -1 && braceIdx < line.length - 1) {
-          buildLines.push(maskedLine.substring(braceIdx + 1));
+        const buildMatch = trimmed.match(P.buildMethod);
+        const cc = currentClass();
+        if (buildMatch && cc) {
+          const methodName = buildMatch[1];
+          const methodInfo: FunctionInfo = {
+            name: methodName, returnType: trimmed.split(/\s+/)[0] || 'Widget', params: buildMatch[2].trim().replace(/\n/g, ' '),
+            line: lineNum, isPrivate: methodName.startsWith('_'),
+            isAsync: false, isStatic: false, parentClass: cc,
+          };
+          this.attachMethod(result, cc, methodInfo);
+          const hLines = buildMatch[0].split('\n').length;
+          syncBraces(i, hLines);
+          scopeStack.push({ type: 'function', name: methodName, braceDepth: braceDepth - 1, ref: methodInfo });
+          inBuildMethod = true;
+          buildBraceStart = braceDepth - 1;
+          buildLines = [];
+          const braceIdx = line.indexOf('{');
+          if (braceIdx !== -1 && braceIdx < line.length - 1) {
+            buildLines.push(maskedLine.substring(braceIdx + 1));
+          }
+          i += hLines - 1;
+          continue;
         }
-        continue;
       }
       if (inBuildMethod) {
         buildLines.push(maskedLine);
@@ -604,7 +622,7 @@ export class DartParser extends BaseParser<DartFileInfo> {
       }
       const cc = currentClass();
       if (cc) {
-        const mLookahead = maskedLines.slice(i, i + 8).join('\n');
+        const mLookahead = maskedLines.slice(i, i + 30).join('\n');
         const ctorMatch = mLookahead.match(P.ctor);
         if (ctorMatch && ctorMatch[3] === cc) {
           result.constructors.push({
@@ -616,8 +634,7 @@ export class DartParser extends BaseParser<DartFileInfo> {
             line: lineNum,
           });
           const hLines = ctorMatch[0].split('\n').length;
-          if (hLines > 1)
-            syncBraces(i + 1, hLines - 1);
+          syncBraces(i, hLines);
           i += hLines - 1;
           continue;
         }
@@ -630,8 +647,7 @@ export class DartParser extends BaseParser<DartFileInfo> {
           };
           this.attachMethod(result, cc, methodInfo);
           const hLines = methodMatch[0].split('\n').length;
-          if (hLines > 1)
-            syncBraces(i + 1, hLines - 1);
+          syncBraces(i, hLines);
           scopeStack.push({ type: 'function', name: methodMatch[3], braceDepth: braceDepth - 1, ref: methodInfo });
           i += hLines - 1;
           continue;
@@ -646,31 +662,35 @@ export class DartParser extends BaseParser<DartFileInfo> {
           result.properties.push(prop);
           this.attachProperty(result, cc, prop);
         }
-        const setterMatch = maskedLine.match(P.setter);
-        if (setterMatch) {
-          const prop: PropertyInfo = {
-            name: setterMatch[3], type: setterMatch[4].trim(), className: cc,
-            isFinal: false, isConst: false, isStatic: !!setterMatch[1], isPrivate: setterMatch[3].startsWith('_'),
-            isGetter: false, isSetter: true, line: lineNum,
-          };
-          result.properties.push(prop);
-          this.attachProperty(result, cc, prop);
-        }
-        const fieldMatch = maskedLine.match(P.field);
-        if (fieldMatch && !fieldMatch[5].includes('(') && !SKIP_METHODS.has(fieldMatch[5]) && !fieldMatch[0].includes('=>')) {
-          const prop: PropertyInfo = {
-            name: fieldMatch[5], type: fieldMatch[4].trim(), className: cc,
-            isFinal: fieldMatch[1] === 'final' || fieldMatch[2] === 'final',
-            isConst: fieldMatch[1] === 'const' || fieldMatch[2] === 'const',
-            isStatic: !!fieldMatch[3], isPrivate: fieldMatch[5].startsWith('_'),
-            isGetter: false, isSetter: false, line: lineNum,
-          };
-          result.properties.push(prop);
-          this.attachProperty(result, cc, prop);
+        else {
+          const setterMatch = maskedLine.match(P.setter);
+          if (setterMatch) {
+            const prop: PropertyInfo = {
+              name: setterMatch[3], type: setterMatch[4].trim(), className: cc,
+              isFinal: false, isConst: false, isStatic: !!setterMatch[1], isPrivate: setterMatch[3].startsWith('_'),
+              isGetter: false, isSetter: true, line: lineNum,
+            };
+            result.properties.push(prop);
+            this.attachProperty(result, cc, prop);
+          }
+          else {
+            const fieldMatch = maskedLine.match(P.field);
+            if (fieldMatch && !fieldMatch[5].includes('(') && !SKIP_METHODS.has(fieldMatch[5]) && !fieldMatch[0].includes('=>') && !RESERVED.has(fieldMatch[5])) {
+              const prop: PropertyInfo = {
+                name: fieldMatch[5], type: fieldMatch[4] ? fieldMatch[4].trim() : 'dynamic', className: cc,
+                isFinal: fieldMatch[2] === 'final' || fieldMatch[3] === 'final',
+                isConst: fieldMatch[2] === 'const' || fieldMatch[3] === 'const',
+                isStatic: !!fieldMatch[1], isPrivate: fieldMatch[5].startsWith('_'),
+                isGetter: false, isSetter: false, line: lineNum,
+              };
+              result.properties.push(prop);
+              this.attachProperty(result, cc, prop);
+            }
+          }
         }
       }
       if (!currentClass()) {
-        const fLookahead = maskedLines.slice(i, i + 8).join('\n');
+        const fLookahead = maskedLines.slice(i, i + 30).join('\n');
         const f = fLookahead.match(P.topFunc);
         if (f && !RESERVED.has(f[2])) {
           const newFunc: FunctionInfo = {
@@ -680,8 +700,7 @@ export class DartParser extends BaseParser<DartFileInfo> {
           };
           result.functions.push(newFunc);
           const hLines = f[0].split('\n').length;
-          if (hLines > 1)
-            syncBraces(i + 1, hLines - 1);
+          syncBraces(i, hLines);
           scopeStack.push({ type: 'function', name: f[2], braceDepth: braceDepth - 1, ref: newFunc });
           i += hLines - 1;
         }
