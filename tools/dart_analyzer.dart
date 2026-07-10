@@ -57,6 +57,7 @@ void main(List<String> args) async {
               'variables': <Map<String, dynamic>>[],
               'properties': <Map<String, dynamic>>[],
               'widgets': <Map<String, dynamic>>[],
+              'functionCalls': <Map<String, dynamic>>[],
             };
 
             // 1. Elements Analysis (Classes, Methods, etc.)
@@ -145,10 +146,23 @@ void main(List<String> args) async {
                 });
               } else if (declaration is ExtensionDeclaration) {
                 final ext = declaration.declaredElement!;
+                final methods = <Map<String, dynamic>>[];
+                for (final method in ext.methods) {
+                  methods.add({
+                    'name': method.name,
+                    'returnType': method.returnType.getDisplayString(withNullability: true),
+                    'params': method.parameters.map((p) => p.getDisplayString(withNullability: true)).join(', '),
+                    'isPrivate': method.isPrivate,
+                    'isStatic': method.isStatic,
+                    'isAsync': method.isAsynchronous,
+                    'line': lineInfo.getLocation(method.nameOffset).lineNumber,
+                  });
+                }
                 (fileInfo['extensions'] as List).add({
                   'name': ext.name ?? '',
                   'onType': ext.extendedType.getDisplayString(withNullability: true),
                   'isPrivate': ext.isPrivate,
+                  'methods': methods,
                   'line': lineInfo.getLocation(ext.nameOffset != -1 ? ext.nameOffset : declaration.offset).lineNumber,
                 });
               } else if (declaration is GenericTypeAlias) {
@@ -185,6 +199,11 @@ void main(List<String> args) async {
             final widgetVisitor = WidgetTreeVisitor(lineInfo);
             unit.accept(widgetVisitor);
             fileInfo['widgets'] = widgetVisitor.widgets;
+
+            // 3. Function Calls Analysis (AST Traversal)
+            final callVisitor = FunctionCallVisitor(lineInfo);
+            unit.accept(callVisitor);
+            fileInfo['functionCalls'] = callVisitor.calls;
 
             results.add(fileInfo);
           }
@@ -287,5 +306,32 @@ class WidgetTreeVisitor extends RecursiveAstVisitor<void> {
       parent = parent.parent;
     }
     return false;
+  }
+}
+
+class FunctionCallVisitor extends RecursiveAstVisitor<void> {
+  final LineInfo lineInfo;
+  final List<Map<String, dynamic>> calls = [];
+
+  FunctionCallVisitor(this.lineInfo);
+
+  @override
+  void visitMethodInvocation(MethodInvocation node) {
+    calls.add({
+      'name': node.methodName.name,
+      'line': lineInfo.getLocation(node.methodName.offset).lineNumber,
+    });
+    super.visitMethodInvocation(node);
+  }
+
+  @override
+  void visitFunctionExpressionInvocation(FunctionExpressionInvocation node) {
+    if (node.function is SimpleIdentifier) {
+      calls.add({
+        'name': (node.function as SimpleIdentifier).name,
+        'line': lineInfo.getLocation(node.function.offset).lineNumber,
+      });
+    }
+    super.visitFunctionExpressionInvocation(node);
   }
 }

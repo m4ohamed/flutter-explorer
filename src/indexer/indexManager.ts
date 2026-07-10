@@ -63,6 +63,7 @@ export class IndexManager {
   private extensionPath?: string;
   private isIndexing = false;
   private indexingCancellationTokenSource: vscode.CancellationTokenSource | null = null;
+  private excludePatterns: RegExp[] = [];
 
   // ✅ Guard ضد double-dispose
   private _disposed = false;
@@ -71,6 +72,135 @@ export class IndexManager {
     this.workspaceRoot = workspaceRoot;
     this.extensionPath = extensionPath;
     this.sqliteCache = new SqliteCache(workspaceRoot);
+    this.loadAnalysisOptionsExcludes();
+  }
+
+  public globToRegExp(glob: string): RegExp {
+    let pattern = glob.replace(/\\/g, '/');
+    let regexStr = '^';
+    for (let i = 0; i < pattern.length; i++) {
+      const char = pattern[i];
+      if (char === '*') {
+        if (pattern[i + 1] === '*') {
+          if (pattern[i + 2] === '/') {
+            regexStr += '(?:.*/)?';
+            i += 2;
+          } else {
+            regexStr += '.*';
+            i++;
+          }
+        } else {
+          regexStr += '[^/]*';
+        }
+      } else if (char === '?') {
+        regexStr += '[^/]';
+      } else if (char === '.') {
+        regexStr += '\\.';
+      } else if (char === '/' || char === '\\') {
+        regexStr += '\\/';
+      } else if (['(', ')', '+', '^', '$', '|', '{', '}', '[', ']'].includes(char)) {
+        regexStr += '\\' + char;
+      } else {
+        regexStr += char;
+      }
+    }
+    regexStr += '$';
+    return new RegExp(regexStr);
+  }
+
+  public loadAnalysisOptionsExcludes(): void {
+    this.excludePatterns = [];
+    const optionsPath = path.join(this.workspaceRoot, 'analysis_options.yaml');
+    if (!fs.existsSync(optionsPath)) {
+      return;
+    }
+
+    try {
+      const content = fs.readFileSync(optionsPath, 'utf8');
+      const lines = content.split('\n');
+      
+      let inAnalyzer = false;
+      let inExclude = false;
+      let excludeIndent = -1;
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const trimmed = line.trim();
+        
+        // Skip comments and empty lines
+        if (trimmed.startsWith('#') || trimmed === '') {
+          continue;
+        }
+
+        // Get indentation level (number of leading spaces)
+        const indent = line.length - line.trimStart().length;
+
+        // Check sections
+        if (trimmed.startsWith('analyzer:')) {
+          inAnalyzer = true;
+          inExclude = false;
+          continue;
+        }
+
+        // If we are in analyzer, check for exclude
+        if (inAnalyzer) {
+          // If we hit another root level or sibling key under analyzer
+          if (indent === 0 && !trimmed.startsWith('analyzer:')) {
+            inAnalyzer = false;
+            inExclude = false;
+            continue;
+          }
+
+          if (trimmed.startsWith('exclude:')) {
+            inExclude = true;
+            excludeIndent = indent;
+            
+            // Check for inline array: exclude: [ "**.g.dart", "**.freezed.dart" ]
+            const inlineArrayMatch = trimmed.match(/exclude:\s*\[(.*)\]/);
+            if (inlineArrayMatch) {
+              const items = inlineArrayMatch[1]
+                .split(',')
+                .map(item => item.trim().replace(/^['"]|['"]$/g, ''))
+                .filter(item => item !== '');
+              for (const item of items) {
+                this.excludePatterns.push(this.globToRegExp(item));
+              }
+              inExclude = false; // inline array handled in one line
+            }
+            continue;
+          }
+
+          if (inExclude) {
+            // If indent is less than or equal to excludeIndent, we have exited the exclude section
+            if (indent <= excludeIndent && !trimmed.startsWith('-')) {
+              inExclude = false;
+              continue;
+            }
+
+            // Bulleted list item: - "**/.*" or - **/.*
+            if (trimmed.startsWith('-')) {
+              const pattern = trimmed.substring(1).trim().replace(/^['"]|['"]$/g, '');
+              if (pattern) {
+                this.excludePatterns.push(this.globToRegExp(pattern));
+              }
+            }
+          }
+        }
+      }
+      console.log(`[FlutterExplorer] Loaded ${this.excludePatterns.length} exclude patterns from analysis_options.yaml`);
+    } catch (e) {
+      console.error('[FlutterExplorer] Failed to parse analysis_options.yaml:', e);
+    }
+  }
+
+  public isFileExcluded(fsPath: string): boolean {
+    const relPath = this.relativePath(fsPath).replace(/\\/g, '/');
+    for (const pattern of this.excludePatterns) {
+      if (pattern.test(relPath)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   public getProjectMode(): 'flutter' | 'web' {
@@ -169,10 +299,10 @@ export class IndexManager {
         if (token.isCancellationRequested) return;
         const arbFiles = await vscode.workspace.findFiles('lib/**/*.arb', '**/.*', 500, token);
         if (token.isCancellationRequested) return;
-        allFiles = [...dartFiles, ...androidFiles, ...arbFiles];
+        allFiles = [...dartFiles, ...androidFiles, ...arbFiles].filter(uri => !this.isFileExcluded(uri.fsPath));
       } else {
         const excludePattern = '**/{node_modules,out,dist,build,.git,.next}/**';
-        allFiles = await vscode.workspace.findFiles('**/*.{ts,tsx,js,jsx}', excludePattern, 10000, token);
+        allFiles = (await vscode.workspace.findFiles('**/*.{ts,tsx,js,jsx}', excludePattern, 10000, token)).filter(uri => !this.isFileExcluded(uri.fsPath));
       }
 
       const total = allFiles.length;
@@ -335,6 +465,12 @@ export class IndexManager {
   /** Update a single file in the index */
   async updateFile(uri: vscode.Uri): Promise<void> {
     const relPath = this.relativePath(uri.fsPath);
+    if (this.isFileExcluded(uri.fsPath)) {
+      if (this.index.has(relPath) || this.arbIndex.has(relPath)) {
+        await this.removeFile(uri);
+      }
+      return;
+    }
     try {
       const content = await this.readFile(uri);
       const newHash = this.computeHash(content);
@@ -457,14 +593,14 @@ export class IndexManager {
     let extensionTypes = 0;
 
     for (const info of this.index.values()) {
-      classes += info.classes.length;
-      functions += info.functions.length;
-      functions += info.classes.reduce((sum, c) => sum + c.methods.length, 0);
-      functions += (info.extensions || []).reduce((sum, e) => sum + e.methods.length, 0);
-      functions += (info.extensionTypes || []).reduce((sum, et) => sum + et.methods.length, 0);
-      widgets += info.widgets.length;
-      enums += info.enums.length;
-      mixins += info.mixins.length;
+      classes += (info.classes || []).length;
+      functions += (info.functions || []).length;
+      functions += (info.classes || []).reduce((sum, c) => sum + (c.methods || []).length, 0);
+      functions += (info.extensions || []).reduce((sum, e) => sum + (e.methods || []).length, 0);
+      functions += (info.extensionTypes || []).reduce((sum, et) => sum + (et.methods || []).length, 0);
+      widgets += (info.widgets || []).length;
+      enums += (info.enums || []).length;
+      mixins += (info.mixins || []).length;
       calls += (info.functionCalls?.length ?? 0);
       extensions += (info.extensions?.length ?? 0);
       typedefs += (info.typedefs?.length ?? 0);
@@ -957,10 +1093,10 @@ export class IndexManager {
   }
 
   parseWidgetTreeForContent(filePath: string, content: string): DartFileInfo {
-    if (filePath.endsWith('.ts') || filePath.endsWith('.tsx') || filePath.endsWith('.js') || filePath.endsWith('.jsx')) {
+    if (filePath.endsWith('.ts') || filePath.endsWith('.tsx') || filePath.endsWith('.js') || filePath.endsWith('.jsx') || filePath.endsWith('.md') || filePath.endsWith('.css') || filePath.endsWith('.scss') || filePath.endsWith('.json')) {
       return this.jsTsParser.parse(filePath, content);
     }
-    if (filePath.endsWith('.kt') || filePath.endsWith('.java') || filePath.endsWith('.xml') || filePath.endsWith('.gradle') || filePath.endsWith('.gradle.kts')) {
+    if (filePath.endsWith('.kt') || filePath.endsWith('.java') || filePath.endsWith('.xml') || filePath.endsWith('.gradle') || filePath.endsWith('.gradle.kts') || filePath.endsWith('.html')) {
       return this.androidParser.parse(filePath, content);
     }
     return this.parser.parse(filePath, content);
@@ -1043,7 +1179,10 @@ export class IndexManager {
   }
 
   public async buildReverseDependencies(): Promise<void> {
+    if (this._disposed) return;
+
     for (const [filePath, info] of this.index.entries()) {
+      if (this._disposed) return;
       for (const imp of info.imports) {
         if (!imp.path.startsWith('dart:')) {
           const resolved = this.resolveImportPath(filePath, imp.path);
@@ -1069,12 +1208,17 @@ export class IndexManager {
       }
     }
 
+    if (this._disposed) return;
+
     const filesToUpdate = Array.from(this.index.entries()).map(([relPath, info]) => ({
       relPath,
       hash: info.contentHash,
       info
     }));
     await this.sqliteCache.batchUpsertDartFiles(filesToUpdate);
+
+    if (this._disposed) return;
+
     this.sqliteCache.checkpoint();
   }
 

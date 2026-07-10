@@ -72,26 +72,33 @@ export class WidgetTreeProvider {
         return {
             fileName,
             tree: this.serializeWidgets(parsed.widgets),
-            classNames: parsed.classes.map(c => ({
+            classNames: (parsed.classes || []).map(c => ({
                 name: c.name,
                 type: c.type,
                 line: c.line,
             })),
+            functions: (parsed.functions || []).map(f => ({ name: f.name, line: f.line, isPrivate: f.isPrivate })),
+            variables: (parsed.variables || []).map(v => ({ name: v.name, line: v.line, isPrivate: v.isPrivate })),
+            enums: (parsed.enums || []).map(e => ({ name: e.name, line: e.line })),
+            mixins: (parsed.mixins || []).map(m => ({ name: m.name, line: m.line })),
+            extensions: (parsed.extensions || []).map(e => ({ name: e.name, line: e.line })),
+            typedefs: (parsed.typedefs || []).map(t => ({ name: t.name, line: t.line })),
         };
     }
 
     private serializeWidgets(widgets: WidgetInfo[]): SerializedWidget[] {
+        if (!widgets || !Array.isArray(widgets)) return [];
         return widgets.map(w => ({
             name: w.name,
             line: w.line,
-            properties: w.properties,
-            children: this.serializeWidgets(w.children),
+            properties: w.properties || [],
+            children: this.serializeWidgets(w.children || []),
         }));
     }
 
     private isSupportedFile(fileName: string): boolean {
         return ['.dart', '.ts', '.tsx', '.js', '.jsx', '.kt', '.java', 
-                '.xml', '.gradle', '.gradle.kts']
+                '.xml', '.gradle', '.gradle.kts', '.html', '.md', '.css', '.json']
             .some(ext => fileName.endsWith(ext));
     }
 }
@@ -100,6 +107,12 @@ export interface WebviewTreeData {
     fileName: string | null;
     tree: SerializedWidget[];
     classNames: { name: string; type: string; line: number }[];
+    functions?: { name: string; line: number; isPrivate: boolean }[];
+    variables?: { name: string; line: number; isPrivate: boolean }[];
+    enums?: { name: string; line: number }[];
+    mixins?: { name: string; line: number }[];
+    extensions?: { name: string; line: number }[];
+    typedefs?: { name: string; line: number }[];
 }
 
 export interface SerializedWidget {

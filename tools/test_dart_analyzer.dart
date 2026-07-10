@@ -246,15 +246,14 @@ void main() async {
 
   try {
     // Write fixture files
-    File(p.join(libDir.path, 'flutter_mock.dart'))
-        .writeAsStringSync(kMockFile);
+    File(p.join(libDir.path, 'flutter_mock.dart')).writeAsStringSync(kMockFile);
     File(p.join(libDir.path, 'widget_file.dart'))
         .writeAsStringSync(kWidgetFile);
     File(p.join(libDir.path, 'model_file.dart')).writeAsStringSync(kModelFile);
     File(p.join(libDir.path, 'edge_cases.dart'))
         .writeAsStringSync(kEdgeCaseFile);
 
-    // Write minimal pubspec.yaml 
+    // Write minimal pubspec.yaml
     File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
 name: test_project
 environment:

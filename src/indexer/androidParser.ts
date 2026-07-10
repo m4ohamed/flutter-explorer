@@ -660,7 +660,7 @@ export class AndroidParser extends BaseParser<DartFileInfo> {
     };
 
     // 1. Check if it's a layout file
-    const isLayoutFile = filePath.toLowerCase().includes('layout/') || content.trim().startsWith('<layout') || content.trim().startsWith('<RelativeLayout') || content.trim().startsWith('<LinearLayout') || content.trim().startsWith('<ConstraintLayout') || content.trim().startsWith('<FrameLayout') || content.trim().startsWith('<androidx.');
+    const isLayoutFile = filePath.toLowerCase().includes('layout/') || filePath.endsWith('.html') || content.trim().startsWith('<layout') || content.trim().startsWith('<RelativeLayout') || content.trim().startsWith('<LinearLayout') || content.trim().startsWith('<ConstraintLayout') || content.trim().startsWith('<FrameLayout') || content.trim().startsWith('<androidx.') || content.trim().toLowerCase().startsWith('<!doctype html') || content.trim().toLowerCase().startsWith('<html');
 
     if (isLayoutFile) {
       // Build WidgetTree from XML tags

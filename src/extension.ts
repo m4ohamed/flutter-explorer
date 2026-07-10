@@ -194,6 +194,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }),
     );
 
+    context.subscriptions.push(
+        vscode.commands.registerCommand('flutterExplorer.openSettings', () => {
+            vscode.commands.executeCommand('workbench.action.openSettings', '@ext:flutter-explorer.flutter-explorer');
+        })
+    );
+
     // ─── Index Changed Listener ────────────────────────────
     indexManager.onDidChangeIndex(() => {
         updateStatusBar(indexManager);
@@ -292,14 +298,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             async (progress) => {
                 await indexManager.buildFullIndex(progress);
                 updateStatusBar(indexManager);
-                fileWatcher.start();
             },
-        );
+        ).then(() => {
+            fileWatcher.start();
+        });
     }
     vscode.window.showInformationMessage('Flutter Explorer is ready! 🚀');
 
     // ─── Auto MCP Setup ───────────────────────────────────
-    setupMcpConfig(context.extensionPath, workspaceRoot);
+    setupMcpConfig(context.extensionPath, workspaceRoot).catch(err => {
+        console.error('[FlutterExplorer] MCP setup failed:', err);
+    });
 
     // ─── Show Welcome README ──────────────────────────────
     const extensionVersion = context.extension.packageJSON.version;

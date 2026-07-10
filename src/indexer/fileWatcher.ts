@@ -6,6 +6,7 @@
  * (replicating Flutter Intl IDE plugin behavior).
  */
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { IndexManager } from './indexManager';
 import { IntlGenerator } from './intlGenerator';
 
@@ -54,7 +55,25 @@ export class FileWatcher implements vscode.Disposable {
             const pubspecWatcher = vscode.workspace.createFileSystemWatcher('**/pubspec.yaml');
             pubspecWatcher.onDidChange(() => this.indexManager['onIndexChanged'].fire());
             pubspecWatcher.onDidCreate(() => this.indexManager['onIndexChanged'].fire());
+            pubspecWatcher.onDidDelete(() => this.indexManager['onIndexChanged'].fire());
             this.watchers.push(pubspecWatcher);
+            // Watch analysis_options.yaml
+            const handleAnalysisOptionsChange = async () => {
+                this.indexManager.loadAnalysisOptionsExcludes();
+                // Remove files that are now excluded
+                for (const fileInfo of this.indexManager.getAllFiles()) {
+                    const fullPath = path.join(this.workspaceRoot, fileInfo.filePath);
+                    if (this.indexManager.isFileExcluded(fullPath)) {
+                        await this.indexManager.removeFile(vscode.Uri.file(fullPath));
+                    }
+                }
+                this.indexManager['onIndexChanged'].fire();
+            };
+            const analysisOptionsWatcher = vscode.workspace.createFileSystemWatcher('**/analysis_options.yaml');
+            analysisOptionsWatcher.onDidChange(handleAnalysisOptionsChange);
+            analysisOptionsWatcher.onDidCreate(handleAnalysisOptionsChange);
+            analysisOptionsWatcher.onDidDelete(handleAnalysisOptionsChange);
+            this.watchers.push(analysisOptionsWatcher);
             // Watch MCP Trigger file
             const triggerWatcher = vscode.workspace.createFileSystemWatcher('**/.vscode/.flutter-explorer-trigger');
             triggerWatcher.onDidChange(() => vscode.commands.executeCommand('flutterExplorer.reindex'));
@@ -75,7 +94,7 @@ export class FileWatcher implements vscode.Disposable {
 
     private static readonly EXCLUDED_DIRS = /[\/\\](node_modules|out|dist|build|\.git|\.next)[\/\\]/;
     private shouldExclude(uri: vscode.Uri): boolean {
-        return FileWatcher.EXCLUDED_DIRS.test(uri.fsPath);
+        return FileWatcher.EXCLUDED_DIRS.test(uri.fsPath) || this.indexManager.isFileExcluded(uri.fsPath);
     }
 
     private setupWatcher(watcher: vscode.FileSystemWatcher): void {

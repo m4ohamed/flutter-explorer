@@ -185,26 +185,47 @@
     fileNameEl.textContent = data.fileName;
     let html = '';
 
-    // Render classes
-    if (data.classNames && data.classNames.length > 0) {
-      html += '<div class="class-list">';
-      for (const cls of data.classNames) {
-        html += `<div class="class-item" data-line="${cls.line}">
-          <span class="class-type-badge">${cls.type}</span>
-          <span>${escapeHtml(cls.name)}</span>
+    // Helper to render sections
+    function renderSection(title, items, iconText, badgeClass) {
+      if (!items || items.length === 0) return '';
+      let sectionHtml = '<div class="class-list"><div style="font-size: 11px; color: #888; font-weight: bold; margin-bottom: 4px; text-transform: uppercase;">' + title + '</div>';
+      for (const item of items) {
+        let opacityStyle = item.isPrivate ? 'opacity: 0.7; font-style: italic;' : '';
+        let typeName = item.type || iconText;
+        sectionHtml += `<div class="class-item" data-line="${item.line}">
+          <span class="class-type-badge ${badgeClass}">${typeName}</span>
+          <span style="${opacityStyle}">${escapeHtml(item.name)}</span>
         </div>`;
       }
-      html += '</div>';
+      sectionHtml += '</div>';
+      return sectionHtml;
     }
+
+    html += renderSection('Classes', data.classNames, 'class', 'badge-class');
+    html += renderSection('Mixins', data.mixins, 'mixin', 'badge-mixin');
+    html += renderSection('Extensions', data.extensions, 'ext', 'badge-extension');
+    html += renderSection('Enums', data.enums, 'enum', 'badge-enum');
+    html += renderSection('Typedefs', data.typedefs, 'type', 'badge-typedef');
+    html += renderSection('Functions', data.functions, 'fn', 'badge-function');
+    html += renderSection('Variables', data.variables, 'var', 'badge-variable');
 
     // Render widget tree
     if (data.tree && data.tree.length > 0) {
+      html += '<div class="class-list" style="border-bottom: none; padding-bottom: 0;"><div style="font-size: 11px; color: #888; font-weight: bold; margin-bottom: 4px; text-transform: uppercase;">UI Components</div></div>';
       html += renderTreeNodes(data.tree, 0);
-    } else {
-      const emptyMsg = data.fileName.endsWith('.dart') 
-        ? 'No widget tree found in build() method' 
-        : 'No UI components found in this file';
-      html += '<div class="empty-state"><div class="empty-state-text">' + emptyMsg + '</div></div>';
+    }
+    
+    const hasItems = (data.classNames && data.classNames.length > 0) || 
+                     (data.functions && data.functions.length > 0) ||
+                     (data.variables && data.variables.length > 0) ||
+                     (data.enums && data.enums.length > 0) ||
+                     (data.mixins && data.mixins.length > 0) ||
+                     (data.extensions && data.extensions.length > 0) ||
+                     (data.typedefs && data.typedefs.length > 0) ||
+                     (data.tree && data.tree.length > 0);
+
+    if (!hasItems) {
+      html += '<div class="empty-state"><div class="empty-state-text">No code outline found in this file</div></div>';
     }
 
     treeView.innerHTML = html;

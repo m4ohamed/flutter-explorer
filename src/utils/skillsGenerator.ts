@@ -717,7 +717,6 @@ Perform precise codebase searches to find hard-to-reach implementations and usag
 
 export async function generateSkills(workspaceRoot: string): Promise<void> {
     try {
-        const username = os.userInfo().username;
         const homedir = os.homedir();
 
         // 1. Generic workspace fallback (skills/ folder)
@@ -748,7 +747,11 @@ export async function generateSkills(workspaceRoot: string): Promise<void> {
                 '',
                 skill.body
             ].join('\n');
-            fs.writeFileSync(path.join(genericSkillSubdir, 'SKILL.md'), standardContent, 'utf8');
+            try {
+                fs.writeFileSync(path.join(genericSkillSubdir, 'SKILL.md'), standardContent, 'utf8');
+            } catch (e) {
+                console.error(`[Skills] Failed to write generic skill ${id}:`, e);
+            }
 
             // --- B. Generate for Cursor (.mdc format) ---
             const cursorContent = [
@@ -761,7 +764,11 @@ export async function generateSkills(workspaceRoot: string): Promise<void> {
                 '',
                 skill.body
             ].join('\n');
-            fs.writeFileSync(path.join(cursorRulesDir, `${id}.mdc`), cursorContent, 'utf8');
+            try {
+                fs.writeFileSync(path.join(cursorRulesDir, `${id}.mdc`), cursorContent, 'utf8');
+            } catch (e) {
+                console.error(`[Skills] Failed to write cursor skill ${id}:`, e);
+            }
 
             // --- C. Generate for Claude/Roo (cline_docs folder) ---
             const clineContent = [
@@ -771,12 +778,20 @@ export async function generateSkills(workspaceRoot: string): Promise<void> {
                 '',
                 skill.body
             ].join('\n');
-            fs.writeFileSync(path.join(clineDocsDir, `${id}.md`), clineContent, 'utf8');
+            try {
+                fs.writeFileSync(path.join(clineDocsDir, `${id}.md`), clineContent, 'utf8');
+            } catch (e) {
+                console.error(`[Skills] Failed to write cline skill ${id}:`, e);
+            }
 
             // --- D. Generate for Antigravity (Global SKILL.md) ---
             const agSkillSubdir = path.join(antigravitySkillsDir, `flutter-explorer-${id}`);
             ensureDir(agSkillSubdir);
-            fs.writeFileSync(path.join(agSkillSubdir, 'SKILL.md'), standardContent, 'utf8');
+            try {
+                fs.writeFileSync(path.join(agSkillSubdir, 'SKILL.md'), standardContent, 'utf8');
+            } catch (e) {
+                console.error(`[Skills] Failed to write antigravity skill ${id}:`, e);
+            }
         }
 
         console.log('AI Skills distributed successfully to Gemini, Cursor, and Roo/Claude!');

@@ -89,8 +89,22 @@
             {
                 "command": "flutterExplorer.intlRemoveLocale",
                 "title": "Flutter Intl: Remove locale"
+            },
+            {
+                "command": "flutterExplorer.openSettings",
+                "title": "Open Flutter Explorer Settings",
+                "icon": "$(settings-gear)"
             }
         ],
+        "menus": {
+            "view/title": [
+                {
+                    "command": "flutterExplorer.openSettings",
+                    "when": "view == flutterExplorer.sidebar",
+                    "group": "navigation"
+                }
+            ]
+        },
         "configuration": {
             "title": "Flutter Explorer",
             "properties": {

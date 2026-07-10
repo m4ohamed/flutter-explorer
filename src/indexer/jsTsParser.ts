@@ -166,6 +166,70 @@ export class JsTsParser extends BaseParser<DartFileInfo> {
       // Sync braces
       syncBraces(i);
 
+      // Markdown Headers (Outline)
+      if (filePath.endsWith('.md')) {
+        const mdMatch = line.match(/^(#{1,6})\s+(.*)/);
+        if (mdMatch) {
+          result.classes.push({
+            name: mdMatch[2].trim(),
+            type: `H${mdMatch[1].length}`,
+            extendsClass: null,
+            implements: [],
+            mixins: [],
+            isAbstract: false,
+            isPrivate: false,
+            methods: [],
+            properties: [],
+            line: lineNum,
+            lineEnd: lineNum
+          });
+          continue;
+        }
+      }
+
+      // CSS / SCSS Classes and IDs (Outline)
+      if (filePath.endsWith('.css') || filePath.endsWith('.scss') || filePath.endsWith('.less')) {
+        const cssMatch = line.match(/^([.#][a-zA-Z0-9_-]+)(?:\s*\{|[^a-zA-Z0-9_-])/);
+        if (cssMatch && !line.includes(':')) {
+          result.classes.push({
+            name: cssMatch[1],
+            type: cssMatch[1].startsWith('.') ? 'class' : 'id',
+            extendsClass: null,
+            implements: [],
+            mixins: [],
+            isAbstract: false,
+            isPrivate: false,
+            methods: [],
+            properties: [],
+            line: lineNum,
+            lineEnd: lineNum
+          });
+          continue;
+        }
+      }
+
+      // JSON Keys (Outline)
+      if (filePath.endsWith('.json')) {
+        const jsonMatch = line.match(/^\s*"([^"]+)"\s*:/);
+        if (jsonMatch && braceDepth <= 1) { // Only top-level or 2nd-level keys
+          result.classes.push({
+            name: jsonMatch[1],
+            type: 'key',
+            extendsClass: null,
+            implements: [],
+            mixins: [],
+            isAbstract: false,
+            isPrivate: false,
+            methods: [],
+            properties: [],
+            line: lineNum,
+            lineEnd: lineNum
+          });
+          continue;
+        }
+      }
+
+
       // 1. Imports
       const impES6 = trimmed.match(P.importes6);
       if (impES6) {
@@ -198,17 +262,21 @@ export class JsTsParser extends BaseParser<DartFileInfo> {
       }
 
       // 2. Warnings (Hardcoded text & colors)
-      // For JSX we use a regex to find text between tags: />([\w\s.,!?]{3,})</
-      const textMatch = line.match(/>\s*([a-zA-Z0-9\s.,!?]{3,})\s*</);
+      const textMatch = line.match(/(['"])(.*?)\1/);
       if (textMatch) {
-        const matchedStr = textMatch[1].trim();
-        // Exclude common programming keywords or single letters
-        if (matchedStr.length > 2 && !['import', 'require', 'const', 'let', 'var', 'return'].includes(matchedStr) && !trimmed.includes('console.log') && !trimmed.includes('t(') && !trimmed.includes('i18n')) {
-          result.warnings.push({
-            type: 'hardcoded_text',
-            message: `Hardcoded text: ${matchedStr}`,
-            line: lineNum
-          });
+        const matchedStr = textMatch[2].trim();
+        if (matchedStr.length > 2 && 
+            matchedStr.includes(' ') && 
+            !/^[a-z]+[A-Z][a-zA-Z]*$/.test(matchedStr) && 
+            !matchedStr.includes('.js') && !matchedStr.includes('.ts') &&
+            !['import', 'require', 'const', 'let', 'var', 'return'].includes(matchedStr)) {
+          if (!trimmed.includes('console.log') && !trimmed.includes('t(') && !trimmed.includes('i18n')) {
+            result.warnings.push({
+              type: 'hardcoded_text',
+              message: `Hardcoded text: ${matchedStr}`,
+              line: lineNum
+            });
+          }
         }
       }
       const colorMatch = maskedLine.match(P.hardColor);

@@ -108,7 +108,7 @@ export class SqliteCache {
         try {
             this.db.close((err) => {
                 if (err) console.error('[FlutterExplorer] Error closing SQLite database:', err);
-                else console.log('[FlutterExplorer] SQLite database connection closed cleanly.');
+                else console.error('[FlutterExplorer] SQLite database connection closed cleanly.');
             });
         } catch (e) {
             console.error('[FlutterExplorer] Error closing SQLite database:', e);
@@ -466,10 +466,10 @@ export class SqliteCache {
 
         // Classes
         for (const cls of fileInfo.info.classes) {
-            checkCandidate(cls.line, cls.lineEnd ?? (cls.line + 50), { type: 'class', name: cls.name });
+            checkCandidate(cls.line, cls.lineEnd ?? (cls.line + 100), { type: 'class', name: cls.name });
             if (cls.methods) {
                 for (const method of cls.methods) {
-                    checkCandidate(method.line, method.lineEnd ?? (method.line + 20), { type: 'method', name: method.name, parentClass: cls.name });
+                    checkCandidate(method.line, method.lineEnd ?? (method.line + 80), { type: 'method', name: method.name, parentClass: cls.name });
                 }
             }
         }
@@ -477,10 +477,10 @@ export class SqliteCache {
         // Extensions
         if (fileInfo.info.extensions) {
             for (const ext of fileInfo.info.extensions) {
-                checkCandidate(ext.line, (ext as any).lineEnd ?? (ext.line + 50), { type: 'extension', name: ext.name });
+                checkCandidate(ext.line, (ext as any).lineEnd ?? (ext.line + 100), { type: 'extension', name: ext.name });
                 if (ext.methods) {
                     for (const method of ext.methods) {
-                        checkCandidate(method.line, method.lineEnd ?? (method.line + 20), { type: 'method', name: method.name, parentClass: ext.name });
+                        checkCandidate(method.line, method.lineEnd ?? (method.line + 80), { type: 'method', name: method.name, parentClass: ext.name });
                     }
                 }
             }
@@ -489,10 +489,10 @@ export class SqliteCache {
         // Extension Types
         if (fileInfo.info.extensionTypes) {
             for (const et of fileInfo.info.extensionTypes) {
-                checkCandidate(et.line, et.lineEnd ?? (et.line + 50), { type: 'extensionType', name: et.name });
+                checkCandidate(et.line, et.lineEnd ?? (et.line + 100), { type: 'extensionType', name: et.name });
                 if (et.methods) {
                     for (const method of et.methods) {
-                        checkCandidate(method.line, method.lineEnd ?? (method.line + 20), { type: 'method', name: method.name, parentClass: et.name });
+                        checkCandidate(method.line, method.lineEnd ?? (method.line + 80), { type: 'method', name: method.name, parentClass: et.name });
                     }
                 }
             }
@@ -500,7 +500,7 @@ export class SqliteCache {
 
         // Top-level functions
         for (const func of fileInfo.info.functions) {
-            checkCandidate(func.line, func.lineEnd ?? (func.line + 20), { type: 'function', name: func.name });
+            checkCandidate(func.line, func.lineEnd ?? (func.line + 80), { type: 'function', name: func.name });
         }
 
         return bestNode;

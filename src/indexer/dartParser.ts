@@ -6,7 +6,7 @@ import * as crypto from 'crypto';
  */
 export interface ClassInfo {
   name: string;
-  type: 'StatelessWidget' | 'StatefulWidget' | 'State' | 'ChangeNotifier' | 'plain';
+  type: string;
   line: number;
   lineEnd?: number;
   extendsClass: string | null;

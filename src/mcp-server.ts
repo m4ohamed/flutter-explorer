@@ -190,7 +190,21 @@ async function readIndex() {
 }
 
 let cachedBM25: BM25Search | null = null;
-let lastIndexTimestamp = 0;
+let lastIndexSignature = '';
+
+function getIndexSignature(index: any): string {
+  let fileCount = 0;
+  let hashAcc = '';
+  for (const [filePath, info] of Object.entries(index.dart as Record<string, any>)) {
+    fileCount++;
+    hashAcc += info.contentHash ?? String(info.lastModified ?? 0) + filePath;
+  }
+  for (const filePath of Object.keys(index.arb as Record<string, any>)) {
+    fileCount++;
+    hashAcc += filePath;
+  }
+  return `${fileCount}:${hashAcc.length}:${hashAcc.slice(-64)}`;
+}
 
 function buildMcpBM25(index: any): BM25Search {
   const bm25 = new BM25Search();
@@ -296,11 +310,11 @@ function buildMcpBM25(index: any): BM25Search {
 }
 
 async function getBM25Search(index: any): Promise<BM25Search> {
-  const currentKeyCount = Object.keys(index.dart).length + Object.keys(index.arb).length;
-  if (!cachedBM25 || lastIndexTimestamp !== currentKeyCount) {
+  const currentSignature = getIndexSignature(index);
+  if (!cachedBM25 || lastIndexSignature !== currentSignature) {
     console.error('[MCP] Rebuilding BM25 Search Index for MCP...');
     cachedBM25 = buildMcpBM25(index);
-    lastIndexTimestamp = currentKeyCount;
+    lastIndexSignature = currentSignature;
   }
   return cachedBM25;
 }
@@ -915,12 +929,12 @@ server.registerTool(
     for (const file in index.dart || {}) {
       const info = index.dart[file];
       files++;
-      classes += info.classes.length;
-      functions += info.functions.length;
-      methods += info.classes.reduce((sum: number, c: any) => sum + (c.methods || []).length, 0) +
+      classes += (info.classes || []).length;
+      functions += (info.functions || []).length;
+      methods += (info.classes || []).reduce((sum: number, c: any) => sum + (c.methods || []).length, 0) +
                  (info.extensions || []).reduce((sum: number, e: any) => sum + (e.methods || []).length, 0) +
                  (info.extensionTypes || []).reduce((sum: number, et: any) => sum + (et.methods || []).length, 0);
-      widgets += info.widgets.length;
+      widgets += (info.widgets || []).length;
       enums += (info.enums || []).length;
       mixins += (info.mixins || []).length;
       extensions += (info.extensions || []).length;
@@ -1521,16 +1535,7 @@ server.registerTool(
       // ignore
     }
 
-    const resolveImportPath = (fromFile: string, importPath: string, projName: string | null): string => {
-      if (importPath.startsWith('package:')) {
-        if (projName && importPath.startsWith(`package:${projName}/`)) {
-          return 'lib/' + importPath.substring(`package:${projName}/`.length);
-        }
-        return importPath;
-      }
-      const dir = path.dirname(fromFile);
-      return path.posix.normalize(path.posix.join(dir.replace(/\\/g, '/'), importPath));
-    };
+
 
     const resolveJsTsAndroidImportPath = (fromFile: string, importPath: string): string | null => {
       if (!importPath.startsWith('.') && !importPath.startsWith('/')) {
@@ -1574,7 +1579,7 @@ server.registerTool(
       if (isJsTsOrAndroid) {
         isMatching = true;
       } else {
-        const resolvedPath = resolveImportPath(targetFile, imp.path, projectName);
+        const resolvedPath = resolveImportPath(imp.path, targetFile, index);
         const importedFileInfo = index.dart[resolvedPath] as DartFileInfo | undefined;
 
         if (importedFileInfo) {
