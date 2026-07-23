@@ -1,5 +1,8 @@
-/* Flutter Explorer Sidebar Styles */
-/* Uses VS Code CSS variables for theming */
+/* ==========================================================================
+   Flutter Explorer - Next-Gen UI Design System (2026 Edition)
+   Crafted with Glassmorphism, Premium Gradients & Fluid Micro-Interactions
+   ========================================================================== */
+
 * {
     margin: 0;
     padding: 0;
@@ -7,73 +10,109 @@
 }
 
 body {
-    font-family: var(--vscode-font-family, 'Segoe UI', system-ui, sans-serif);
-    font-size: var(--vscode-font-size, 13px);
-    color: var(--vscode-foreground);
-    background-color: var(--vscode-sideBar-background, #1e1e1e);
-    overflow-x: hidden;
+    font-family: var(--vscode-font-family, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+    font-size: var(--vscode-font-size, 12px);
+    color: var(--vscode-foreground, #cccccc);
+    background-color: var(--vscode-sideBar-background, #181818);
+    overflow: hidden;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
 }
 
-
-
+/* ─── Layout Container ─────────────────────────────────── */
 .container {
     display: flex;
     flex-direction: column;
     height: 100vh;
     overflow: hidden;
+    background: radial-gradient(circle at top right, rgba(0, 122, 204, 0.05), transparent 40%),
+                radial-gradient(circle at bottom left, rgba(163, 113, 247, 0.03), transparent 40%);
 }
 
-/* ─── Tab Bar ─────────────────────────────────────────── */
+/* ─── Scrollbar Styling ──────────────────────────────── */
+::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.12));
+    border-radius: 4px;
+    transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--vscode-scrollbarSlider-hoverBackground, rgba(255, 255, 255, 0.25));
+}
+
+/* ─── Segmented Tab Bar Header ────────────────────────── */
 .tab-bar {
     display: flex;
-    border-bottom: 1px solid var(--vscode-panel-border, #333);
-    background: var(--vscode-sideBarSectionHeader-background, #252526);
+    padding: 6px;
+    gap: 2px;
+    background: var(--vscode-sideBarSectionHeader-background, rgba(25, 25, 26, 0.95));
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(255, 255, 255, 0.07));
     flex-shrink: 0;
+    backdrop-filter: blur(8px);
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.tab-bar::-webkit-scrollbar {
+    display: none;
 }
 
 .tab {
-    flex: 1;
-    padding: 8px 4px;
-    border: none;
+    flex: 1 0 auto;
+    padding: 6px 10px;
+    border: 1px solid transparent;
     background: transparent;
-    color: var(--vscode-foreground, #ccc);
+    color: var(--vscode-descriptionForeground, #999);
     cursor: pointer;
     font-size: 11px;
     font-weight: 500;
-    letter-spacing: 0.3px;
-    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-    border-bottom: 2px solid transparent;
+    border-radius: 6px;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    opacity: 0.7;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    opacity: 0.8;
 }
 
 .tab:hover {
-    background: var(--vscode-list-hoverBackground, #2a2d2e);
-    color: var(--vscode-foreground);
+    background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+    color: var(--vscode-foreground, #fff);
     opacity: 1;
+    transform: translateY(-1px);
 }
 
 .tab.active {
-    color: var(--vscode-panelTitle-activeForeground, #fff);
-    border-bottom-color: var(--vscode-panelTitle-activeBorder, #007acc);
-    background: var(--vscode-sideBar-background, #1e1e1e);
+    color: var(--vscode-panelTitle-activeForeground, #ffffff);
+    background: var(--vscode-button-background, linear-gradient(135deg, #007acc, #005999));
+    border-color: rgba(255, 255, 255, 0.15);
     opacity: 1;
     font-weight: 600;
+    box-shadow: 0 2px 8px rgba(0, 122, 204, 0.35);
 }
 
-/* ─── Stats Bar ───────────────────────────────────────── */
+/* ─── Compact Stats Ticker Bar ────────────────────────── */
 .stats-bar {
-    padding: 6px 12px;
+    padding: 6px 10px;
     font-size: 11px;
     color: var(--vscode-descriptionForeground, #888);
-    background: var(--vscode-sideBarSectionHeader-background, #252526);
-    border-bottom: 1px solid var(--vscode-panel-border, #333);
+    background: rgba(0, 0, 0, 0.25);
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(255, 255, 255, 0.06));
     flex-shrink: 0;
     display: flex;
-    gap: 12px;
     flex-wrap: wrap;
+    gap: 4px 8px;
+    align-items: center;
 }
 
 .stat-item {
@@ -81,21 +120,26 @@ body {
     align-items: center;
     gap: 4px;
     cursor: pointer;
-    padding: 2px 4px;
-    border-radius: 4px;
-    transition: background 0.2s;
+    padding: 2px 6px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    flex-shrink: 0;
+    transition: all 0.2s ease;
 }
 
 .stat-item:hover {
-    background: var(--vscode-list-hoverBackground, #2a2d2e);
-}
-
-.stat-value {
-    font-weight: 600;
+    background: var(--vscode-list-hoverBackground, rgba(0, 122, 204, 0.2));
+    border-color: rgba(0, 122, 204, 0.4);
     color: var(--vscode-foreground);
 }
 
-/* ─── Tab Content ─────────────────────────────────────── */
+.stat-value {
+    font-weight: 700;
+    color: var(--vscode-foreground, #fff);
+}
+
+/* ─── Tab Content Panes ───────────────────────────────── */
 .tab-content {
     display: none;
     flex: 1;
@@ -108,29 +152,32 @@ body {
     flex-direction: column;
 }
 
-/* ─── Search ──────────────────────────────────────────── */
+/* ─── Search Box & Filter Chips ───────────────────────── */
 .search-box {
     padding: 8px;
     flex-shrink: 0;
-    border-bottom: 1px solid var(--vscode-panel-border, #333);
+    background: rgba(0, 0, 0, 0.1);
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(255, 255, 255, 0.06));
 }
 
 #searchInput {
     width: 100%;
-    padding: 8px 12px;
-    border: 1px solid var(--vscode-input-border, #3c3c3c);
-    background: var(--vscode-input-background, #3c3c3c);
-    color: var(--vscode-input-foreground, #ccc);
+    padding: 7px 10px;
+    border: 1px solid var(--vscode-input-border, rgba(255, 255, 255, 0.12));
+    background: var(--vscode-input-background, rgba(30, 30, 30, 0.8));
+    color: var(--vscode-input-foreground, #ffffff);
     border-radius: 6px;
     outline: none;
-    font-size: 13px;
-    transition: all 0.2s ease;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1) inset;
+    font-size: 12px;
+    transition: all 0.25s ease;
+    backdrop-filter: blur(4px);
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 #searchInput:focus {
     border-color: var(--vscode-focusBorder, #007acc);
-    box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.2), 0 2px 4px rgba(0,0,0,0.1) inset;
+    background: var(--vscode-input-background, #1e1e1e);
+    box-shadow: 0 0 0 3px rgba(0, 122, 204, 0.25), inset 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
 #searchInput::placeholder {
@@ -139,66 +186,74 @@ body {
 
 .filter-row {
     display: flex;
+    flex-wrap: wrap;
     gap: 4px;
     margin-top: 6px;
-    flex-wrap: wrap;
+    padding-bottom: 2px;
 }
 
 .filter-btn {
-    padding: 4px 10px;
-    border: 1px solid var(--vscode-button-secondaryBackground, #3a3a3a);
-    background: var(--vscode-button-secondaryBackground, #3a3a3a);
-    color: var(--vscode-descriptionForeground, #888);
-    border-radius: 14px;
+    padding: 3px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--vscode-descriptionForeground, #aaa);
+    border-radius: 10px;
     cursor: pointer;
-    font-size: 11px;
+    font-size: 10.5px;
     font-weight: 500;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    transition: all 0.15s ease;
 }
 
 .filter-btn:hover {
-    background: var(--vscode-button-hoverBackground, #4a4a4a);
-    color: var(--vscode-foreground);
-    transform: translateY(-1px);
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--vscode-foreground, #fff);
+    border-color: rgba(255, 255, 255, 0.2);
 }
 
 .filter-btn.active {
     background: var(--vscode-button-background, #007acc);
-    color: var(--vscode-button-foreground, #fff);
-    border-color: var(--vscode-button-background, #007acc);
-    box-shadow: 0 2px 6px rgba(0, 122, 204, 0.3);
+    color: var(--vscode-button-foreground, #ffffff);
+    border-color: rgba(255, 255, 255, 0.25);
+    font-weight: 600;
+    box-shadow: 0 2px 8px rgba(0, 122, 204, 0.4);
 }
 
+/* ─── Search Results List ─────────────────────────────── */
 .results-list {
     flex: 1;
     overflow-y: auto;
-    padding: 4px 0;
+    padding: 4px 6px;
 }
 
 .result-item {
     display: flex;
-    align-items: flex-start;
-    padding: 8px 12px;
+    align-items: center;
+    padding: 8px 10px;
+    margin-bottom: 3px;
     cursor: pointer;
-    transition: all 0.2s ease;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.03);
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     gap: 8px;
-    border-bottom: 1px solid var(--vscode-panel-border, #2a2a2a);
-    border-left: 2px solid transparent;
 }
 
 .result-item:hover {
-    background: var(--vscode-list-hoverBackground, #2a2d2e);
-    border-left-color: var(--vscode-focusBorder, #007acc);
-    padding-left: 14px;
-    padding-right: 10px;
+    background: var(--vscode-list-hoverBackground, rgba(0, 122, 204, 0.12));
+    border-color: rgba(0, 122, 204, 0.3);
+    transform: translateX(2px);
 }
 
 .result-icon {
     font-size: 14px;
     flex-shrink: 0;
-    width: 20px;
-    text-align: center;
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
 }
 
 .result-info {
@@ -209,350 +264,284 @@ body {
 
 .result-name {
     font-weight: 600;
-    color: var(--vscode-foreground);
+    font-size: 12px;
+    color: var(--vscode-foreground, #e0e0e0);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
 .result-name.private {
-    opacity: 0.7;
+    opacity: 0.65;
     font-style: italic;
 }
 
 .result-detail {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--vscode-descriptionForeground, #888);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    margin-top: 1px;
+    margin-top: 2px;
+}
+
+/* ─── Usage Badge & Result Type Badges ────────────────── */
+.result-usage-badge {
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    background: rgba(0, 122, 204, 0.2);
+    color: #4fc1ff;
+    border: 1px solid rgba(79, 193, 255, 0.3);
+    flex-shrink: 0;
 }
 
 .result-badge {
-    padding: 2px 6px;
-    border-radius: 12px;
-    font-size: 10px;
-    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-size: 9px;
+    font-weight: 700;
     flex-shrink: 0;
     align-self: center;
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-    letter-spacing: 0.3px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    letter-spacing: 0.4px;
     text-transform: uppercase;
 }
 
-.badge-class {
-    background: #264f78;
-    color: #6cb6ff;
-}
+/* 🎨 Curated Badge Color Schemes */
+.badge-class       { background: rgba(14, 99, 156, 0.3);  color: #75beff; border-color: rgba(117, 190, 255, 0.3); }
+.badge-function    { background: rgba(56, 138, 52, 0.3);   color: #b5cea8; border-color: rgba(181, 206, 168, 0.3); }
+.badge-widget      { background: rgba(5, 139, 140, 0.3);   color: #4fc1ff; border-color: rgba(79, 193, 255, 0.3); }
+.badge-enum        { background: rgba(137, 87, 229, 0.3);  color: #d8b4fe; border-color: rgba(216, 180, 254, 0.3); }
+.badge-mixin       { background: rgba(217, 119, 6, 0.3);   color: #fde68a; border-color: rgba(253, 230, 138, 0.3); }
+.badge-extension   { background: rgba(192, 38, 211, 0.3);  color: #f5d0fe; border-color: rgba(245, 208, 254, 0.3); }
+.badge-typedef     { background: rgba(2, 132, 199, 0.3);   color: #bae6fd; border-color: rgba(186, 230, 253, 0.3); }
+.badge-variable    { background: rgba(77, 124, 15, 0.3);   color: #d9f99d; border-color: rgba(217, 249, 157, 0.3); }
+.badge-constructor { background: rgba(202, 138, 4, 0.3);   color: #fef08a; border-color: rgba(254, 240, 138, 0.3); }
+.badge-property    { background: rgba(13, 148, 136, 0.3);  color: #99f6e4; border-color: rgba(153, 246, 228, 0.3); }
+.badge-annotation  { background: rgba(225, 29, 72, 0.3);   color: #fecdd3; border-color: rgba(254, 205, 211, 0.3); }
+.badge-call        { background: rgba(147, 51, 234, 0.3);  color: #e9d5ff; border-color: rgba(233, 213, 255, 0.3); }
+.badge-translation { background: rgba(16, 185, 129, 0.3);  color: #a7f3d0; border-color: rgba(167, 243, 208, 0.3); }
 
-.badge-function {
-    background: #4d3800;
-    color: #e2c08d;
-}
-
-.badge-widget {
-    background: #1a4d1a;
-    color: #73c991;
-}
-
-.badge-enum {
-    background: #4d1a4d;
-    color: #c991c9;
-}
-
-.badge-mixin {
-    background: #4d3333;
-    color: #c99191;
-}
-
-.badge-translation {
-    background: #4d4d1a;
-    color: #c9c991;
-}
-.badge-call {
-    background: #1a4d4d;
-    color: #91c9c9;
-}
-.badge-extension {
-    background: #3d1a4d;
-    color: #b388ff;
-}
-.badge-typedef {
-    background: #1a3d3d;
-    color: #88ffff;
-}
-.badge-variable {
-    background: #3d3d1a;
-    color: #ffff88;
-}
-.badge-constructor {
-    background: #4d1a1a;
-    color: #ff8888;
-}
-.badge-property {
-    background: #1a1a4d;
-    color: #8888ff;
-}
-.badge-annotation {
-    background: #2a2a2a;
-    color: #aaaaaa;
-}
-
-.result-usage-badge {
-    padding: 1px 6px;
-    border-radius: 8px;
-    font-size: 10px;
-    font-weight: 500;
-    flex-shrink: 0;
-    align-self: center;
-    background: var(--vscode-button-secondaryBackground, #3a3a3a);
-    color: var(--vscode-button-secondaryForeground, #ccc);
-    margin-right: 4px;
-}
-
-.no-results {
-    padding: 20px;
-    text-align: center;
-    color: var(--vscode-descriptionForeground, #888);
-    font-style: italic;
-}
-
-/* ─── Widget Tree ─────────────────────────────────────── */
-.tree-header,
-.graph-header,
-.pubspec-header {
+/* ─── Headers & Action Buttons ────────────────────────── */
+.tree-header, .graph-header, .pubspec-header, .libraries-header {
+    padding: 8px 12px;
+    background: rgba(0, 0, 0, 0.2);
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(255, 255, 255, 0.06));
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--vscode-panel-border, #333);
-    flex-shrink: 0;
+    font-size: 11px;
     font-weight: 600;
-    font-size: 12px;
-}
-
-.tree-file-name {
-    color: var(--vscode-descriptionForeground, #888);
-    font-weight: 400;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    color: var(--vscode-foreground);
+    flex-shrink: 0;
 }
 
 .icon-btn {
-    background: transparent;
-    border: none;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.05);
     color: var(--vscode-foreground);
+    border-radius: 6px;
     cursor: pointer;
-    font-size: 16px;
-    padding: 2px 6px;
-    border-radius: 4px;
-    transition: background 0.15s;
+    padding: 3px 7px;
+    font-size: 11px;
+    transition: all 0.2s ease;
 }
 
 .icon-btn:hover {
-    background: var(--vscode-toolbar-hoverBackground, #3a3a3a);
+    background: var(--vscode-button-background, #007acc);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.2);
+    transform: scale(1.05);
 }
 
+/* ─── Widget Tree View ────────────────────────────────── */
 .tree-view {
     flex: 1;
     overflow-y: auto;
-    padding: 8px 0;
-    font-family: var(--vscode-font-family, system-ui, sans-serif);
-    font-size: 13px;
-}
-
-.tree-node {
-    display: flex;
-    align-items: center;
-    padding: 2px 8px;
-    cursor: pointer;
-    transition: background 0.1s;
-    white-space: nowrap;
-    position: relative;
-    user-select: none;
-}
-
-.tree-node:hover {
-    background: var(--vscode-list-hoverBackground, #2a2d2e);
-}
-
-.tree-node.active {
-    background: var(--vscode-list-activeSelectionBackground, #37373d);
-    color: var(--vscode-list-activeSelectionForeground, #fff);
-}
-
-.tree-indent {
-    display: inline-flex;
-    width: 14px;
-    height: 22px;
-    flex-shrink: 0;
-    position: relative;
-    justify-content: center;
-}
-
-.tree-indent::before {
-    content: '';
-    position: absolute;
-    left: 6px;
-    top: 0;
-    bottom: 0;
-    width: 1px;
-    background: var(--vscode-tree-indentGuidesStroke, #444);
-    opacity: 0.5;
-}
-
-.tree-toggle {
-    width: 16px;
-    height: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-right: 2px;
-    cursor: pointer;
-    transition: transform 0.1s ease;
-    color: var(--vscode-descriptionForeground, #888);
-    font-size: 10px;
-}
-
-.tree-toggle.collapsed {
-    transform: rotate(-90deg);
-}
-
-.tree-toggle:hover {
-    color: var(--vscode-foreground);
-}
-
-.tree-icon {
-    margin-right: 6px;
-    font-size: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 16px;
-    height: 16px;
-}
-
-.tree-label {
-    color: var(--vscode-foreground);
-    margin-right: 6px;
-}
-
-.tree-detail {
-    color: var(--vscode-descriptionForeground, #888);
-    font-size: 11px;
-    opacity: 0.8;
-}
-
-.tree-node.active .tree-detail {
-    color: inherit;
-    opacity: 0.9;
+    padding: 6px;
 }
 
 .class-list {
-    padding: 8px 12px;
-    border-top: 1px solid var(--vscode-panel-border, #333);
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .class-item {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 0;
+    padding: 5px 8px;
+    border-radius: 5px;
     cursor: pointer;
+    font-size: 11px;
+    transition: all 0.2s ease;
 }
 
 .class-item:hover {
-    color: var(--vscode-textLink-foreground, #3794ff);
+    background: var(--vscode-list-hoverBackground, rgba(0, 122, 204, 0.15));
+    transform: translateX(2px);
 }
 
 .class-type-badge {
-    padding: 1px 6px;
+    padding: 1px 5px;
     border-radius: 8px;
-    font-size: 10px;
-    background: #264f78;
-    color: #6cb6ff;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
 }
 
-/* ─── Dependency Graph ────────────────────────────────── */
-.graph-stats {
-    padding: 8px 12px;
+.tree-node {
+    display: flex;
+    align-items: center;
+    padding: 4px 6px;
+    border-radius: 4px;
+    cursor: pointer;
     font-size: 11px;
+    gap: 4px;
+    transition: background 0.15s ease;
+}
+
+.tree-node:hover {
+    background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+}
+
+.tree-node.active {
+    background: var(--vscode-list-activeSelectionBackground, rgba(0, 122, 204, 0.3));
+    color: #fff;
+}
+
+.tree-toggle {
+    cursor: pointer;
+    font-size: 9px;
+    width: 14px;
+    height: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #888;
+    transition: transform 0.2s ease;
+}
+
+.tree-toggle.collapsed {
+    transform: rotate(-90deg);
+}
+
+.tree-icon {
+    font-size: 12px;
+}
+
+.tree-label {
+    font-weight: 500;
+}
+
+.tree-detail {
+    font-size: 10px;
     color: var(--vscode-descriptionForeground, #888);
-    border-bottom: 1px solid var(--vscode-panel-border, #333);
+    margin-left: 4px;
+}
+
+.tree-children {
+    margin-left: 8px;
+}
+
+.tree-indent {
+    width: 10px;
+    height: 100%;
+    display: inline-block;
+    border-left: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* ─── Dependency Graph View ───────────────────────────── */
+.graph-stats {
+    padding: 6px 12px;
+    font-size: 11px;
+    background: rgba(0, 0, 0, 0.15);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
     display: flex;
     gap: 12px;
-    flex-wrap: wrap;
-    flex-shrink: 0;
 }
 
 .graph-container {
     flex: 1;
-    overflow: auto;
-    padding: 8px;
+    overflow-y: auto;
+    padding: 6px;
+}
+
+.graph-section-title {
+    font-size: 10px;
+    font-weight: 700;
+    color: #007acc;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 8px 4px 4px 4px;
 }
 
 .graph-node {
     display: flex;
     align-items: center;
-    padding: 4px 12px;
+    justify-content: space-between;
+    padding: 6px 10px;
+    margin-bottom: 3px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.04);
     cursor: pointer;
-    transition: background 0.15s;
-    gap: 8px;
-    font-size: 12px;
+    font-size: 11px;
+    transition: all 0.2s ease;
 }
 
 .graph-node:hover {
-    background: var(--vscode-list-hoverBackground, #2a2d2e);
+    background: var(--vscode-list-hoverBackground, rgba(0, 122, 204, 0.15));
+    border-color: rgba(0, 122, 204, 0.3);
+    transform: translateX(2px);
 }
 
 .graph-node-name {
-    color: var(--vscode-foreground);
     font-weight: 500;
 }
 
 .graph-node-arrows {
+    font-size: 10px;
     color: var(--vscode-descriptionForeground, #888);
-    font-size: 11px;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 2px 6px;
+    border-radius: 8px;
 }
 
-.graph-section-title {
-    padding: 8px 12px 4px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--vscode-descriptionForeground, #888);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-/* ─── Pubspec ─────────────────────────────────────────── */
-.pubspec-content {
+/* ─── Pubspec & Analysis Content ──────────────────────── */
+.pubspec-content, .libraries-content {
     flex: 1;
     overflow-y: auto;
     padding: 8px;
 }
 
 .pubspec-section {
-    margin-bottom: 16px;
+    margin-bottom: 12px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    border-radius: 8px;
+    padding: 8px;
 }
 
 .pubspec-section-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--vscode-foreground);
-    padding: 6px 8px;
-    background: var(--vscode-sideBarSectionHeader-background, #252526);
-    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--vscode-foreground, #fff);
     margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
 }
 
 .pubspec-field {
     display: flex;
     justify-content: space-between;
-    padding: 4px 8px;
-    font-size: 12px;
+    padding: 4px 0;
+    font-size: 11px;
+    border-bottom: 1px dashed rgba(255, 255, 255, 0.04);
 }
 
 .pubspec-field-name {
@@ -560,201 +549,169 @@ body {
 }
 
 .pubspec-field-value {
-    color: var(--vscode-foreground);
-    font-weight: 500;
+    font-weight: 600;
+    color: #4fc1ff;
 }
 
 .dep-item {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    padding: 4px 8px;
-    border-radius: 3px;
-    transition: background 0.15s;
-}
-
-.dep-item:hover {
-    background: var(--vscode-list-hoverBackground, #2a2d2e);
+    justify-content: space-between;
+    padding: 6px 8px;
+    margin-bottom: 3px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 6px;
+    font-size: 11px;
 }
 
 .dep-name {
-    color: var(--vscode-foreground);
-    font-size: 12px;
+    font-weight: 500;
 }
 
 .dep-version {
-    color: var(--vscode-descriptionForeground, #888);
-    font-size: 11px;
-    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 10px;
+    color: #b5cea8;
+    background: rgba(181, 206, 168, 0.15);
+    padding: 2px 6px;
+    border-radius: 8px;
 }
 
 .dep-badge {
-    padding: 1px 6px;
-    border-radius: 8px;
     font-size: 9px;
-    margin-left: 6px;
+    padding: 1px 5px;
+    border-radius: 6px;
+    margin-left: 4px;
 }
 
-.dep-badge-path {
-    background: #3d3800;
-    color: #e2c08d;
+.dep-badge-path { background: rgba(217, 119, 6, 0.3); color: #fde68a; }
+.dep-badge-git  { background: rgba(192, 38, 211, 0.3); color: #f5d0fe; }
+
+/* ─── Analysis Filters ────────────────────────────────── */
+.analysis-filters {
+    padding: 8px 10px;
+    background: rgba(0, 0, 0, 0.15);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
 }
 
-.dep-badge-git {
-    background: #1a3d1a;
-    color: #73c991;
+.analysis-select, .analysis-input {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--vscode-input-border, rgba(255, 255, 255, 0.1));
+    background: var(--vscode-input-background, rgba(30, 30, 30, 0.8));
+    color: var(--vscode-input-foreground, #ccc);
+    border-radius: 6px;
+    outline: none;
+    font-size: 11px;
 }
 
 .warning-item {
-    padding: 6px 8px;
-    font-size: 12px;
-    color: var(--vscode-editorWarning-foreground, #cca700);
-    background: rgba(204, 167, 0, 0.1);
+    padding: 5px 8px;
+    margin-top: 4px;
+    background: rgba(225, 29, 72, 0.1);
+    border-left: 3px solid #f43f5e;
     border-radius: 4px;
-    margin-bottom: 4px;
+    font-size: 11px;
 }
 
+/* ─── External Libraries View ─────────────────────────── */
+.package-item {
+    padding: 8px 10px;
+    margin-bottom: 4px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    border-radius: 6px;
+    transition: all 0.2s ease;
+}
+
+.package-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(0, 122, 204, 0.3);
+}
+
+.package-name {
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--vscode-foreground, #fff);
+}
+
+.package-version {
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground, #888);
+    margin-top: 2px;
+}
+
+.package-badges {
+    display: flex;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.package-badge {
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 8px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.badge-direct     { background: rgba(0, 122, 204, 0.25); color: #75beff; }
+.badge-dev        { background: rgba(137, 87, 229, 0.25); color: #d8b4fe; }
+.badge-transitive { background: rgba(255, 255, 255, 0.06); color: #aaa; }
+.badge-pub\.dev   { background: rgba(16, 185, 129, 0.25); color: #a7f3d0; }
+.badge-path       { background: rgba(217, 119, 6, 0.25); color: #fde68a; }
+.badge-git        { background: rgba(192, 38, 211, 0.25); color: #f5d0fe; }
+
+/* ─── Empty & Loading States ───────────────────────────── */
 .empty-state {
-    padding: 24px 16px;
+    padding: 30px 15px;
     text-align: center;
     color: var(--vscode-descriptionForeground, #888);
 }
 
 .empty-state-icon {
-    font-size: 32px;
+    font-size: 28px;
     margin-bottom: 8px;
-    opacity: 0.5;
+    opacity: 0.6;
 }
 
 .empty-state-text {
-    font-size: 13px;
-}
-
-/* ─── Libraries ─────────────────────────────────────────── */
-.libraries-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 16px;
-  background: var(--vscode-sideBarSectionHeader-background, #252526);
-}
-
-.libraries-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px;
-}
-
-.package-item {
-  padding: 12px;
-  margin-bottom: 8px;
-  background: var(--vscode-editor-background, #1e1e1e);
-  border-radius: 4px;
-  border: 1px solid var(--vscode-panel-border, #3c3c3c);
-}
-
-.package-name {
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--vscode-foreground);
-  margin-bottom: 4px;
-}
-
-.package-version {
-  font-size: 12px;
-  color: var(--vscode-descriptionForeground, #888);
-  margin-bottom: 8px;
-}
-
-.package-badges {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.package-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  font-size: 10px;
-  font-weight: 500;
-  border-radius: 10px;
-  background: var(--vscode-badge-background, #4a4a4a);
-  color: var(--vscode-badge-foreground, #ffffff);
-}
-
-.package-badge.badge-direct { background: #264f78; color: #6cb6ff; }
-.package-badge.badge-dev { background: #4d3800; color: #e2c08d; }
-.package-badge.badge-transitive { background: #2a2a2a; color: #aaaaaa; }
-.package-badge.badge-hosted { background: #1a4d4d; color: #91c9c9; }
-.package-badge.badge-git { background: #1a3d1a; color: #73c991; }
-.package-badge.badge-path { background: #4d1a1a; color: #ff8888; }
-
-/* ─── Scrollbar ───────────────────────────────────────── */
-::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-}
-
-::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-    background: var(--vscode-scrollbarSlider-background, #424242);
-    border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-    background: var(--vscode-scrollbarSlider-hoverBackground, #555);
-}
-
-/* ─── Animations ──────────────────────────────────────── */
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(4px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.result-item,
-.tree-node,
-.dep-item {
-    animation: fadeIn 0.15s ease-out;
-}
-
-/* ─── Analysis Filters ────────────────────────────────── */
-.analysis-filters {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    padding: 8px 12px;
-    background: var(--vscode-sideBarSectionHeader-background, #252526);
-    border-bottom: 1px solid var(--vscode-panel-border, #333);
-}
-
-.analysis-input, .analysis-select {
-    flex: 1;
-    min-width: 90px;
-    padding: 6px 8px;
-    border: 1px solid var(--vscode-input-border, #3c3c3c);
-    background: var(--vscode-input-background, #3c3c3c);
-    color: var(--vscode-input-foreground, #ccc);
-    border-radius: 4px;
-    outline: none;
     font-size: 11px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.1) inset;
+    line-height: 1.5;
 }
 
-.analysis-input:focus, .analysis-select:focus {
-    border-color: var(--vscode-focusBorder, #007acc);
-    box-shadow: 0 0 0 1px rgba(0, 122, 204, 0.2), 0 1px 2px rgba(0,0,0,0.1) inset;
+.no-results {
+    padding: 20px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #888);
+    font-style: italic;
 }
 
-.analysis-input::placeholder {
-    color: var(--vscode-input-placeholderForeground, #777);
+/* ─── Copy Button Styling ────────────────────────────── */
+.copy-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--vscode-foreground, #ccc);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.copy-btn:hover {
+    background: var(--vscode-button-background, #007acc);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.3);
+    transform: scale(1.05);
+}
+
+.copy-btn.copied {
+    background: #10b981 !important;
+    color: #fff !important;
+    border-color: #059669 !important;
 }

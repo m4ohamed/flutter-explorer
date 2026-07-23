@@ -164,6 +164,7 @@
         html += '<span class="result-usage-badge" title="Usage Count">↺ ' + r.usageCount + '</span>';
       }
       html += '<span class="result-badge badge-' + r.type + '">' + r.type + '</span>';
+      html += '<button class="copy-btn icon-btn" title="Copy symbol name" data-copy="' + escapeHtml(r.name) + '" style="margin-left: 4px; padding: 2px 4px; font-size: 10px;">📋</button>';
       html += '</div>';
     }
     container.innerHTML = html;
@@ -174,6 +175,14 @@
         const file = this.getAttribute('data-file');
         const line = parseInt(this.getAttribute('data-line') || '1', 10);
         vscode.postMessage({ command: 'openFile', file: file, line: line });
+      });
+    });
+
+    container.querySelectorAll('.copy-btn').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        const text = this.getAttribute('data-copy');
+        copyToClipboard(text, this);
       });
     });
   }
@@ -555,7 +564,7 @@
         html += '<div class="dep-name" style="margin-bottom: 4px; font-weight: bold;">' + escapeHtml(mt.filePath) + '</div>';
         html += '<div style="display: flex; flex-wrap: wrap; gap: 4px;">';
         for (let k = 0; k < mt.missingKeys.length; k++) {
-          html += '<span class="dep-badge dep-badge-path" style="margin: 0; background: #5a1d1d; color: #ffb3b3;">' + escapeHtml(mt.missingKeys[k]) + '</span>';
+          html += '<span class="dep-badge dep-badge-path copy-key-btn" data-copy="' + escapeHtml(mt.missingKeys[k]) + '" title="Click to copy key" style="margin: 0; background: #5a1d1d; color: #ffb3b3; cursor: pointer;">' + escapeHtml(mt.missingKeys[k]) + ' 📋</span>';
         }
         html += '</div></div>';
       }
@@ -564,9 +573,14 @@
 
     // Hardcoded & Duplicate Warnings
     html += '<div class="pubspec-section">';
-    html += '<div class="pubspec-section-title">⚠️ Hardcoded & Duplicated Code</div>';
+    html += '<div class="pubspec-section-title" style="display: flex; justify-content: space-between; align-items: center;">';
+    html += '<span>⚠️ Hardcoded & Duplicated Code</span>';
+    html += '<button class="copy-btn" id="copyAllAnalysisWarnings" title="Copy all visible warnings to clipboard" style="padding: 2px 6px; font-size: 10px; cursor: pointer; display: none;">📋 Copy All</button>';
+    html += '</div>';
     
     const filteredWarnings = [];
+    let allWarningsText = [];
+
     if (data.warnings) {
       for (let w = 0; w < data.warnings.length; w++) {
         const fileWarn = data.warnings[w];
@@ -583,6 +597,10 @@
             filePath: fileWarn.filePath,
             warnings: matchingWarns
           });
+
+          for (let m = 0; m < matchingWarns.length; m++) {
+            allWarningsText.push(fileWarn.filePath + ':L' + matchingWarns[m].line + ' - ' + matchingWarns[m].message);
+          }
         }
       }
     }
@@ -594,18 +612,30 @@
     } else {
       for (let w = 0; w < filteredWarnings.length; w++) {
         const fileWarn = filteredWarnings[w];
-        html += '<div class="dep-item analysis-file-link" data-file="' + escapeHtml(fileWarn.filePath) + '" style="flex-direction: column; align-items: flex-start; padding: 8px; cursor: pointer;">';
-        html += '<div class="dep-name" style="margin-bottom: 4px; font-weight: bold;">' + escapeHtml(fileWarn.filePath) + ' (' + fileWarn.warnings.length + ')</div>';
+        html += '<div class="dep-item analysis-file-link" data-file="' + escapeHtml(fileWarn.filePath) + '" style="display: flex; flex-direction: column; align-items: stretch; width: 100%; padding: 8px; cursor: pointer; box-sizing: border-box;">';
+        html += '<div class="dep-name" style="margin-bottom: 4px; font-weight: bold; width: 100%;">' + escapeHtml(fileWarn.filePath) + ' (' + fileWarn.warnings.length + ')</div>';
         for (let k = 0; k < fileWarn.warnings.length; k++) {
           const warn = fileWarn.warnings[k];
           const bgColor = warn.type === 'hardcoded_text' ? '#3d3800' : 
                         warn.type === 'hardcoded_color' ? '#1a3d1a' : '#4d1a4d'; // Purple for duplicated logic
           const fgColor = warn.type === 'hardcoded_text' ? '#e2c08d' : 
                         warn.type === 'hardcoded_color' ? '#73c991' : '#e699ff';
-          html += '<div class="warning-item analysis-warn-link" data-file="' + escapeHtml(fileWarn.filePath) + '" data-line="' + warn.line + '" style="width: 100%; display: flex; justify-content: space-between;">';
-          html += '<span>' + escapeHtml(warn.message) + '</span>';
+
+          let cleanVal = warn.message;
+          if (warn.message.indexOf('Hardcoded text: ') === 0) {
+            cleanVal = warn.message.substring(16);
+          } else if (warn.message.indexOf('Hardcoded color: ') === 0) {
+            cleanVal = warn.message.substring(17);
+          } else if (warn.message.indexOf('Duplicated logic: ') === 0) {
+            cleanVal = warn.message.substring(18);
+          }
+
+          html += '<div class="warning-item analysis-warn-link" data-file="' + escapeHtml(fileWarn.filePath) + '" data-line="' + warn.line + '" style="width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; box-sizing: border-box;">';
+          html += '<span style="flex: 1; word-break: break-all; font-size: 11px;">' + escapeHtml(warn.message) + '</span>';
+          html += '<div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">';
+          html += '<button class="copy-btn copy-val-btn" title="Copy extracted value: ' + escapeHtml(cleanVal) + '" data-copy="' + escapeHtml(cleanVal) + '" style="padding: 2px 5px; font-size: 10px; background: rgba(0,122,204,0.3); color: #75beff; border: 1px solid rgba(0,122,204,0.5); font-weight: 600; cursor: pointer; border-radius: 4px;">📋 Copy</button>';
           html += '<span class="dep-badge" style="background: ' + bgColor + '; color: ' + fgColor + ';">L' + warn.line + '</span>';
-          html += '</div>';
+          html += '</div></div>';
         }
         html += '</div>';
       }
@@ -613,6 +643,17 @@
     html += '</div>';
 
     container.innerHTML = html;
+
+    // Show Copy All button if there are warnings
+    const copyAllBtn = document.getElementById('copyAllAnalysisWarnings');
+    if (copyAllBtn) {
+      if (allWarningsText.length > 0) {
+        copyAllBtn.style.display = 'inline-block';
+        copyAllBtn.setAttribute('data-copy', allWarningsText.join('\n'));
+      } else {
+        copyAllBtn.style.display = 'none';
+      }
+    }
 
     // Add click listeners for Analysis tab
     container.querySelectorAll('.analysis-file-link').forEach(function (el) {
@@ -630,6 +671,22 @@
         window.vscodeApi.postMessage({ command: 'openFile', file: file, line: line });
       });
     });
+
+    container.querySelectorAll('.copy-key-btn, .copy-btn, .copy-val-btn').forEach(function (el) {
+      el.addEventListener('click', function (e) {
+        e.stopPropagation();
+        const text = this.getAttribute('data-copy');
+        copyToClipboard(text, this);
+      });
+    });
+
+    if (copyAllBtn) {
+      copyAllBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        const text = this.getAttribute('data-copy');
+        copyToClipboard(text, this);
+      });
+    }
   }
 
   function renderPackages(data) {
@@ -668,6 +725,9 @@
       '<span class="stat-item" data-filter="extension">🧬 <span class="stat-value">' + (stats.extensions || 0) + '</span> ext</span>' +
       '<span class="stat-item" data-filter="typedef">🏷️ <span class="stat-value">' + (stats.typedefs || 0) + '</span> type</span>' +
       '<span class="stat-item" data-filter="variable">💎 <span class="stat-value">' + (stats.variables || 0) + '</span> vars</span>' +
+      '<span class="stat-item" data-filter="constructor">🛠️ <span class="stat-value">' + (stats.constructors || 0) + '</span> ctors</span>' +
+      '<span class="stat-item" data-filter="property">🔑 <span class="stat-value">' + (stats.properties || 0) + '</span> props</span>' +
+      '<span class="stat-item" data-filter="annotation">🏷️ <span class="stat-value">' + (stats.annotations || 0) + '</span> annos</span>' +
       '<span class="stat-item" data-filter="call">📞 <span class="stat-value">' + (stats.calls || 0) + '</span> calls</span>' +
       '<span class="stat-item" data-filter="translation">🌐 <span class="stat-value">' + (stats.translations || 0) + '</span> translations</span>';
 
@@ -695,6 +755,20 @@
   }
 
   // ─── Utilities ─────────────────────────────────────────
+
+  function copyToClipboard(text, btnElement) {
+    if (!text) { return; }
+    window.vscodeApi.postMessage({ command: 'copyToClipboard', text: text });
+    if (btnElement) {
+      const orig = btnElement.innerHTML;
+      btnElement.innerHTML = '✓';
+      btnElement.classList.add('copied');
+      setTimeout(function () {
+        btnElement.innerHTML = orig;
+        btnElement.classList.remove('copied');
+      }, 1200);
+    }
+  }
 
   function escapeHtml(text) {
     if (!text) { return ''; }

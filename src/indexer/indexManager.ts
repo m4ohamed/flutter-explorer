@@ -1579,7 +1579,7 @@ export class IndexManager {
             fileDiffs.push(`- ⚠️ **Class \`${sdkClass.name}\`**: mismatched extends class (SDK: \`${sdkClass.extendsClass}\`, Regex: \`${regexClass.extendsClass}\`).`);
           }
           for (const sdkMethod of sdkClass.methods) {
-            const regexMethod = regexClass.methods.find(m => m.name === sdkMethod.name);
+            const regexMethod = regexClass.methods.find(m => m.name === sdkMethod.name || m.name === `operator ${sdkMethod.name}` || m.name.replace('operator ', '') === sdkMethod.name);
             if (!regexMethod) {
               fileDiffs.push(`  - ❌ **Missing Method**: Method \`${sdkClass.name}.${sdkMethod.name}\` (line ${sdkMethod.line}) was NOT found by regex parser.`);
               continue;
@@ -1599,7 +1599,7 @@ export class IndexManager {
             }
           }
           for (const regexMethod of regexClass.methods) {
-            const sdkMethod = sdkClass.methods.find(m => m.name === regexMethod.name);
+            const sdkMethod = sdkClass.methods.find(m => m.name === regexMethod.name || `operator ${m.name}` === regexMethod.name || m.name === regexMethod.name.replace('operator ', ''));
             if (!sdkMethod) {
               fileDiffs.push(`  - ➕ **Extra Method**: Method \`${sdkClass.name}.${regexMethod.name}\` (line ${regexMethod.line}) was extracted by regex but not in SDK (potential false positive).`);
             }

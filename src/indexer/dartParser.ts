@@ -235,6 +235,7 @@ const RESERVED = new Set([
   'import', 'export', 'typedef', 'library', 'part', 'var', 'final', 'const', 'late',
   'get', 'set', 'void', 'dynamic', 'break', 'continue', 'throw', 'rethrow', 'else',
   'case', 'default', 'in', 'is', 'as', 'assert', 'true', 'false', 'null', 'this', 'super',
+  'await', 'yield', 'async', 'sync',
 ]);
 const NON_DEF_KEYWORDS = new Set([
   'return', 'await', 'throw', 'yield', 'new', 'else', 'case',
@@ -253,15 +254,15 @@ export class DartParser extends BaseParser<DartFileInfo> {
     typedef_: /^typedef\s+([\w$]+)\s*=\s*([^;]+);/,
     typedefOld_: /^typedef\s+([\w$<>\[\]?,\s]+?)\s+([\w$]+)\s*\(([^)]*)\);/,
     annotation: /^@([\w$]+)/,
-    class_: /^((?:abstract\s+|sealed\s+|base\s+|interface\s+|final\s+)*)(mixin\s+)?class\s+([\w$]+)(?:\s+extends\s+([\w$<>,\s\[\]]+))?(?:\s+with\s+([\w$<>,\s\[\]]+))?(?:\s+implements\s+([\w$<>,\s\[\]]+))?/,
+    class_: /^((?:abstract\s+|sealed\s+|base\s+|interface\s+|final\s+)*)(mixin\s+)?class\s+([\w$]+)(?:\s+extends\s+((?:(?!with\b|implements\b)[\w$<>,\s\[\]])+))?(?:\s*with\s+((?:(?!implements\b)[\w$<>,\s\[\]])+))?(?:\s*implements\s+([\w$<>,\s\[\]]+))?/,
     ctor: /^\s*(const\s+)?(factory\s+)?([\w$]+)(?:\.([\w$]+))?\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(?::[^{;]*)?([\{;])/,
     buildMethod: /(?:Widget|Route|PreferredSizeWidget|StatelessWidget|StatefulWidget)\s+([\w$]+)\s*\(([^)]*)\)/,
-    method: /^\s*(static\s+)?([\w$][\w$<>\[\]?,\s]*?)\s+([\w$]+)\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
-    getter: /^\s*(static\s+)?([\w$<>\[\]?,\s]+?)\s+get\s+([\w$]+)\s*(=>|\{)/,
-    setter: /^\s*(static\s+)?([\w$]+)\s+set\s+([\w$]+)\s*\(([^)]*)\)/,
+    method: /^\s*(static\s+)?((?:\([\w$,\s{}:]+\)|[\w$][\w$<>\[\]?,\s]*?))\s+((?:operator\s*[!=<>&|^*+/~%-]+|[\w$]+))(?:<[\w$,\s<>]*>)?\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>;]/,
+    getter: /^\s*(static\s+)?(?:([\w$<>\[\]?,\s]+?)\s+)?get\s+([\w$]+)\s*(=>|\{)/,
+    setter: /^\s*(static\s+)?(?:([\w$]+)\s+)?set\s+([\w$]+)\s*\(([^)]*)\)/,
     field: /^(?:(static)\s+)?(?:(final|const|late|var)\s+)?(?:(final|const|late|var)\s+)?(?:([\w$<>\[\]?,\s]+?)\s+)?([\w$]+)\s*(?:(=\s*[^;]+|;).*)/,
-    topVar: /^(?:(final|const|late|var)\s+)?(?:(final|const|late|var)\s+)?(?:([\w$<>\[\]?,\s]+?)\s+)?([\w$]+)\s*(?:(=\s*[^;]+|;).*)/,
-    topFunc: /^([\w$][\w$<>\[\]?,\s]*?)\s+([\w$]+)\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
+    topVar: /^\s*(?:(final|const|late|var)\s+)?(?:(final|const|late|var)\s+)?(?:([\w$<>\[\]?,\s]+?)\s+)?([\w$]+)\s*((?:=\s*[^;]+|;).*)/,
+    topFunc: /^((?:\([\w$,\s{}:]+\)|[\w$][\w$<>\[\]?,\s]*?))\s+((?:operator\s*[!=<>&|^*+/~%-]+|[\w$]+))(?:<[\w$,\s<>]*>)?\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
     callPat: /(?:([a-zA-Z_]\w*)\.)?([a-zA-Z_]\w*)\s*\(/g,
     classDef: /class\s+([\w$]+)/,
     funcDef: /([\w$<>\[\]?,\s]+?)\s+([\w$]+)\s*\(/,
@@ -271,7 +272,7 @@ export class DartParser extends BaseParser<DartFileInfo> {
       .replace(/\br'''[\s\S]*?'''|\br"""[\s\S]*?"""/g, m => m.replace(/[^\n]/g, ' '))
       .replace(/\br'[^']*'|\br"[^"]*"/g, m => m.replace(/[^\n]/g, ' '))
       .replace(/'''[\s\S]*?'''|"""[\s\S]*?"""/g, m => m.replace(/[^\n]/g, ' '))
-      .replace(/(["'])((?:\\.|(?!\1)[^\\])*)\1/g, m => m.replace(/[^\n]/g, ' '))
+      .replace(/(["'])((?:\\.|(?!\1)[^\r\n\\])*)\1/g, m => m.replace(/[^\n]/g, ' '))
       .replace(/\/\/[^\n]*/g, m => ' '.repeat(m.length))
       .replace(/\/\*(?:[^*]|\*(?!\/))*\*\//g, m => m.replace(/[^\n]/g, ' '));
   }
@@ -347,11 +348,12 @@ export class DartParser extends BaseParser<DartFileInfo> {
     let buildBraceStart = 0;
     let buildLines: string[] = [];
     const P = DartParser.P;
+    const syncedLines = new Set<number>();
     const syncBraces = (lineIdx: number, count: number = 1) => {
       for (let k = 0; k < count; k++) {
         const idx = lineIdx + k;
-        if (idx >= maskedLines.length)
-          break;
+        if (idx >= maskedLines.length || syncedLines.has(idx)) continue;
+        syncedLines.add(idx);
         const mLine = maskedLines[idx];
         for (const ch of mLine) {
           if (ch === '{') {
@@ -426,13 +428,10 @@ export class DartParser extends BaseParser<DartFileInfo> {
       const maskedLine = maskedLines[i];
       const trimmed = maskedLine.trim();
       const lineNum = i + 1;
-      if (filePath.includes('banner_settings_provider.dart')) {
-        console.log(`LINE ${lineNum} [${trimmed}]: depth=${braceDepth}, stack=${scopeStack.map(s => `${s.type}:${s.name}(${s.braceDepth})`).join(', ')}`);
+      if (trimmed === '' || /^\s*$/.test(trimmed)) {
+        syncBraces(i);
+        continue;
       }
-      if (trimmed === '')
-        continue;
-      if (/^\s*$/.test(trimmed))
-        continue;
       const imp = trimmed.match(P.import_);
       if (imp) {
         result.imports.push({
@@ -450,7 +449,7 @@ export class DartParser extends BaseParser<DartFileInfo> {
         syncBraces(i);
         continue;
       }
-      if (trimmed.startsWith('import ') || trimmed.startsWith('export ')) {
+      if (trimmed.startsWith('import ') || trimmed.startsWith('export ') || trimmed.startsWith('show ') || trimmed.startsWith('hide ')) {
         syncBraces(i);
         continue;
       }
@@ -590,6 +589,7 @@ export class DartParser extends BaseParser<DartFileInfo> {
           }
         }
       }
+      const depthBeforeSync = braceDepth;
       syncBraces(i);
       if (currentClass() && P.buildMethod.test(trimmed)) {
         const buildMatch = trimmed.match(P.buildMethod);
@@ -639,7 +639,7 @@ export class DartParser extends BaseParser<DartFileInfo> {
           continue;
         }
         const methodMatch = mLookahead.match(P.method);
-        if (methodMatch && !SKIP_METHODS.has(methodMatch[3]) && !RESERVED.has(methodMatch[3])) {
+        if (methodMatch && !SKIP_METHODS.has(methodMatch[3]) && !RESERVED.has(methodMatch[3]) && methodMatch[3] !== cc && !methodMatch[2].trim().startsWith('return')) {
           const methodInfo: FunctionInfo = {
             name: methodMatch[3], returnType: methodMatch[2].trim(), params: methodMatch[4].trim().replace(/\n/g, ' '),
             line: lineNum, isPrivate: methodMatch[3].startsWith('_'),
@@ -655,7 +655,7 @@ export class DartParser extends BaseParser<DartFileInfo> {
         const getterMatch = maskedLine.match(P.getter);
         if (getterMatch) {
           const prop: PropertyInfo = {
-            name: getterMatch[3], type: getterMatch[2].trim(), className: cc,
+            name: getterMatch[3], type: getterMatch[2] ? getterMatch[2].trim() : 'dynamic', className: cc,
             isFinal: false, isConst: false, isStatic: !!getterMatch[1], isPrivate: getterMatch[3].startsWith('_'),
             isGetter: true, isSetter: false, line: lineNum,
           };
@@ -666,7 +666,7 @@ export class DartParser extends BaseParser<DartFileInfo> {
           const setterMatch = maskedLine.match(P.setter);
           if (setterMatch) {
             const prop: PropertyInfo = {
-              name: setterMatch[3], type: setterMatch[4].trim(), className: cc,
+              name: setterMatch[3], type: setterMatch[4] ? setterMatch[4].trim() : 'dynamic', className: cc,
               isFinal: false, isConst: false, isStatic: !!setterMatch[1], isPrivate: setterMatch[3].startsWith('_'),
               isGetter: false, isSetter: true, line: lineNum,
             };
@@ -689,10 +689,14 @@ export class DartParser extends BaseParser<DartFileInfo> {
           }
         }
       }
-      if (!currentClass()) {
+      if (!currentClass() && depthBeforeSync === 0) {
         const fLookahead = maskedLines.slice(i, i + 30).join('\n');
-        const f = fLookahead.match(P.topFunc);
-        if (f && !RESERVED.has(f[2])) {
+        const eqIdx = fLookahead.indexOf('=');
+        const parenIdx = fLookahead.indexOf('(');
+        const hasAssignmentBeforeParen = eqIdx !== -1 && (parenIdx === -1 || eqIdx < parenIdx);
+
+        const f = !hasAssignmentBeforeParen ? fLookahead.match(P.topFunc) : null;
+        if (f && !RESERVED.has(f[2]) && !RESERVED.has(f[1].trim()) && !f[1].trim().startsWith('return')) {
           const newFunc: FunctionInfo = {
             name: f[2], returnType: f[1].trim(), params: f[3].trim().replace(/\n/g, ' '),
             line: lineNum, isPrivate: f[2].startsWith('_'),
@@ -706,17 +710,20 @@ export class DartParser extends BaseParser<DartFileInfo> {
         }
         else {
           const varMatch = trimmed.match(P.topVar);
-          if (varMatch && !RESERVED.has(varMatch[4])) {
-            result.variables.push({
-              name: varMatch[4], type: varMatch[3].trim(),
-              value: varMatch[5] ? varMatch[5].replace('=', '').trim() : undefined,
-              line: lineNum, isConst: varMatch[1] === 'const' || varMatch[2] === 'const',
-              isFinal: varMatch[1] === 'final' || varMatch[2] === 'final',
-              isPrivate: varMatch[4].startsWith('_'), isTopLevel: true,
-            });
+          if (varMatch && !RESERVED.has(varMatch[4]) && varMatch[4] !== 'dynamic' && varMatch[4] !== 'void') {
+            if (!result.functions.some(fn => fn.name === varMatch[4] && fn.line === lineNum)) {
+              result.variables.push({
+                name: varMatch[4], type: varMatch[3] ? varMatch[3].trim() : 'dynamic',
+                value: varMatch[5] ? varMatch[5].replace('=', '').trim() : undefined,
+                line: lineNum, isConst: varMatch[1] === 'const' || varMatch[2] === 'const',
+                isFinal: varMatch[1] === 'final' || varMatch[2] === 'final',
+                isPrivate: varMatch[4].startsWith('_'), isTopLevel: true,
+              });
+            }
           }
         }
       }
+      syncBraces(i);
     }
     this.analyzeUsages(maskedLines, result);
     this.extractFunctionCalls(maskedLines, result, lines);
@@ -823,19 +830,25 @@ export class DartParser extends BaseParser<DartFileInfo> {
       depth: number;
     }[] = [];
     for (let i = 0; i < maskedLines.length; i++) {
+      const orig = lines[i].trim();
+      if (!orig || orig.startsWith('//') || orig.startsWith('///') || orig.startsWith('*') || orig.startsWith('/*') || orig.startsWith('import ') || orig.startsWith('export '))
+        continue;
       const mLine = maskedLines[i];
       const trimmedMasked = mLine.trim();
-      if (!trimmedMasked || trimmedMasked.startsWith('//') || trimmedMasked.startsWith('*'))
-        continue;
-      const matches = trimmedMasked.matchAll(/(?:\b|return\s+|=>\s+)([A-Z]\w+)(?:\.\w+)?\s*\(/g);
+      const matches = trimmedMasked.matchAll(/(?:\b|return\s+|=>\s+)(_?[A-Z]\w+)(?:<[\w$,\s<>?\[\]]*>)?(?:\.(\w+))?\s*\(/g);
       for (const wm of matches) {
         const indent = mLine.length - mLine.trimStart().length;
         const name = wm[1];
-        if (RESERVED.has(name.toLowerCase()))
+        const dotMethod = wm[2];
+        if (dotMethod && /^(of|lerp|copyWith|maybeOf|values|parse|tryParse|fromJson|toJson)$/.test(dotMethod))
           continue;
-        let detail = '';
+        if (RESERVED.has(name.toLowerCase()) || ['String', 'int', 'double', 'bool', 'List', 'Map', 'Set', 'Future', 'Stream', 'Duration', 'DateTime', 'TextEditingController', 'GlobalKey', 'AnimationController', 'ScrollController'].includes(name))
+          continue;
         const originalTrimmed = lines[i].trim();
         const lineRemaining = originalTrimmed.substring(wm.index! + wm[0].length);
+        if (/^\s*\)\s*=>/.test(lineRemaining))
+          continue;
+        let detail = '';
         const detailMatch = lineRemaining.match(/^(['"])(.*?)\1/);
         if (detailMatch)
           detail = detailMatch[2];

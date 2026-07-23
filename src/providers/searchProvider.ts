@@ -40,6 +40,8 @@ export class SearchProvider {
             line: r.line,
             isPrivate: r.isPrivate,
             icon: this.getIcon(r.type),
+            relativePath: r.file.replace(/\\/g, '/'),
+            usageCount: r.usageCount,
         }));
     }
     private getIcon(type: string): string {
@@ -70,4 +72,6 @@ export interface WebviewSearchResult {
     line: number;
     isPrivate: boolean;
     icon: string;
+    relativePath: string;
+    usageCount?: number;
 }

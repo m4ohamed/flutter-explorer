@@ -92,6 +92,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     this.postMessage({ command: 'packagesData', data: packages });
                     break;
                 }
+                case 'copyToClipboard': {
+                    if (message.text) {
+                        vscode.commands.executeCommand('flutterExplorer.copyToClipboard', message.text);
+                    }
+                    break;
+                }
             }
         });
     }
@@ -171,6 +177,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           <button class="filter-btn" data-filter="typedef">Typedefs</button>
           <button class="filter-btn" data-filter="variable">Variables</button>
           <button class="filter-btn" data-filter="constructor">Ctors</button>
+          <button class="filter-btn" data-filter="property">Props</button>
+          <button class="filter-btn" data-filter="annotation">Annotations</button>
         </div>
       </div>
       <div class="results-list" id="searchResults"></div>
@@ -244,6 +252,7 @@ interface WebviewMessage {
     filter?: string;
     file?: string;
     line?: number;
+    text?: string;
 }
 function getNonce(): string {
     let text = '';
