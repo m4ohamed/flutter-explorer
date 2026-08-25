@@ -93,6 +93,18 @@
     });
   }
 
+  const copyAllAnalysis = document.getElementById('copyAllAnalysis');
+  if (copyAllAnalysis) {
+    copyAllAnalysis.addEventListener('click', function () {
+      const text = this.getAttribute('data-copy');
+      if (text) {
+        copyToClipboard(text, this);
+      } else {
+        copyToClipboard('No items match current filters.', this);
+      }
+    });
+  }
+
   const compareParsers = document.getElementById('compareParsers');
   if (compareParsers) {
     compareParsers.addEventListener('click', function () {
@@ -574,7 +586,7 @@
     // Hardcoded & Duplicate Warnings
     html += '<div class="pubspec-section">';
     html += '<div class="pubspec-section-title" style="display: flex; justify-content: space-between; align-items: center;">';
-    html += '<span>⚠️ Hardcoded & Duplicated Code</span>';
+    html += '<span>⚠️ Hardcoded, Duplicated & Mockup Code</span>';
     html += '<button class="copy-btn" id="copyAllAnalysisWarnings" title="Copy all visible warnings to clipboard" style="padding: 2px 6px; font-size: 10px; cursor: pointer; display: none;">📋 Copy All</button>';
     html += '</div>';
     
@@ -587,7 +599,13 @@
         if (fileFilter && !fileWarn.filePath.toLowerCase().includes(fileFilter)) continue;
         
         const matchingWarns = fileWarn.warnings.filter(function(warn) {
-          if (typeFilter !== 'all' && warn.type !== typeFilter) return false;
+          if (typeFilter !== 'all') {
+            if (typeFilter === 'mockup') {
+              if (!warn.type || !warn.type.startsWith('mockup_')) return false;
+            } else if (warn.type !== typeFilter) {
+              return false;
+            }
+          }
           if (textFilter && !warn.message.toLowerCase().includes(textFilter)) return false;
           return true;
         });
@@ -617,9 +635,33 @@
         for (let k = 0; k < fileWarn.warnings.length; k++) {
           const warn = fileWarn.warnings[k];
           const bgColor = warn.type === 'hardcoded_text' ? '#3d3800' : 
-                        warn.type === 'hardcoded_color' ? '#1a3d1a' : '#4d1a4d'; // Purple for duplicated logic
+                        warn.type === 'hardcoded_color' ? '#1a3d1a' : 
+                        warn.type === 'mockup_empty_callback' ? '#3d2200' :
+                        warn.type === 'mockup_fake_data' ? '#00333d' :
+                        warn.type === 'mockup_stub_widget' ? '#3d0000' :
+                        warn.type === 'mockup_unbound_input' ? '#3d3300' :
+                        warn.type === 'mockup_fake_delay' ? '#1a2d3d' :
+                        warn.type === 'mockup_todo_comment' ? '#2d2d00' :
+                        '#4d1a4d'; // Purple for duplicated logic
           const fgColor = warn.type === 'hardcoded_text' ? '#e2c08d' : 
-                        warn.type === 'hardcoded_color' ? '#73c991' : '#e699ff';
+                        warn.type === 'hardcoded_color' ? '#73c991' :
+                        warn.type === 'mockup_empty_callback' ? '#ffaa66' :
+                        warn.type === 'mockup_fake_data' ? '#66ddff' :
+                        warn.type === 'mockup_stub_widget' ? '#ff6666' :
+                        warn.type === 'mockup_unbound_input' ? '#ffd966' :
+                        warn.type === 'mockup_fake_delay' ? '#99ccff' :
+                        warn.type === 'mockup_todo_comment' ? '#e6e666' :
+                        '#e699ff';
+
+          // Mockup icon/prefix for mockup warnings
+          const mockupIcon = warn.type && warn.type.startsWith('mockup_') 
+            ? (warn.type === 'mockup_empty_callback' ? '🔇 ' :
+               warn.type === 'mockup_fake_data' ? '📦 ' :
+               warn.type === 'mockup_stub_widget' ? '🧩 ' :
+               warn.type === 'mockup_unbound_input' ? '🔗 ' :
+               warn.type === 'mockup_fake_delay' ? '⏳ ' :
+               warn.type === 'mockup_todo_comment' ? '📝 ' : '🎨 ')
+            : '';
 
           let cleanVal = warn.message;
           if (warn.message.indexOf('Hardcoded text: ') === 0) {
@@ -631,7 +673,7 @@
           }
 
           html += '<div class="warning-item analysis-warn-link" data-file="' + escapeHtml(fileWarn.filePath) + '" data-line="' + warn.line + '" style="width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; box-sizing: border-box;">';
-          html += '<span style="flex: 1; word-break: break-all; font-size: 11px;">' + escapeHtml(warn.message) + '</span>';
+          html += '<span style="flex: 1; word-break: break-all; font-size: 11px;">' + mockupIcon + escapeHtml(warn.message) + (warn.suggestion ? '<br/><span style="font-size: 10px; color: #888; font-style: italic;">💡 ' + escapeHtml(warn.suggestion) + '</span>' : '') + '</span>';
           html += '<div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">';
           html += '<button class="copy-btn copy-val-btn" title="Copy extracted value: ' + escapeHtml(cleanVal) + '" data-copy="' + escapeHtml(cleanVal) + '" style="padding: 2px 5px; font-size: 10px; background: rgba(0,122,204,0.3); color: #75beff; border: 1px solid rgba(0,122,204,0.5); font-weight: 600; cursor: pointer; border-radius: 4px;">📋 Copy</button>';
           html += '<span class="dep-badge" style="background: ' + bgColor + '; color: ' + fgColor + ';">L' + warn.line + '</span>';
@@ -644,7 +686,29 @@
 
     container.innerHTML = html;
 
-    // Show Copy All button if there are warnings
+    // Set copy data for header Copy All button (both translations & warnings filtered)
+    let allFilteredReportLines = [];
+    if (filteredTranslations.length > 0) {
+      for (let i = 0; i < filteredTranslations.length; i++) {
+        const mt = filteredTranslations[i];
+        allFilteredReportLines.push('[Missing Translations] ' + mt.filePath + ': ' + mt.missingKeys.join(', '));
+      }
+    }
+    if (filteredWarnings.length > 0) {
+      for (let w = 0; w < filteredWarnings.length; w++) {
+        const fileWarn = filteredWarnings[w];
+        for (let k = 0; k < fileWarn.warnings.length; k++) {
+          const warn = fileWarn.warnings[k];
+          allFilteredReportLines.push(fileWarn.filePath + ':L' + warn.line + ' - ' + warn.message);
+        }
+      }
+    }
+    const copyAllHeaderBtn = document.getElementById('copyAllAnalysis');
+    if (copyAllHeaderBtn) {
+      copyAllHeaderBtn.setAttribute('data-copy', allFilteredReportLines.join('\n'));
+    }
+
+    // Show Copy All button in warnings section if there are warnings
     const copyAllBtn = document.getElementById('copyAllAnalysisWarnings');
     if (copyAllBtn) {
       if (allWarningsText.length > 0) {

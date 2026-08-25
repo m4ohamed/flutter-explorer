@@ -1059,9 +1059,13 @@ server.registerTool(
 server.registerTool(
   "flutter_get_code_warnings",
   {
-    description: "Get code warnings (like hardcoded text, colors, and duplicated code/logic) from the Dart project with optional filtering",
+    description: "Get code warnings (like hardcoded text, colors, duplicated code/logic, and mockups) from the Dart project with optional filtering",
     inputSchema: z.object({
-      typeFilter: z.enum(["all", "text", "color", "duplicated_logic"]).optional().describe("Filter by warning type ('all', 'text', 'color', 'duplicated_logic')"),
+      typeFilter: z.enum([
+        "all", "text", "color", "duplicated_logic", "mockup",
+        "mockup_empty_callback", "mockup_fake_data", "mockup_stub_widget",
+        "mockup_unbound_input", "mockup_fake_delay", "mockup_todo_comment"
+      ]).optional().describe("Filter by warning type ('all', 'text', 'color', 'duplicated_logic', 'mockup', etc.)"),
       searchQuery: z.string().optional().describe("Search text inside the warning message (e.g. #FFFFFF or a word)"),
       fileQuery: z.string().optional().describe("Search text inside the file path (e.g. main.dart)"),
     }),
@@ -1081,9 +1085,14 @@ server.registerTool(
         let fileWarnings = index.dart[file].warnings;
         
         if (typeFilter && typeFilter !== 'all') {
-          const targetType = typeFilter === 'text' ? 'hardcoded_text' : 
-                             typeFilter === 'color' ? 'hardcoded_color' : 'duplicated_logic';
-          fileWarnings = fileWarnings.filter((w: any) => w.type === targetType);
+          if (typeFilter === 'mockup') {
+            fileWarnings = fileWarnings.filter((w: any) => w.type && w.type.startsWith('mockup_'));
+          } else {
+            const targetType = typeFilter === 'text' ? 'hardcoded_text' : 
+                               typeFilter === 'color' ? 'hardcoded_color' : 
+                               typeFilter === 'duplicated_logic' ? 'duplicated_logic' : typeFilter;
+            fileWarnings = fileWarnings.filter((w: any) => w.type === targetType);
+          }
         }
         
         if (sq) {
@@ -1096,6 +1105,80 @@ server.registerTool(
       }
     }
     return { content: [{ type: "text" as const, text: JSON.stringify(warnings, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "flutter_detect_mockups",
+  {
+    description: "Scan Flutter project to detect mockup, dummy, placeholder, and unimplemented UI code (empty callbacks, hardcoded mock data, stub widgets, unbound inputs, fake delays, TODO comments)",
+    inputSchema: z.object({
+      category: z.enum(["all", "callback", "data", "widget", "input", "async", "comment"]).optional().describe("Filter by mockup category ('all', 'callback', 'data', 'widget', 'input', 'async', 'comment')"),
+      filePath: z.string().optional().describe("Filter results for a specific file (e.g. lib/pages/home_page.dart)"),
+    }),
+  },
+  async ({ category, filePath }: { category?: string; filePath?: string }) => {
+    const index = await readIndex();
+    if (!index || !index.dart) return await handleIndexError();
+
+    const results: any[] = [];
+    const categoryCounts: Record<string, number> = {
+      callback: 0,
+      data: 0,
+      widget: 0,
+      input: 0,
+      async: 0,
+      comment: 0,
+    };
+    let totalCount = 0;
+
+    const fp = filePath?.toLowerCase();
+
+    for (const file in index.dart) {
+      if (fp && !file.toLowerCase().includes(fp)) continue;
+
+      const fileInfo = index.dart[file];
+      if (!fileInfo.warnings || fileInfo.warnings.length === 0) continue;
+
+      const mockups = fileInfo.warnings.filter((w: any) => {
+        if (!w.type || !w.type.startsWith('mockup_')) return false;
+        if (!category || category === 'all') return true;
+        return w.category === category || w.type === `mockup_${category}`;
+      });
+
+      if (mockups.length > 0) {
+        for (const m of mockups) {
+          const cat = m.category || 'widget';
+          if (categoryCounts[cat] !== undefined) {
+            categoryCounts[cat]++;
+          }
+          totalCount++;
+        }
+        results.push({
+          filePath: file,
+          count: mockups.length,
+          mockups: mockups.map((m: any) => ({
+            type: m.type,
+            category: m.category,
+            line: m.line,
+            message: m.message,
+            codeSnippet: m.codeSnippet,
+            suggestion: m.suggestion,
+          })),
+        });
+      }
+    }
+
+    const output = {
+      summary: {
+        totalFilesWithMockups: results.length,
+        totalMockupItems: totalCount,
+        breakdownByCategory: categoryCounts,
+      },
+      files: results,
+    };
+
+    return { content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }] };
   }
 );
 

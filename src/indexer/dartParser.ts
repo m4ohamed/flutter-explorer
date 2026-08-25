@@ -1,5 +1,6 @@
 import * as crypto from 'crypto';
 import { BaseParser } from './baseParser.js';
+import { MockupAnalyzer, MockupWarningType } from './mockupAnalyzer.js';
 export interface ClassInfo {
   name: string;
   type: string;
@@ -59,9 +60,17 @@ export interface MixinInfo {
   isPrivate: boolean;
 }
 export interface WarningInfo {
-  type: 'hardcoded_text' | 'hardcoded_color' | 'duplicated_logic';
+  type:
+    | 'hardcoded_text'
+    | 'hardcoded_color'
+    | 'duplicated_logic'
+    | MockupWarningType;
   message: string;
   line: number;
+  codeSnippet?: string;
+  suggestion?: string;
+  category?: 'callback' | 'data' | 'widget' | 'input' | 'async' | 'comment';
+  severity?: 'warning' | 'info';
 }
 export interface FunctionCall {
   name: string;
@@ -728,6 +737,18 @@ export class DartParser extends BaseParser<DartFileInfo> {
     this.analyzeUsages(maskedLines, result);
     this.extractFunctionCalls(maskedLines, result, lines);
     this.detectDuplicatedLogic(result);
+    const mockupWarnings = MockupAnalyzer.analyze(filePath, content, masked);
+    for (const mw of mockupWarnings) {
+      result.warnings.push({
+        type: mw.type,
+        message: mw.message,
+        line: mw.line,
+        codeSnippet: mw.codeSnippet,
+        suggestion: mw.suggestion,
+        category: mw.category,
+        severity: mw.severity,
+      });
+    }
     return result;
   }
   private extractEnumValues(lines: string[], startIndex: number, maskedLines?: string[]): string[] {

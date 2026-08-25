@@ -1022,7 +1022,8 @@ export class IndexManager {
           duplicateWarningsByFile.get(item.filePath)!.push({
             type: 'duplicated_logic',
             message: `Duplicated ${item.type} logic: matches ${otherNames}${extra}`,
-            line: item.line
+            line: item.line,
+            severity: 'warning',
           });
         }
       }
@@ -1035,6 +1036,25 @@ export class IndexManager {
       }
       if (fileWarnings.length > 0) {
         results.push({ filePath, warnings: fileWarnings });
+      }
+    }
+    return results;
+  }
+  getMockupWarnings(category?: string, severity?: 'warning' | 'info'): {
+    filePath: string;
+    warnings: import('./dartParser').WarningInfo[];
+  }[] {
+    const all = this.getWarnings();
+    const results: { filePath: string; warnings: import('./dartParser').WarningInfo[] }[] = [];
+    for (const item of all) {
+      const mockups = item.warnings.filter(w => {
+        if (!w.type.startsWith('mockup_')) return false;
+        if (severity && w.severity !== severity) return false;
+        if (!category || category === 'all') return true;
+        return w.category === category || w.type === category;
+      });
+      if (mockups.length > 0) {
+        results.push({ filePath: item.filePath, warnings: mockups });
       }
     }
     return results;
