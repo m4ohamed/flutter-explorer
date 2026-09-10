@@ -487,7 +487,7 @@ flutter_get_hints({
 \`\`\`typescript
 flutter_search_text({
   query: string,
-  isRegex?: boolean,           // (default: false)
+  isRegex?: boolean,           // (default: auto-detected for regex tokens like '|' or false)
   caseInsensitive?: boolean,   // (default: true)
   includeComments?: boolean,   // (default: true)
   includeStrings?: boolean,    // (default: true)

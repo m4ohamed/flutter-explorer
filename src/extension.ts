@@ -25,6 +25,7 @@ const COMMANDS = {
     SETUP_MCP: 'flutterExplorer.setupMcp',
     OPEN_GRAPH: 'flutterExplorer.openGraph',
     COMPARE_PARSERS: 'flutterExplorer.compareParsers',
+    INTL_GENERATE: 'flutterExplorer.intlGenerate',
     INTL_INIT: 'flutterExplorer.intlInitialize',
     INTL_ADD_LOCALE: 'flutterExplorer.intlAddLocale',
     INTL_REMOVE_LOCALE: 'flutterExplorer.intlRemoveLocale',
@@ -221,6 +222,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     // ─── Intl Generator Commands ───────────────────────────
+    context.subscriptions.push(
+        vscode.commands.registerCommand(COMMANDS.INTL_GENERATE, async () => {
+            await runIntlCommand(workspaceRoot, false, async (generator) => {
+                await vscode.window.withProgress(
+                    {
+                        location: vscode.ProgressLocation.Notification,
+                        title: 'Flutter Intl: Generating localization Dart files...',
+                        cancellable: false,
+                    },
+                    async () => {
+                        const generated = generator.generate();
+                        if (generated.length > 0) {
+                            vscode.window.showInformationMessage(`Flutter Intl: Generated ${generated.length} files successfully! (${generated.join(', ')})`);
+                            indexManager.buildFullIndex();
+                        } else {
+                            vscode.window.showWarningMessage('No ARB files found in lib/l10n or flutter_intl is not enabled.');
+                        }
+                    }
+                );
+            });
+        }),
+    );
+
     context.subscriptions.push(
         vscode.commands.registerCommand(COMMANDS.INTL_INIT, async () => {
             await runIntlCommand(workspaceRoot, false, async (generator) => {

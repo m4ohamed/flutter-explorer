@@ -2,7 +2,7 @@
     "name": "flutter-explorer",
     "displayName": "Flutter Explorer",
     "description": "Code Search, Widget Tree Viewer, Dependency Graph, and pubspec.yaml Analysis for Flutter projects",
-    "version": "1.1.8",
+    "version": "1.2.3",
     "publisher": "flutter-explorer",
     "icon": "resources/icon.png",
     "repository": {
@@ -79,6 +79,11 @@
                 "icon": "$(graph)"
             },
             {
+                "command": "flutterExplorer.intlGenerate",
+                "title": "Flutter Intl: Generate Localization Files",
+                "icon": "$(globe)"
+            },
+            {
                 "command": "flutterExplorer.intlInitialize",
                 "title": "Flutter Intl: Initialize"
             },
@@ -103,6 +108,11 @@
         ],
         "menus": {
             "view/title": [
+                {
+                    "command": "flutterExplorer.intlGenerate",
+                    "when": "view == flutterExplorer.sidebar",
+                    "group": "navigation@0"
+                },
                 {
                     "command": "flutterExplorer.compareParsers",
                     "when": "view == flutterExplorer.sidebar",

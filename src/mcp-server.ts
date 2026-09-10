@@ -1789,7 +1789,7 @@ server.registerTool(
     description: "Search for specific text, strings, or comments across all Dart files",
     inputSchema: z.object({
       query: z.string().describe("The text or regex to search for"),
-      isRegex: z.boolean().optional().describe("Whether to treat query as a regular expression (default: false)"),
+      isRegex: z.boolean().optional().describe("Whether to treat query as a regular expression (default: auto-detected if query contains regex tokens like '|' or true)"),
       caseInsensitive: z.boolean().optional().describe("Whether the search should be case-insensitive (default: true)"),
       includeComments: z.boolean().optional().describe("Whether to include comments in the search (default: true)"),
       includeStrings: z.boolean().optional().describe("Whether to include string literals in the search (default: true)"),

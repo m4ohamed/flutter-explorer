@@ -128,9 +128,9 @@ export class MockupAnalyzer {
         });
       }
 
-      // 3.5. Null/disabled callbacks (onPressed: null)
+      // 3.5. Null/disabled callbacks (onPressed: null) — skip if part of a ternary expression (_enabled ? action : null)
       const nullCbMatch = maskedLine.match(MockupAnalyzer.NULL_CALLBACK_REGEX);
-      if (nullCbMatch && !this.isInComment(maskedLine, nullCbMatch.index ?? 0)) {
+      if (nullCbMatch && !maskedLine.includes('?') && !this.isInComment(maskedLine, nullCbMatch.index ?? 0)) {
         const handlerName = nullCbMatch[1];
         warnings.push({
           type: 'mockup_null_callback',
@@ -165,31 +165,6 @@ export class MockupAnalyzer {
           line: lineNum,
           codeSnippet: trimmed,
           suggestion: 'Provide real implementation for this method.',
-        });
-      }
-
-      // 4.5. Empty Container() and SizedBox.shrink() as stub widgets
-      if (/\bContainer\s*\(\s*\)/.test(maskedLine) && !this.isInComment(maskedLine, maskedLine.indexOf('Container'))) {
-        warnings.push({
-          type: 'mockup_stub_widget',
-          category: 'widget',
-          severity: 'info',
-          message: 'Empty Container() may be a placeholder widget',
-          line: lineNum,
-          codeSnippet: trimmed,
-          suggestion: 'Replace empty Container() with meaningful widget or SizedBox if only spacing is needed.',
-        });
-      }
-
-      if (/\bSizedBox\.shrink\s*\(\s*\)/.test(maskedLine) && !this.isInComment(maskedLine, maskedLine.indexOf('SizedBox'))) {
-        warnings.push({
-          type: 'mockup_stub_widget',
-          category: 'widget',
-          severity: 'info',
-          message: 'SizedBox.shrink() may be a stub placeholder',
-          line: lineNum,
-          codeSnippet: trimmed,
-          suggestion: 'Verify SizedBox.shrink() is intentional and not a temporary stub.',
         });
       }
 
@@ -236,10 +211,12 @@ export class MockupAnalyzer {
         });
       }
 
-      // 8. Fake Delays (Future.delayed)
+      // 8. Fake Delays (Future.delayed) - ignore if part of a timer/cooldown loop
       if (/\bFuture\.delayed\s*\(/.test(maskedLine) && !this.isInComment(maskedLine, maskedLine.indexOf('Future.delayed'))) {
+        const contextLines = lines.slice(Math.max(0, i - 2), Math.min(lines.length, i + 3)).join('\n');
+        const isTimerOrCooldown = /timer|countdown|cooldown|resend|periodic|doWhile|while/i.test(contextLines);
         // Check if file seems to be a UI screen / widget rather than a test or animation controller
-        if (normalizedPath.includes('/pages/') || normalizedPath.includes('/screens/') || normalizedPath.includes('/widgets/') || normalizedPath.includes('/presentation/')) {
+        if (!isTimerOrCooldown && (normalizedPath.includes('/pages/') || normalizedPath.includes('/screens/') || normalizedPath.includes('/widgets/') || normalizedPath.includes('/presentation/'))) {
           warnings.push({
             type: 'mockup_fake_delay',
             category: 'async',

@@ -293,13 +293,25 @@ export class DirectSearch {
   /** Search for general text (strings, comments) in all source files */
   searchText(query: string, options: { isRegex?: boolean; caseInsensitive?: boolean; includeComments?: boolean; includeStrings?: boolean } = {}): TextSearchResult[] {
     const results: TextSearchResult[] = [];
-    const { isRegex = false, caseInsensitive = true, includeComments = true, includeStrings = true } = options;
+    const { isRegex, caseInsensitive = true, includeComments = true, includeStrings = true } = options;
     const sourceFiles = this.findSourceFiles();
+
+    // Auto-detect regex if isRegex is true or if query contains obvious regex tokens like '|', '\b', '.*'
+    const shouldTryRegex = isRegex === true || (isRegex !== false && /[|\\^$.*+?()[\]{}]/.test(query)) || query.includes('|');
 
     let regex: RegExp;
     try {
       const flags = caseInsensitive ? 'gi' : 'g';
-      regex = isRegex ? new RegExp(query, flags) : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
+      if (shouldTryRegex) {
+        try {
+          regex = new RegExp(query, flags);
+        } catch {
+          // If regex is invalid, fall back to literal escaping
+          regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
+        }
+      } else {
+        regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
+      }
     } catch (e) {
       return [];
     }

@@ -82,6 +82,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     vscode.commands.executeCommand('flutterExplorer.compareParsers');
                     break;
                 }
+                case 'generateIntl': {
+                    vscode.commands.executeCommand('flutterExplorer.intlGenerate');
+                    break;
+                }
                 case 'getStats': {
                     const stats = this.indexManager.getStats();
                     this.postMessage({ command: 'stats', data: stats });
@@ -158,27 +162,25 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       <button class="tab" data-tab="libraries" title="External Libraries">📚 Libraries</button>
       <button class="tab" data-tab="analysis" title="Analysis">⚠️ Analysis</button>
     </div>
-    <!-- Stats Bar -->
-    <div class="stats-bar" id="statsBar">Loading index...</div>
     <!-- Search Tab -->
     <div class="tab-content active" id="tab-search">
       <div class="search-box">
         <input type="text" id="searchInput" placeholder="Search classes, functions, widgets..." />
-        <div class="filter-row">
-          <button class="filter-btn active" data-filter="all">All</button>
-          <button class="filter-btn" data-filter="class">Classes</button>
-          <button class="filter-btn" data-filter="function">Functions</button>
-          <button class="filter-btn" data-filter="widget">Widgets</button>
-          <button class="filter-btn" data-filter="enum">Enums</button>
-          <button class="filter-btn" data-filter="mixin">Mixins</button>
-          <button class="filter-btn" data-filter="call">Calls</button>
-          <button class="filter-btn" data-filter="translation">Translations</button>
-          <button class="filter-btn" data-filter="extension">Extensions</button>
-          <button class="filter-btn" data-filter="typedef">Typedefs</button>
-          <button class="filter-btn" data-filter="variable">Variables</button>
-          <button class="filter-btn" data-filter="constructor">Ctors</button>
-          <button class="filter-btn" data-filter="property">Props</button>
-          <button class="filter-btn" data-filter="annotation">Annotations</button>
+        <div class="filter-row" id="filterRow">
+          <button class="filter-btn active" data-filter="all">📄 All</button>
+          <button class="filter-btn" data-filter="class">🔷 Classes</button>
+          <button class="filter-btn" data-filter="function">⚡ Functions</button>
+          <button class="filter-btn" data-filter="widget">🧩 Widgets</button>
+          <button class="filter-btn" data-filter="enum">🟣 Enums</button>
+          <button class="filter-btn" data-filter="mixin">🟠 Mixins</button>
+          <button class="filter-btn" data-filter="call">📞 Calls</button>
+          <button class="filter-btn" data-filter="translation">🌐 Translations</button>
+          <button class="filter-btn" data-filter="extension">🧬 Ext</button>
+          <button class="filter-btn" data-filter="typedef">🏷️ Type</button>
+          <button class="filter-btn" data-filter="variable">💎 Vars</button>
+          <button class="filter-btn" data-filter="constructor">🛠️ Ctors</button>
+          <button class="filter-btn" data-filter="property">🔑 Props</button>
+          <button class="filter-btn" data-filter="annotation">🏷️ Annos</button>
         </div>
       </div>
       <div class="results-list" id="searchResults"></div>
@@ -216,6 +218,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       <div class="pubspec-header">
         <span>Code Analysis</span>
         <div style="display: flex; gap: 4px;">
+          <button class="icon-btn" id="generateIntl" title="Regenerate Localization Files (l10n.dart & messages)">🌐</button>
           <button class="icon-btn" id="compareParsers" title="Compare Regex and SDK Parsers">⚖</button>
           <button class="icon-btn" id="copyAllAnalysis" title="Copy All Filtered Analysis Results">📋</button>
           <button class="icon-btn" id="refreshAnalysis" title="Refresh">⟳</button>

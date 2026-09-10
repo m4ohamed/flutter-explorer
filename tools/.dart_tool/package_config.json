@@ -51,7 +51,7 @@
     },
     {
       "name": "meta",
-      "rootUri": "file:///C:/Users/m4oha/AppData/Local/Pub/Cache/hosted/pub.dev/meta-1.18.2",
+      "rootUri": "file:///C:/Users/m4oha/AppData/Local/Pub/Cache/hosted/pub.dev/meta-1.19.0",
       "packageUri": "lib/",
       "languageVersion": "3.5"
     },
@@ -117,8 +117,8 @@
     }
   ],
   "generator": "pub",
-  "generatorVersion": "3.12.1",
+  "generatorVersion": "3.13.0",
   "flutterRoot": "file:///C:/Users/m4oha/dev/flutter",
-  "flutterVersion": "3.44.1",
+  "flutterVersion": "3.47.0",
   "pubCache": "file:///C:/Users/m4oha/AppData/Local/Pub/Cache"
 }

@@ -339,11 +339,11 @@ export class IntlGenerator {
       const meta = json[`@${key}`] as Record<string, any> | undefined;
       const description = meta?.description ?? '';
 
-      // Parse placeholders — respect @meta ordering if available
-      const placeholders = this.extractPlaceholders(value, meta);
-
       // Parse ICU format (plural, gender, select)
       const icu = this.parseIcu(value);
+
+      // Parse placeholders — respect @meta ordering and ICU structure
+      const placeholders = this.extractPlaceholders(value, meta, icu);
 
       const entry: ArbEntry = { key, value, description, placeholders, icu };
       entries.push(entry);
@@ -357,44 +357,49 @@ export class IntlGenerator {
    * Extract placeholders from value and metadata.
    * If @key.placeholders exists, use its key order (this overrides value order).
    */
-  private extractPlaceholders(value: string, meta?: Record<string, any>): ArbPlaceholder[] {
+  private extractPlaceholders(value: string, meta?: Record<string, any>, icu?: IcuSegment | null): ArbPlaceholder[] {
     const placeholderMeta = meta?.placeholders as Record<string, any> | undefined;
-
-    // If metadata defines placeholders, use that order
-    if (placeholderMeta && Object.keys(placeholderMeta).length > 0) {
-      return Object.entries(placeholderMeta).map(([name, info]) => ({
-        name,
-        type: this.normalizeDartType(info?.type ?? 'String'),
-        format: info?.format,
-        optionalParameters: info?.optionalParameters,
-        isCustomDateFormat: info?.isCustomDateFormat === 'true',
-      }));
-    }
-
-    // Otherwise, extract from {placeholder} patterns in value (excluding ICU)
     const placeholders: ArbPlaceholder[] = [];
     const seen = new Set<string>();
 
-    // Match simple {name} but NOT {name, plural/select/gender, ...}
+    // 1. If metadata defines placeholders, use that order first
+    if (placeholderMeta && Object.keys(placeholderMeta).length > 0) {
+      for (const [name, info] of Object.entries(placeholderMeta)) {
+        seen.add(name);
+        let type = this.normalizeDartType(info?.type ?? 'String');
+        if (icu && icu.variable === name && icu.type === 'plural') {
+          if (type !== 'int' && type !== 'num' && type !== 'double') {
+            type = 'num';
+          }
+        }
+        placeholders.push({
+          name,
+          type,
+          format: info?.format,
+          optionalParameters: info?.optionalParameters,
+          isCustomDateFormat: info?.isCustomDateFormat === 'true',
+        });
+      }
+    }
+
+    // If this is an ICU message, ensure the ICU variable is present and correctly typed
+    if (icu) {
+      if (!seen.has(icu.variable)) {
+        seen.add(icu.variable);
+        const type = icu.type === 'plural' ? 'num' : 'String';
+        placeholders.unshift({ name: icu.variable, type });
+      }
+      // For ICU messages, do not parse simple tokens inside cases as extra method arguments
+      return placeholders;
+    }
+
+    // 2. Also extract from {placeholder} patterns in value (for non-ICU messages)
     const simplePattern = /\{(\w+)\}/g;
     let m: RegExpExecArray | null;
 
     while ((m = simplePattern.exec(value)) !== null) {
       const name = m[1];
       if (seen.has(name)) continue;
-
-      // Check if this is an ICU pattern start (has comma after name)
-      const afterBrace = value.substring(m.index! + 1);
-      const commaCheck = afterBrace.match(/^(\w+)\s*,\s*(plural|select|gender)/);
-      if (commaCheck) {
-        // This is an ICU variable, still add as placeholder with appropriate type
-        seen.add(name);
-        const icuType = commaCheck[2];
-        const type = icuType === 'plural' ? 'num' : 'String';
-        placeholders.push({ name, type });
-        continue;
-      }
-
       seen.add(name);
       placeholders.push({ name, type: 'String' });
     }
@@ -570,7 +575,7 @@ export class IntlGenerator {
         // Parameterized method
         const params = entry.placeholders.map(p => `${p.type} ${p.name}`).join(', ');
         const argNames = entry.placeholders.map(p => p.name).join(', ');
-        const dartValue = entry.value.replace(/\{(\w+)\}/g, (_, n) => `\$${n}`);
+        const dartValue = entry.value.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
 
         lines.push(`  String ${entry.key}(${params}) {`);
         lines.push('    return Intl.message(');
@@ -628,13 +633,16 @@ export class IntlGenerator {
   private generateIcuMember(lines: string[], entry: ArbEntry): void {
     const icu = entry.icu!;
     const placeholder = entry.placeholders.find(p => p.name === icu.variable);
-    const paramType = placeholder?.type ?? (icu.type === 'plural' ? 'num' : 'String');
-    const allParams = entry.placeholders.length > 0
-      ? entry.placeholders.map(p => `${p.type} ${p.name}`).join(', ')
-      : `${paramType} ${icu.variable}`;
-    const allArgNames = entry.placeholders.length > 0
-      ? entry.placeholders.map(p => p.name).join(', ')
-      : icu.variable;
+    const paramType = icu.type === 'plural'
+      ? (placeholder?.type === 'int' || placeholder?.type === 'double' || placeholder?.type === 'num' ? placeholder.type : 'num')
+      : (placeholder?.type ?? 'String');
+
+    const otherPlaceholders = entry.placeholders.filter(p => p.name !== icu.variable);
+    const paramsList = [`${paramType} ${icu.variable}`, ...otherPlaceholders.map(p => `${p.type} ${p.name}`)];
+    const argsList = [icu.variable, ...otherPlaceholders.map(p => p.name)];
+
+    const allParams = paramsList.join(', ');
+    const allArgNames = argsList.join(', ');
 
     lines.push(`  String ${entry.key}(${allParams}) {`);
 
@@ -642,8 +650,9 @@ export class IntlGenerator {
       lines.push(`    return Intl.plural(`);
       lines.push(`      ${icu.variable},`);
       for (const [caseName, caseValue] of icu.cases) {
-        const dartVal = caseValue.replace(/\{(\w+)\}/g, (_, n) => `\$${n}`);
-        lines.push(`      ${caseName}: '${this.escSQ(dartVal)}',`);
+        const dartVal = caseValue.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
+        const mappedCase = this.mapPluralCaseName(caseName);
+        lines.push(`      ${mappedCase}: '${this.escSQ(dartVal)}',`);
       }
       lines.push(`      name: '${entry.key}',`);
       lines.push(`      desc: '${this.escSQ(entry.description)}',`);
@@ -653,7 +662,7 @@ export class IntlGenerator {
       lines.push(`    return Intl.gender(`);
       lines.push(`      ${icu.variable},`);
       for (const [caseName, caseValue] of icu.cases) {
-        const dartVal = caseValue.replace(/\{(\w+)\}/g, (_, n) => `\$${n}`);
+        const dartVal = caseValue.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
         lines.push(`      ${caseName}: '${this.escSQ(dartVal)}',`);
       }
       lines.push(`      name: '${entry.key}',`);
@@ -666,7 +675,7 @@ export class IntlGenerator {
       lines.push(`      ${icu.variable},`);
       lines.push('      {');
       for (const [caseName, caseValue] of icu.cases) {
-        const dartVal = caseValue.replace(/\{(\w+)\}/g, (_, n) => `\$${n}`);
+        const dartVal = caseValue.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
         lines.push(`        '${caseName}': '${this.escSQ(dartVal)}',`);
       }
       lines.push('      },');
@@ -677,6 +686,16 @@ export class IntlGenerator {
     }
 
     lines.push('  }');
+  }
+
+  /** Map ICU plural case identifiers (=0, =1, =2) to valid Dart named parameter identifiers */
+  private mapPluralCaseName(caseName: string): string {
+    switch (caseName) {
+      case '=0': return 'zero';
+      case '=1': return 'one';
+      case '=2': return 'two';
+      default: return caseName;
+    }
   }
 
   // ── Generate messages_XX.dart ─────────────────────────────────────────────
@@ -732,13 +751,18 @@ export class IntlGenerator {
         const paramNames = mainEntry.placeholders.map(p => p.name).join(', ') || icu.variable;
 
         if (icu.type === 'plural') {
+          const otherPlaceholders = mainEntry.placeholders.filter(p => p.name !== icu.variable);
+          const paramNames = [icu.variable, ...otherPlaceholders.map(p => p.name)].join(', ');
           const cases: string[] = [];
           for (const [cn, cv] of localIcu.cases) {
             const dartVal = cv.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
-            cases.push(`${cn}: '${this.escSQ(dartVal)}'`);
+            const mappedCase = this.mapPluralCaseName(cn);
+            cases.push(`${mappedCase}: '${this.escSQ(dartVal)}'`);
           }
           lines.push(`  static String m${i}(${paramNames}) => "\${Intl.plural(${icu.variable}, ${cases.join(', ')})}";`);
         } else if (icu.type === 'gender') {
+          const otherPlaceholders = mainEntry.placeholders.filter(p => p.name !== icu.variable);
+          const paramNames = [icu.variable, ...otherPlaceholders.map(p => p.name)].join(', ');
           const cases: string[] = [];
           for (const [cn, cv] of localIcu.cases) {
             const dartVal = cv.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
@@ -747,6 +771,8 @@ export class IntlGenerator {
           lines.push(`  static String m${i}(${paramNames}) => "\${Intl.gender(${icu.variable}, ${cases.join(', ')})}";`);
         } else {
           // select
+          const otherPlaceholders = mainEntry.placeholders.filter(p => p.name !== icu.variable);
+          const paramNames = [icu.variable, ...otherPlaceholders.map(p => p.name)].join(', ');
           const cases: string[] = [];
           for (const [cn, cv] of localIcu.cases) {
             const dartVal = cv.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);

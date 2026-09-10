@@ -189,21 +189,26 @@ body {
 }
 
 .filter-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     padding: 3px 8px;
     border: 1px solid rgba(255, 255, 255, 0.08);
     background: rgba(255, 255, 255, 0.04);
     color: var(--vscode-descriptionForeground, #aaa);
-    border-radius: 10px;
+    border-radius: 12px;
     cursor: pointer;
     font-size: 10.5px;
     font-weight: 500;
-    transition: all 0.15s ease;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    white-space: nowrap;
 }
 
 .filter-btn:hover {
     background: rgba(255, 255, 255, 0.1);
     color: var(--vscode-foreground, #fff);
     border-color: rgba(255, 255, 255, 0.2);
+    transform: translateY(-1px);
 }
 
 .filter-btn.active {
@@ -212,6 +217,20 @@ body {
     border-color: rgba(255, 255, 255, 0.25);
     font-weight: 600;
     box-shadow: 0 2px 8px rgba(0, 122, 204, 0.4);
+}
+
+.filter-count {
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--vscode-foreground, #e0e0e0);
+}
+
+.filter-btn.active .filter-count {
+    background: rgba(255, 255, 255, 0.25);
+    color: #ffffff;
 }
 
 /* ─── Search Results List ─────────────────────────────── */

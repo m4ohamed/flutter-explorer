@@ -105,6 +105,13 @@
     });
   }
 
+  const generateIntl = document.getElementById('generateIntl');
+  if (generateIntl) {
+    generateIntl.addEventListener('click', function () {
+      vscode.postMessage({ command: 'generateIntl' });
+    });
+  }
+
   const compareParsers = document.getElementById('compareParsers');
   if (compareParsers) {
     compareParsers.addEventListener('click', function () {
@@ -554,7 +561,10 @@
 
     // Missing Translations
     html += '<div class="pubspec-section">';
-    html += '<div class="pubspec-section-title">🌐 Missing Translations</div>';
+    html += '<div class="pubspec-section-title" style="display: flex; justify-content: space-between; align-items: center;">';
+    html += '<span>🌐 Missing Translations</span>';
+    html += '<button class="icon-btn" id="regenIntlBtn" title="Regenerate localization Dart files (l10n.dart & messages)" style="padding: 2px 6px; font-size: 10px; cursor: pointer;">⚡ Generate L10n</button>';
+    html += '</div>';
     
     const filteredTranslations = [];
     if (data.missingTranslations) {
@@ -751,6 +761,13 @@
         copyToClipboard(text, this);
       });
     }
+
+    const regenBtn = document.getElementById('regenIntlBtn');
+    if (regenBtn) {
+      regenBtn.addEventListener('click', function () {
+        vscode.postMessage({ command: 'generateIntl' });
+      });
+    }
   }
 
   function renderPackages(data) {
@@ -776,44 +793,48 @@
     container.innerHTML = html;
   }
 
+  const filterDefinitions = [
+    { filter: 'all', icon: '📄', label: 'All', countKey: 'files' },
+    { filter: 'class', icon: '🔷', label: 'Classes', countKey: 'classes' },
+    { filter: 'function', icon: '⚡', label: 'Functions', countKey: 'functions' },
+    { filter: 'widget', icon: '🧩', label: 'Widgets', countKey: 'widgets' },
+    { filter: 'enum', icon: '🟣', label: 'Enums', countKey: 'enums' },
+    { filter: 'mixin', icon: '🟠', label: 'Mixins', countKey: 'mixins' },
+    { filter: 'extension', icon: '🧬', label: 'Ext', countKey: 'extensions' },
+    { filter: 'typedef', icon: '🏷️', label: 'Type', countKey: 'typedefs' },
+    { filter: 'variable', icon: '💎', label: 'Vars', countKey: 'variables' },
+    { filter: 'constructor', icon: '🛠️', label: 'Ctors', countKey: 'constructors' },
+    { filter: 'property', icon: '🔑', label: 'Props', countKey: 'properties' },
+    { filter: 'annotation', icon: '🏷️', label: 'Annos', countKey: 'annotations' },
+    { filter: 'call', icon: '📞', label: 'Calls', countKey: 'calls' },
+    { filter: 'translation', icon: '🌐', label: 'Translations', countKey: 'translations' },
+  ];
+
   function renderStats(stats) {
-    const statsBar = document.getElementById('statsBar');
-    if (!statsBar) { return; }
-    statsBar.innerHTML =
-      '<span class="stat-item" data-filter="all">📄 <span class="stat-value">' + stats.files + '</span> files</span>' +
-      '<span class="stat-item" data-filter="class">🔷 <span class="stat-value">' + stats.classes + '</span> classes</span>' +
-      '<span class="stat-item" data-filter="function">⚡ <span class="stat-value">' + stats.functions + '</span> functions</span>' +
-      '<span class="stat-item" data-filter="widget">🧩 <span class="stat-value">' + stats.widgets + '</span> widgets</span>' +
-      '<span class="stat-item" data-filter="enum">🟣 <span class="stat-value">' + (stats.enums || 0) + '</span> enums</span>' +
-      '<span class="stat-item" data-filter="mixin">🟠 <span class="stat-value">' + (stats.mixins || 0) + '</span> mixins</span>' +
-      '<span class="stat-item" data-filter="extension">🧬 <span class="stat-value">' + (stats.extensions || 0) + '</span> ext</span>' +
-      '<span class="stat-item" data-filter="typedef">🏷️ <span class="stat-value">' + (stats.typedefs || 0) + '</span> type</span>' +
-      '<span class="stat-item" data-filter="variable">💎 <span class="stat-value">' + (stats.variables || 0) + '</span> vars</span>' +
-      '<span class="stat-item" data-filter="constructor">🛠️ <span class="stat-value">' + (stats.constructors || 0) + '</span> ctors</span>' +
-      '<span class="stat-item" data-filter="property">🔑 <span class="stat-value">' + (stats.properties || 0) + '</span> props</span>' +
-      '<span class="stat-item" data-filter="annotation">🏷️ <span class="stat-value">' + (stats.annotations || 0) + '</span> annos</span>' +
-      '<span class="stat-item" data-filter="call">📞 <span class="stat-value">' + (stats.calls || 0) + '</span> calls</span>' +
-      '<span class="stat-item" data-filter="translation">🌐 <span class="stat-value">' + (stats.translations || 0) + '</span> translations</span>';
+    const filterRow = document.getElementById('filterRow');
+    if (!filterRow || !stats) { return; }
 
-    statsBar.querySelectorAll('.stat-item').forEach(function (item) {
-      item.addEventListener('click', function () {
-        const filter = this.getAttribute('data-filter');
+    let html = '';
+    for (let i = 0; i < filterDefinitions.length; i++) {
+      const def = filterDefinitions[i];
+      const count = stats[def.countKey] !== undefined ? stats[def.countKey] : 0;
+      const isActive = currentFilter === def.filter || (def.filter === 'all' && (!currentFilter || currentFilter === 'all'));
+      html += '<button class="filter-btn ' + (isActive ? 'active' : '') + '" data-filter="' + def.filter + '">' +
+              def.icon + ' ' + def.label + ' <span class="filter-count">' + count + '</span>' +
+              '</button>';
+    }
+    filterRow.innerHTML = html;
 
-        // Switch to search tab
-        document.querySelector('.tab[data-tab="search"]')?.click();
+    filterRow.querySelectorAll('.filter-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        filterRow.querySelectorAll('.filter-btn').forEach(function (b) { b.classList.remove('active'); });
+        this.classList.add('active');
+        currentFilter = this.getAttribute('data-filter');
 
-        // Update filter buttons
-        document.querySelectorAll('.filter-btn').forEach(function (b) { b.classList.remove('active'); });
-        const filterBtn = document.querySelector('.filter-btn[data-filter="' + filter + '"]');
-        if (filterBtn) filterBtn.classList.add('active');
-        currentFilter = filter;
-
-        // Clear search input and trigger search
         const searchInput = document.getElementById('searchInput');
-        if (searchInput) searchInput.value = '';
-
-        const appliedFilter = filter === 'all' ? undefined : filter;
-        vscode.postMessage({ command: 'search', query: '', filter: appliedFilter });
+        const query = searchInput ? searchInput.value : '';
+        const filter = currentFilter === 'all' ? undefined : currentFilter;
+        vscode.postMessage({ command: 'search', query: query, filter: filter });
       });
     });
   }
