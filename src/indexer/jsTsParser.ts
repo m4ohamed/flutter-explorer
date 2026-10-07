@@ -1,84 +1,92 @@
-import {
+import * as ts from 'typescript';
+import * as crypto from 'crypto';
+import type {
   DartFileInfo,
   ClassInfo,
   FunctionInfo,
   FunctionCall,
   ImportInfo,
-  EnumInfo,
-  MixinInfo,
-  WarningInfo,
-  ExtensionInfo,
-  TypedefInfo,
-  VariableInfo,
-  ConstructorInfo,
   PropertyInfo,
-  AnnotationInfo,
-  ExtensionTypeInfo,
   WidgetInfo,
-  ClassUsage,
-  FunctionUsage,
-  ExtensionUsage,
-  TypedefUsage,
-  VariableUsage,
-  ConstructorUsage,
-  PropertyUsage,
-  AnnotationUsage,
-  EnumUsage,
-  MixinUsage
+  WarningInfo,
 } from './dartParser';
-
 import { BaseParser } from './baseParser';
 import { MockupAnalyzer } from './mockupAnalyzer';
 
+/**
+ * JavaScript / TypeScript parser that maps the syntax tree to the DartFileInfo structure.
+ *
+ * The previous implementation was a line-by-line regex scanner that ran on text in which every
+ * quoted string (and every JSX tag) had been blanked out. Consequences that are fixed here:
+ *   - `import x from 'y'` was never recognised (the module path had been blanked), so every file
+ *     had zero imports and cycle detection / impact analysis / the dependency graph were empty;
+ *   - methods whose parameter list contained parentheses (`start = process.cwd()`) were dropped
+ *     and their body leaked into the class as bogus "properties";
+ *   - methods starting with `get`/`set` lost that prefix (`getDataDir` -> `DataDir`);
+ *   - JSX tags were blanked, so the widget tree of every .tsx/.jsx file was empty;
+ *   - hard coded text/colour warnings fired on every string of every backend file.
+ */
+
+const RESERVED_CALLS = new Set([
+  'print', 'require', 'import', 'setState', 'useState', 'useEffect',
+  'useContext', 'useReducer', 'useCallback', 'useMemo', 'useRef',
+  'useImperativeHandle', 'useLayoutEffect', 'useDebugValue', 'super',
+]);
+
+const TEXT_ATTRIBUTES = new Set([
+  'placeholder', 'title', 'alt', 'label', 'aria-label', 'aria-placeholder', 'helperText', 'description', 'tooltip',
+]);
+
+const COLOR_LITERAL = /^(?:#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|(?:rgb|rgba|hsl|hsla)\([^)]*\))$/;
+const COMPONENT_WRAPPERS = /^(?:React\.)?(?:memo|forwardRef|observer)$/;
+
+function collapse(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function modifiersOf(node: ts.Node): readonly ts.Modifier[] {
+  return ts.canHaveModifiers(node) ? ts.getModifiers(node) ?? [] : [];
+}
+
+function decoratorsOf(node: ts.Node): readonly ts.Decorator[] {
+  return ts.canHaveDecorators(node) ? ts.getDecorators(node) ?? [] : [];
+}
+
+function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
+  return modifiersOf(node).some(m => m.kind === kind);
+}
+
+function unwrap(expr: ts.Expression): ts.Expression {
+  let current = expr;
+  for (;;) {
+    if (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) ||
+        ts.isNonNullExpression(current) || ts.isTypeAssertionExpression(current) ||
+        ts.isSatisfiesExpression(current)) {
+      current = current.expression;
+    } else {
+      return current;
+    }
+  }
+}
+
+function withEnd<T extends object>(obj: T, lineEnd: number): T {
+  return Object.assign(obj, { lineEnd });
+}
+
+type FunctionLikeNode = ts.ArrowFunction | ts.FunctionExpression;
+
 export class JsTsParser extends BaseParser<DartFileInfo> {
-  /**
-   * A simple regex-based parser for JavaScript and TypeScript files.
-   * Maps TS/JS syntax to DartFileInfo structure.
-   */
   parse(filePath: string, content: string): DartFileInfo {
     try {
-      return this._parseInternal(filePath, content);
+      return this.parseInternal(filePath, content);
     } catch (err) {
       console.error(`[JsTsParser] Failed to parse ${filePath}:`, err);
-      return {
-        filePath,
-        classes: [],
-        functions: [],
-        functionCalls: [],
-        imports: [],
-        exports: [],
-        widgets: [],
-        enums: [],
-        mixins: [],
-        warnings: [],
-        lastModified: Date.now(),
-        classUsages: [],
-        functionUsages: [],
-        extensionUsages: [],
-        typedefUsages: [],
-        variableUsages: [],
-        constructorUsages: [],
-        propertyUsages: [],
-        annotationUsages: [],
-        enumUsages: [],
-        mixinUsages: [],
-        extensions: [],
-        typedefs: [],
-        variables: [],
-        constructors: [],
-        properties: [],
-        annotations: [],
-        extensionTypes: [],
-      };
+      return this.emptyInfo(filePath);
     }
   }
 
-  private _parseInternal(filePath: string, content: string): DartFileInfo {
-    const lines = content.split('\n');
-    const masked = this.preprocessSource(content);
-    const maskedLines = masked.split('\n');
-
-    const result: DartFileInfo = {
+  private emptyInfo(filePath: string): DartFileInfo {
+    return {
       filePath,
       classes: [],
       functions: [],
@@ -108,597 +116,24 @@ export class JsTsParser extends BaseParser<DartFileInfo> {
       annotations: [],
       extensionTypes: [],
     };
+  }
 
-    // Regex patterns
-    const P = {
-      importes6: /import\s+(?:[\w*\s{},]*\s+from\s+)?['"]([^'"]+)['"]/,
-      importCommonjs: /(?:const|let|var)\s+[\w*\s{},]+\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/,
-      hardText: /['"]([^'"]*?[a-zA-Z]{3,}[^'"]*?)['"]/, // strings with at least 3 letters
-      hardColor: /#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})|rgba?\([^)]+\)/,
-    };
+  private parseInternal(filePath: string, content: string): DartFileInfo {
+    const lower = filePath.toLowerCase();
+    const result = this.emptyInfo(filePath);
+    const masked = this.preprocessSource(content);
 
-    let braceDepth = 0;
-    interface ScopeFrame {
-      type: 'class' | 'function';
-      name: string;
-      braceDepth: number;
-      ref: any;
-    }
-    const scopeStack: ScopeFrame[] = [];
-
-    const currentClass = (): string | null => {
-      for (let i = scopeStack.length - 1; i >= 0; i--) {
-        if (scopeStack[i].type === 'class') return scopeStack[i].name;
-      }
-      return null;
-    };
-
-    const syncBraces = (lineIdx: number, count: number = 1) => {
-      for (let k = 0; k < count; k++) {
-        const idx = lineIdx + k;
-        if (idx >= maskedLines.length) break;
-        const mLine = maskedLines[idx];
-        for (const ch of mLine) {
-          if (ch === '{') {
-            braceDepth++;
-          } else if (ch === '}') {
-            braceDepth--;
-            while (scopeStack.length > 0 && scopeStack[scopeStack.length - 1].braceDepth >= braceDepth) {
-              const popped = scopeStack.pop();
-              if (popped && popped.ref) {
-                popped.ref.lineEnd = idx + 1;
-              }
-            }
-          }
-        }
-      }
-    };
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const maskedLine = maskedLines[i];
-      const trimmed = maskedLine.trim();
-      const lineNum = i + 1;
-
-      if (trimmed === '' || trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) {
-        continue;
-      }
-
-      // Sync braces
-      syncBraces(i);
-
-      // Markdown Headers (Outline)
-      if (filePath.endsWith('.md')) {
-        const mdMatch = line.match(/^(#{1,6})\s+(.*)/);
-        if (mdMatch) {
-          result.classes.push({
-            name: mdMatch[2].trim(),
-            type: `H${mdMatch[1].length}`,
-            extendsClass: null,
-            implements: [],
-            mixins: [],
-            isAbstract: false,
-            isPrivate: false,
-            methods: [],
-            properties: [],
-            line: lineNum,
-            lineEnd: lineNum
-          });
-          continue;
-        }
-      }
-
-      // CSS / SCSS Classes and IDs (Outline)
-      if (filePath.endsWith('.css') || filePath.endsWith('.scss') || filePath.endsWith('.less')) {
-        const cssMatch = line.match(/^([.#][a-zA-Z0-9_-]+)(?:\s*\{|[^a-zA-Z0-9_-])/);
-        if (cssMatch && !line.includes(':')) {
-          result.classes.push({
-            name: cssMatch[1],
-            type: cssMatch[1].startsWith('.') ? 'class' : 'id',
-            extendsClass: null,
-            implements: [],
-            mixins: [],
-            isAbstract: false,
-            isPrivate: false,
-            methods: [],
-            properties: [],
-            line: lineNum,
-            lineEnd: lineNum
-          });
-          continue;
-        }
-      }
-
-      // JSON Keys (Outline)
-      if (filePath.endsWith('.json')) {
-        const jsonMatch = line.match(/^\s*"([^"]+)"\s*:/);
-        if (jsonMatch && braceDepth <= 1) { // Only top-level or 2nd-level keys
-          result.classes.push({
-            name: jsonMatch[1],
-            type: 'key',
-            extendsClass: null,
-            implements: [],
-            mixins: [],
-            isAbstract: false,
-            isPrivate: false,
-            methods: [],
-            properties: [],
-            line: lineNum,
-            lineEnd: lineNum
-          });
-          continue;
-        }
-      }
-
-
-      // 1. Imports
-      const rawLine = lines[i].trim();
-      const impES6 = (trimmed.startsWith('import ') || rawLine.startsWith('import ')) ? rawLine.match(P.importes6) : null;
-      if (impES6) {
-        result.imports.push({
-          path: impES6[1],
-          alias: null,
-          showNames: [],
-          hideNames: [],
-          line: lineNum
-        });
-        continue;
-      }
-      if (/^import\s*\{?/.test(rawLine) && !rawLine.includes(' from ')) {
-        for (let j = i + 1; j < Math.min(lines.length, i + 50); j++) {
-          const nextRaw = lines[j].trim();
-          const fromMatch = nextRaw.match(/(?:from\s+)?['"]([^'"]+)['"]/);
-          if (nextRaw.includes('from') && fromMatch) {
-            result.imports.push({
-              path: fromMatch[1],
-              alias: null,
-              showNames: [],
-              hideNames: [],
-              line: lineNum
-            });
-            break;
-          }
-          if (nextRaw.includes(';')) break;
-        }
-      }
-      const impCJS = (trimmed.includes('require(') || rawLine.includes('require(')) ? rawLine.match(P.importCommonjs) : null;
-      if (impCJS) {
-        result.imports.push({
-          path: impCJS[1],
-          alias: null,
-          showNames: [],
-          hideNames: [],
-          line: lineNum
-        });
-        continue;
-      }
-
-      // 1.5. Exports / Re-exports
-      const expMatch = (trimmed.startsWith('export ') || rawLine.startsWith('export ')) ? rawLine.match(/^export\s+(?:[\s\S]*?\s+from\s+)?['"]([^'"]+)['"]/) : null;
-      if (expMatch) {
-        result.exports.push(expMatch[1]);
-        continue;
-      }
-      if (/^export\s*\{/.test(rawLine) && !rawLine.includes(' from ')) {
-        for (let j = i + 1; j < Math.min(lines.length, i + 30); j++) {
-          const nextRaw = lines[j].trim();
-          const fromMatch = nextRaw.match(/(?:from\s+)?['"]([^'"]+)['"]/);
-          if (nextRaw.includes('from') && fromMatch) {
-            result.exports.push(fromMatch[1]);
-            break;
-          }
-          if (nextRaw.includes(';')) break;
-        }
-      }
-
-      // 2. Warnings (Hardcoded text & colors)
-      const textMatch = line.match(/(['"])(.*?)\1/);
-      if (textMatch) {
-        const matchedStr = textMatch[2].trim();
-        if (matchedStr.length > 2 && 
-            matchedStr.includes(' ') && 
-            !/^[a-z]+[A-Z][a-zA-Z]*$/.test(matchedStr) && 
-            !matchedStr.includes('.js') && !matchedStr.includes('.ts') &&
-            !['import', 'require', 'const', 'let', 'var', 'return'].includes(matchedStr)) {
-          if (!trimmed.includes('console.log') && !trimmed.includes('t(') && !trimmed.includes('i18n')) {
-            result.warnings.push({
-              type: 'hardcoded_text',
-              message: `Hardcoded text: ${matchedStr}`,
-              line: lineNum
-            });
-          }
-        }
-      }
-      const colorMatch = maskedLine.match(P.hardColor);
-      if (colorMatch && !filePath.toLowerCase().includes('theme') && !filePath.toLowerCase().includes('color')) {
-        result.warnings.push({
-          type: 'hardcoded_color',
-          message: `Hardcoded color: ${colorMatch[0]}`,
-          line: lineNum
-        });
-      }
-
-      // 2.5. Decorators → Annotations
-      const annotationMatch = trimmed.match(/^@(\w+)/);
-      if (annotationMatch) {
-        const nextLines = maskedLines.slice(i + 1, i + 5).map(l => l.trim()).filter(l => l.length > 0 && !l.startsWith('//') && !l.startsWith('/*') && !l.startsWith('*'));
-        const nextMasked = nextLines[0] || '';
-        let target = 'unknown';
-        let targetName = '';
-        if (nextMasked.match(/^(class|enum)\s+(\w+)/)) {
-          target = 'class';
-          targetName = nextMasked.match(/^(class|enum)\s+(\w+)/)?.[2] || '';
-        } else if (nextMasked.match(/^(?:async\s+)?(\w+)\s*\(/)) {
-          target = 'function';
-          targetName = nextMasked.match(/^(?:async\s+)?(\w+)\s*\(/)?.[1] || '';
-        } else if (nextMasked.match(/^(\w+)\s*(?::|=)/)) {
-          target = 'field';
-          targetName = nextMasked.match(/^(\w+)\s*(?::|=)/)?.[1] || '';
-        }
-        result.annotations.push({ name: annotationMatch[1], target, targetName, line: lineNum });
-      }
-
-      // 3. Enums
-      const enm = trimmed.match(/^(?:export\s+)?enum\s+(\w+)/);
-      if (enm) {
-        result.enums.push({
-          name: enm[1],
-          values: this.extractEnumValues(lines, i, maskedLines),
-          line: lineNum,
-          isPrivate: enm[1].startsWith('_')
-        });
-        continue;
-      }
-
-      // 4. Interfaces (mapped to mixins)
-      const interf = trimmed.match(/^(?:export\s+)?interface\s+(\w+)/);
-      if (interf) {
-        result.mixins.push({
-          name: interf[1],
-          on: null,
-          line: lineNum,
-          isPrivate: interf[1].startsWith('_')
-        });
-        continue;
-      }
-
-      // 5. Types (mapped to typedefs)
-      const typ = trimmed.match(/^(?:export\s+)?type\s+(\w+)\s*=/);
-      if (typ) {
-        result.typedefs.push({
-          name: typ[1],
-          signature: '',
-          line: lineNum,
-          isPrivate: typ[1].startsWith('_')
-        });
-        continue;
-      }
-
-      // 6. Classes
-      const lookahead = maskedLines.slice(i, i + 5).join('\n');
-      const cls = lookahead.match(/^(?:export\s+)?(?:abstract\s+)?class\s+(\w+)(?:<[^>]*>)?(?:\s+extends\s+([\w.]+)(?:<[^>]*>)?)?/);
-      if (cls && !cls[0].includes('(') && !cls[0].includes(')')) {
-        const name = cls[1];
-        const extendsClass = cls[2] || null;
-
-        // Heuristic: If it extends React Component/PureComponent, treat as a Widget/Component
-        let type: ClassInfo['type'] = 'plain';
-        if (extendsClass && (extendsClass.includes('Component') || extendsClass.includes('PureComponent'))) {
-          type = 'StatelessWidget';
-        }
-
-        const newCls: ClassInfo = {
-          name,
-          type,
-          line: lineNum,
-          extendsClass,
-          mixins: [],
-          implements: [],
-          isAbstract: lookahead.includes('abstract'),
-          isPrivate: name.startsWith('_'),
-          methods: [],
-          properties: []
-        };
-
-        result.classes.push(newCls);
-        scopeStack.push({ type: 'class', name, braceDepth: braceDepth - 1, ref: newCls });
-
-        if (type !== 'plain') {
-          result.widgets.push({
-            name,
-            line: lineNum,
-            children: [],
-            properties: []
-          });
-        }
-
-        const headerLines = cls[0].split('\n').length;
-        syncBraces(i, headerLines);
-        i += headerLines - 1;
-        continue;
-      }
-
-      // 7. Class Members (Constructors, Methods, Properties)
-      const cc = currentClass();
-      if (cc) {
-        // Constructor
-        if (trimmed.startsWith('constructor') || trimmed.match(/^\s*(?:public|private|protected)?\s*constructor\s*\(/)) {
-          const paramsMatch = trimmed.match(/constructor\s*\(([^)]*)\)/);
-          const params = paramsMatch ? paramsMatch[1].trim() : '';
-
-          result.constructors.push({
-            name: 'constructor',
-            className: cc,
-            isFactory: false,
-            isConst: false,
-            params,
-            line: lineNum
-          });
-
-          // Check for TypeScript constructor shorthand properties
-          if (params) {
-            const paramList = params.split(',');
-            for (const param of paramList) {
-              const shorthandMatch = param.trim().match(/^\s*(public|private|protected|readonly)\s+(?:readonly\s+)?(\w+)\s*(?:\?|!)?\s*(?::\s*([^=]+))?/);
-              if (shorthandMatch) {
-                const modifier = shorthandMatch[1];
-                const propName = shorthandMatch[2];
-                const propType = shorthandMatch[3] ? shorthandMatch[3].trim() : 'any';
-
-                const prop: PropertyInfo = {
-                  name: propName,
-                  type: propType,
-                  className: cc,
-                  isFinal: modifier === 'readonly',
-                  isConst: false,
-                  isStatic: false,
-                  isPrivate: modifier === 'private' || propName.startsWith('_'),
-                  isGetter: false,
-                  isSetter: false,
-                  line: lineNum
-                };
-                result.properties.push(prop);
-
-                const parentCls = result.classes.find(c => c.name === cc);
-                if (parentCls) parentCls.properties.push(prop);
-              }
-            }
-          }
-          syncBraces(i);
-          continue;
-        }
-
-        // Getters
-        const getterMatch = trimmed.match(/^\s*(?:public|private|protected|static)?\s*get\s+(\w+)\s*\(\)\s*(?::\s*([^;{]+))?\s*(?:=>|\{)/);
-        if (getterMatch) {
-          const propName = getterMatch[1];
-          const propType = getterMatch[2] ? getterMatch[2].trim() : 'any';
-          const prop: PropertyInfo = {
-            name: propName,
-            type: propType,
-            className: cc,
-            isFinal: true,
-            isConst: false,
-            isStatic: trimmed.includes('static'),
-            isPrivate: propName.startsWith('_') || propName.startsWith('#'),
-            isGetter: true,
-            isSetter: false,
-            line: lineNum
-          };
-          result.properties.push(prop);
-          const parentCls = result.classes.find(c => c.name === cc);
-          if (parentCls) parentCls.properties.push(prop);
-          syncBraces(i);
-          continue;
-        }
-
-        // Setters
-        const setterMatch = trimmed.match(/^\s*(?:public|private|protected|static)?\s*set\s+(\w+)\s*\(([^)]*)\)\s*(?:=>|\{)/);
-        if (setterMatch) {
-          const propName = setterMatch[1];
-          const param = setterMatch[2].trim();
-          const propType = param.includes(':') ? param.split(':')[1].trim() : 'any';
-          const prop: PropertyInfo = {
-            name: propName,
-            type: propType,
-            className: cc,
-            isFinal: false,
-            isConst: false,
-            isStatic: trimmed.includes('static'),
-            isPrivate: propName.startsWith('_') || propName.startsWith('#'),
-            isGetter: false,
-            isSetter: true,
-            line: lineNum
-          };
-          result.properties.push(prop);
-          const parentCls = result.classes.find(c => c.name === cc);
-          if (parentCls) parentCls.properties.push(prop);
-          syncBraces(i);
-          continue;
-        }
-
-        // Methods (including abstract/interface and override methods)
-        const mLookahead = maskedLines.slice(i, i + 5).join('\n');
-        const methodMatch = mLookahead.match(/^\s*(?:(public|private|protected|static|abstract|override|async)\s+)*(getter|setter|get|set\s+)?(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?::\s*([^;{]+))?\s*([;{])/);
-        if (methodMatch && !['if', 'for', 'while', 'switch', 'catch'].includes(methodMatch[3])) {
-          const modifiers = methodMatch[1] || '';
-          const isAsync = modifiers.includes('async');
-          const isStatic = modifiers.includes('static');
-          const name = methodMatch[3];
-          const params = methodMatch[4].trim().replace(/\n/g, ' ');
-          const returnType = methodMatch[5] ? methodMatch[5].trim() : 'any';
-          const bodyType = methodMatch[6];
-
-          const methodInfo: FunctionInfo = {
-            name,
-            returnType,
-            params,
-            line: lineNum,
-            isPrivate: name.startsWith('_') || name.startsWith('#'),
-            isAsync,
-            isStatic,
-            parentClass: cc
-          };
-
-          const parentCls = result.classes.find(c => c.name === cc);
-          if (parentCls) parentCls.methods.push(methodInfo);
-
-          if (modifiers.includes('override')) {
-            result.annotations.push({ name: 'override', target: 'function', targetName: name, line: lineNum });
-          }
-
-          const hLines = methodMatch[0].split('\n').length;
-          if (hLines > 1) syncBraces(i + 1, hLines - 1);
-
-          if (bodyType === '{') {
-            scopeStack.push({ type: 'function', name, braceDepth: braceDepth - 1, ref: methodInfo });
-          } else {
-            methodInfo.lineEnd = lineNum + hLines - 1;
-          }
-
-          i += hLines - 1;
-          continue;
-        }
-
-        // Fields (Properties)
-        const fieldMatch = trimmed.match(/^\s*(?:(public|private|protected|static|readonly)\s+)*(?:(readonly|static)\s+)*(\w+)\s*(?:\?|!)?\s*(?::\s*([^=;{()]+))?\s*(?:=\s*([^;]+))?;/);
-        if (fieldMatch && !['if', 'for', 'while', 'switch', 'catch', 'return', 'import', 'export'].includes(fieldMatch[3])) {
-          const modifiers = (fieldMatch[1] || '') + ' ' + (fieldMatch[2] || '');
-          const propName = fieldMatch[3];
-          const propType = fieldMatch[4] ? fieldMatch[4].trim() : 'any';
-          const isStatic = modifiers.includes('static');
-          const isPrivate = modifiers.includes('private') || propName.startsWith('_') || propName.startsWith('#');
-
-          const prop: PropertyInfo = {
-            name: propName,
-            type: propType,
-            className: cc,
-            isFinal: modifiers.includes('readonly'),
-            isConst: false,
-            isStatic,
-            isPrivate,
-            isGetter: false,
-            isSetter: false,
-            line: lineNum
-          };
-          result.properties.push(prop);
-          const parentCls = result.classes.find(c => c.name === cc);
-          if (parentCls) parentCls.properties.push(prop);
-          syncBraces(i);
-          continue;
-        }
-      }
-
-      // 8. Top-level Functions / Arrow Functions & Variables
-      if (!cc) {
-        const lookahead = maskedLines.slice(i, i + 5).join('\n');
-
-        // Match function name() { ... }
-        const funcMatch = lookahead.match(/^(?:export\s+)?(?:async\s+)?function\s+(\w+)(?:<[^>]*>)?\s*\(([^)]*)\)/);
-        if (funcMatch) {
-          const name = funcMatch[1];
-          let isReactComponent = false;
-          if (name !== name.toUpperCase() && /^[A-Z][a-zA-Z0-9]*$/.test(name)) {
-            isReactComponent = true;
-          }
-
-          if (isReactComponent) {
-            result.widgets.push({
-              name,
-              line: lineNum,
-              children: [],
-              properties: []
-            });
-          }
-
-          const newFunc: FunctionInfo = {
-            name,
-            returnType: 'any',
-            params: funcMatch[2],
-            line: lineNum,
-            isPrivate: name.startsWith('_'),
-            isAsync: lookahead.includes('async'),
-            isStatic: false,
-            parentClass: null
-          };
-          result.functions.push(newFunc);
-
-          const hLines = funcMatch[0].split('\n').length;
-          if (hLines > 1) syncBraces(i + 1, hLines - 1);
-
-          scopeStack.push({ type: 'function', name, braceDepth: braceDepth - 1, ref: newFunc });
-          i += hLines - 1;
-          continue;
-        }
-
-        // Match const/let/var name = (...) => { ... } or memo(...) etc.
-        const arrowMatch = lookahead.match(/^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?(?:<[^>]*>)?\s*(?:\([^)]*\)|[\w]+)\s*=>/);
-        if (arrowMatch) {
-          const name = arrowMatch[1];
-          let isReactComponent = false;
-          if (name !== name.toUpperCase() && /^[A-Z][a-zA-Z0-9]*$/.test(name)) {
-            isReactComponent = true;
-          } else if (lookahead.includes('memo(') || lookahead.includes('forwardRef(') || lookahead.includes('styled.')) {
-            isReactComponent = true;
-          }
-
-          if (isReactComponent) {
-            result.widgets.push({
-              name,
-              line: lineNum,
-              children: [],
-              properties: []
-            });
-          }
-
-          const newFunc: FunctionInfo = {
-            name,
-            returnType: 'any',
-            params: '',
-            line: lineNum,
-            isPrivate: name.startsWith('_'),
-            isAsync: lookahead.includes('async'),
-            isStatic: false,
-            parentClass: null
-          };
-          result.functions.push(newFunc);
-
-          const hLines = arrowMatch[0].split('\n').length;
-          if (hLines > 1) syncBraces(i + 1, hLines - 1);
-
-          scopeStack.push({ type: 'function', name, braceDepth: braceDepth - 1, ref: newFunc });
-          i += hLines - 1;
-          continue;
-        }
-
-        // Match Top-level variables
-        const varMatch = trimmed.match(/^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=/);
-        if (varMatch && braceDepth === 0 && scopeStack.length === 0 && !['const', 'let', 'var', 'export', 'function', 'class', 'enum', 'interface'].includes(varMatch[1])) {
-          const name = varMatch[1];
-          result.variables.push({
-            name,
-            type: 'any',
-            line: lineNum,
-            isConst: trimmed.includes('const'),
-            isFinal: false,
-            isPrivate: name.startsWith('_'),
-            isTopLevel: true
-          });
-          syncBraces(i);
-          continue;
-        }
-      }
+    if (lower.endsWith('.md')) {
+      this.outlineMarkdown(content, result);
+    } else if (/\.(css|scss|less)$/.test(lower)) {
+      this.outlineCss(content, result);
+    } else if (lower.endsWith('.json')) {
+      this.outlineJson(content, result);
+    } else {
+      this.parseScript(filePath, content, result);
     }
 
-    if (filePath.endsWith('.tsx') || filePath.endsWith('.jsx')) {
-      result.widgets = this.parseJsxToWidgetTree(maskedLines.join('\n'));
-    }
-
-    this.analyzeUsages(maskedLines, result);
-    this.extractFunctionCalls(maskedLines, result, lines);
-
-    const mockupWarnings = MockupAnalyzer.analyze(filePath, content, masked);
-    for (const mw of mockupWarnings) {
+    for (const mw of MockupAnalyzer.analyze(filePath, content, masked)) {
       result.warnings.push({
         type: mw.type,
         message: mw.message,
@@ -709,52 +144,722 @@ export class JsTsParser extends BaseParser<DartFileInfo> {
         severity: mw.severity,
       });
     }
-
     return result;
   }
 
-  private parseJsxToWidgetTree(maskedContent: string): import('./dartParser').WidgetInfo[] {
-    const rootWidgets: import('./dartParser').WidgetInfo[] = [];
-    const stack: { widget: import('./dartParser').WidgetInfo; depth: number }[] = [];
+  // ─── Outlines for non-code files ────────────────────────────────────────────
 
-    // Simple JSX tag parser that finds start tags, self-closing tags, and end tags.
-    const tagRegex = /<(\/?)([a-zA-Z][a-zA-Z0-9_.]*)([^>]*?)?(\/?)>/g;
+  private pushOutline(result: DartFileInfo, name: string, type: string, line: number): void {
+    result.classes.push({
+      name,
+      type,
+      extendsClass: null,
+      implements: [],
+      mixins: [],
+      isAbstract: false,
+      isPrivate: false,
+      methods: [],
+      properties: [],
+      line,
+      lineEnd: line,
+    });
+  }
 
-    let match: RegExpExecArray | null;
-    while ((match = tagRegex.exec(maskedContent)) !== null) {
-      const isEnd = !!match[1];
-      const tagName = match[2];
-      const isSelfClosing = !!match[4];
+  private outlineMarkdown(content: string, result: DartFileInfo): void {
+    let inFence = false;
+    content.split('\n').forEach((raw, i) => {
+      const line = raw.replace(/\r$/, '');
+      if (/^\s*(```|~~~)/.test(line)) { inFence = !inFence; return; }
+      if (inFence) { return; }
+      const m = line.match(/^(#{1,6})\s+(.*)/);
+      if (m) { this.pushOutline(result, m[2].trim(), `H${m[1].length}`, i + 1); }
+    });
+  }
 
-      let lineNum = 1;
-      for (let i = 0; i < match.index; i++) {
-        if (maskedContent[i] === '\n') lineNum++;
+  private outlineCss(content: string, result: DartFileInfo): void {
+    content.split('\n').forEach((raw, i) => {
+      const line = raw.replace(/\r$/, '');
+      const m = line.match(/^([.#][a-zA-Z0-9_-]+)(?:\s*\{|[^a-zA-Z0-9_-])/);
+      if (m && !line.includes(':')) {
+        this.pushOutline(result, m[1], m[1].startsWith('.') ? 'class' : 'id', i + 1);
+      }
+    });
+  }
+
+  private outlineJson(content: string, result: DartFileInfo): void {
+    let depth = 0;
+    content.split('\n').forEach((raw, i) => {
+      const line = raw.replace(/\r$/, '');
+      const key = line.match(/^\s*"([^"\\]+)"\s*:/);
+      if (key && depth <= 1) { this.pushOutline(result, key[1], 'key', i + 1); }
+      let inString = false;
+      for (let k = 0; k < line.length; k++) {
+        const ch = line[k];
+        if (inString) {
+          if (ch === '\\') { k++; } else if (ch === '"') { inString = false; }
+        } else if (ch === '"') { inString = true; }
+        else if (ch === '{' || ch === '[') { depth++; }
+        else if (ch === '}' || ch === ']') { depth = Math.max(0, depth - 1); }
+      }
+    });
+  }
+
+  // ─── Scripts ────────────────────────────────────────────────────────────────
+
+  private scriptKindFor(lowerPath: string): ts.ScriptKind {
+    if (lowerPath.endsWith('.tsx')) { return ts.ScriptKind.TSX; }
+    if (lowerPath.endsWith('.jsx')) { return ts.ScriptKind.JSX; }
+    if (/\.(js|mjs|cjs)$/.test(lowerPath)) { return ts.ScriptKind.JS; }
+    return ts.ScriptKind.TS;
+  }
+
+  private parseScript(filePath: string, content: string, result: DartFileInfo): void {
+    const lower = filePath.toLowerCase();
+    const kind = this.scriptKindFor(lower);
+    const isJsxFile = kind === ts.ScriptKind.TSX || kind === ts.ScriptKind.JSX;
+    const sf = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true, kind);
+    const sourceLines = content.split('\n');
+
+    const lineOf = (pos: number): number => sf.getLineAndCharacterOfPosition(pos).line + 1;
+    const startLine = (n: ts.Node): number => lineOf(n.getStart(sf));
+    const endLine = (n: ts.Node): number => lineOf(n.getEnd());
+    const textOf = (n: ts.Node): string => n.getText(sf);
+
+    const nameOf = (name: ts.Node | undefined): string => {
+      if (!name) { return ''; }
+      if (ts.isIdentifier(name) || ts.isPrivateIdentifier(name)) { return name.text; }
+      if (ts.isStringLiteral(name) || ts.isNumericLiteral(name) || ts.isNoSubstitutionTemplateLiteral(name)) { return name.text; }
+      if (ts.isComputedPropertyName(name)) { return `[${collapse(textOf(name.expression))}]`; }
+      return collapse(textOf(name));
+    };
+
+    const paramsText = (fn: ts.SignatureDeclarationBase): string =>
+      collapse(fn.parameters.map(p => textOf(p)).join(', '));
+
+    const typeText = (type: ts.TypeNode | undefined, fallback = 'any'): string =>
+      type ? collapse(textOf(type)) : fallback;
+
+    const fingerprint = (node: ts.Node, name: string): { bodyHash: string; bodyLength: number } | undefined => {
+      const text = textOf(node);
+      if (text.length > 400_000) { return undefined; }
+      const scanner = ts.createScanner(
+        ts.ScriptTarget.Latest,
+        true,
+        isJsxFile ? ts.LanguageVariant.JSX : ts.LanguageVariant.Standard,
+        text,
+      );
+      let out = '';
+      for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+        const tokenText = scanner.getTokenText();
+        if (tokenText !== name) { out += tokenText; }
+      }
+      return { bodyLength: out.length, bodyHash: crypto.createHash('md5').update(out).digest('hex') };
+    };
+
+    // ── imports ──
+    const importKeys = new Set<string>();
+    const addImport = (info: ImportInfo, typeOnly = false): void => {
+      const key = `${info.path}\u0000${info.line}`;
+      if (importKeys.has(key)) { return; }
+      importKeys.add(key);
+      result.imports.push(typeOnly ? Object.assign(info, { isTypeOnly: true }) : info);
+    };
+
+    // ── decorators → annotations ──
+    const addDecorators = (node: ts.Node, target: string, targetName: string): void => {
+      for (const decorator of decoratorsOf(node)) {
+        const expr = decorator.expression;
+        const callee = ts.isCallExpression(expr) ? expr.expression : expr;
+        const full = textOf(callee);
+        const name = full.includes('.') ? full.slice(full.lastIndexOf('.') + 1) : full;
+        result.annotations.push({ name, target, targetName, line: startLine(decorator) });
+      }
+    };
+
+    const isFunctionLike = (expr: ts.Expression | undefined): FunctionLikeNode | null => {
+      if (!expr) { return null; }
+      const inner = unwrap(expr);
+      if (ts.isArrowFunction(inner) || ts.isFunctionExpression(inner)) { return inner; }
+      if (ts.isCallExpression(inner) && COMPONENT_WRAPPERS.test(textOf(inner.expression)) && inner.arguments.length > 0) {
+        const first = unwrap(inner.arguments[0]);
+        if (ts.isArrowFunction(first) || ts.isFunctionExpression(first)) { return first; }
+      }
+      return null;
+    };
+
+    const isRequireCall = (expr: ts.Expression | undefined): boolean => {
+      if (!expr) { return false; }
+      const inner = unwrap(expr);
+      return ts.isCallExpression(inner) && ts.isIdentifier(inner.expression) && inner.expression.text === 'require' &&
+        inner.arguments.length > 0 && ts.isStringLiteralLike(inner.arguments[0]);
+    };
+
+    const isReactComponentName = (name: string): boolean =>
+      name !== name.toUpperCase() && /^[A-Z][a-zA-Z0-9]*$/.test(name);
+
+    const classNames = new Set<string>();
+    const declaredClassForName = new Map<string, ClassInfo>();
+
+    // ── classes ──
+    const handleClass = (node: ts.ClassDeclaration): void => {
+      const isDefault = hasModifier(node, ts.SyntaxKind.DefaultKeyword);
+      const name = node.name?.text ?? (isDefault ? 'default' : '<anonymous>');
+      let extendsClass: string | null = null;
+      const impls: string[] = [];
+      for (const clause of node.heritageClauses ?? []) {
+        if (clause.token === ts.SyntaxKind.ExtendsKeyword && clause.types[0]) {
+          extendsClass = textOf(clause.types[0].expression);
+        } else {
+          for (const t of clause.types) { impls.push(textOf(t.expression)); }
+        }
+      }
+      const isComponent = !!extendsClass && (extendsClass.includes('Component') || extendsClass.includes('PureComponent'));
+
+      const cls: ClassInfo = {
+        name,
+        type: isComponent ? 'StatelessWidget' : 'plain',
+        line: startLine(node),
+        lineEnd: endLine(node),
+        extendsClass,
+        mixins: [],
+        implements: impls,
+        isAbstract: hasModifier(node, ts.SyntaxKind.AbstractKeyword),
+        isPrivate: name.startsWith('_'),
+        methods: [],
+        properties: [],
+        ...fingerprint(node, name),
+      };
+      result.classes.push(cls);
+      classNames.add(name);
+      declaredClassForName.set(name, cls);
+      addDecorators(node, 'class', name);
+
+      if (isComponent && !isJsxFile) {
+        result.widgets.push({ name, line: cls.line, children: [], properties: [] });
       }
 
-      if (!isEnd) {
-        const widget: import('./dartParser').WidgetInfo = {
-          name: tagName,
-          line: lineNum,
-          properties: [],
-          children: []
-        };
+      const implementedMethodNames = new Set<string>();
+      for (const m of node.members) {
+        if (ts.isMethodDeclaration(m) && m.body) { implementedMethodNames.add(nameOf(m.name)); }
+      }
 
-        if (stack.length === 0) {
-          rootWidgets.push(widget);
-        } else {
-          stack[stack.length - 1].widget.children.push(widget);
+      const addProperty = (prop: PropertyInfo): void => {
+        result.properties.push(prop);
+        cls.properties.push(prop);
+      };
+
+      for (const member of node.members) {
+        if (ts.isConstructorDeclaration(member)) {
+          result.constructors.push({
+            name: 'constructor',
+            className: name,
+            isFactory: false,
+            isConst: false,
+            params: paramsText(member),
+            line: startLine(member),
+          });
+          for (const p of member.parameters) {
+            const isShorthand = modifiersOf(p).some(m =>
+              m.kind === ts.SyntaxKind.PublicKeyword || m.kind === ts.SyntaxKind.PrivateKeyword ||
+              m.kind === ts.SyntaxKind.ProtectedKeyword || m.kind === ts.SyntaxKind.ReadonlyKeyword);
+            if (!isShorthand || !ts.isIdentifier(p.name)) { continue; }
+            addProperty({
+              name: p.name.text,
+              type: typeText(p.type),
+              className: name,
+              isFinal: hasModifier(p, ts.SyntaxKind.ReadonlyKeyword),
+              isConst: false,
+              isStatic: false,
+              isPrivate: hasModifier(p, ts.SyntaxKind.PrivateKeyword) || p.name.text.startsWith('_'),
+              isGetter: false,
+              isSetter: false,
+              line: startLine(p),
+            });
+          }
+          continue;
         }
 
-        if (!isSelfClosing) {
-          stack.push({ widget, depth: stack.length });
+        if (ts.isMethodDeclaration(member)) {
+          const methodName = nameOf(member.name);
+          if (!member.body && implementedMethodNames.has(methodName)) { continue; } // overload signature
+          const fn: FunctionInfo = {
+            name: methodName,
+            returnType: typeText(member.type),
+            params: paramsText(member),
+            line: startLine(member),
+            lineEnd: endLine(member),
+            isPrivate: methodName.startsWith('_') || methodName.startsWith('#') || hasModifier(member, ts.SyntaxKind.PrivateKeyword),
+            isAsync: hasModifier(member, ts.SyntaxKind.AsyncKeyword),
+            isStatic: hasModifier(member, ts.SyntaxKind.StaticKeyword),
+            parentClass: name,
+            ...(member.body ? fingerprint(member, methodName) : undefined),
+          };
+          cls.methods.push(fn);
+          addDecorators(member, 'function', methodName);
+          if (hasModifier(member, ts.SyntaxKind.OverrideKeyword)) {
+            result.annotations.push({ name: 'override', target: 'function', targetName: methodName, line: fn.line });
+          }
+          continue;
         }
-      } else {
-        if (stack.length > 0 && stack[stack.length - 1].widget.name === tagName) {
-          stack.pop();
+
+        if (ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member)) {
+          const propName = nameOf(member.name);
+          const isGetter = ts.isGetAccessorDeclaration(member);
+          const setterType = !isGetter && member.parameters[0] ? typeText(member.parameters[0].type) : 'any';
+          addProperty({
+            name: propName,
+            type: isGetter ? typeText(member.type) : setterType,
+            className: name,
+            isFinal: isGetter,
+            isConst: false,
+            isStatic: hasModifier(member, ts.SyntaxKind.StaticKeyword),
+            isPrivate: propName.startsWith('_') || propName.startsWith('#') || hasModifier(member, ts.SyntaxKind.PrivateKeyword),
+            isGetter,
+            isSetter: !isGetter,
+            line: startLine(member),
+          });
+          addDecorators(member, 'function', propName);
+          continue;
         }
+
+        if (ts.isPropertyDeclaration(member)) {
+          const propName = nameOf(member.name);
+          const arrow = isFunctionLike(member.initializer);
+          if (arrow) {
+            // `handle = () => { ... }` is a method for every practical purpose (React handlers etc.)
+            cls.methods.push({
+              name: propName,
+              returnType: typeText(arrow.type),
+              params: paramsText(arrow),
+              line: startLine(member),
+              lineEnd: endLine(member),
+              isPrivate: propName.startsWith('_') || propName.startsWith('#') || hasModifier(member, ts.SyntaxKind.PrivateKeyword),
+              isAsync: hasModifier(arrow, ts.SyntaxKind.AsyncKeyword),
+              isStatic: hasModifier(member, ts.SyntaxKind.StaticKeyword),
+              parentClass: name,
+              ...fingerprint(arrow, propName),
+            });
+            addDecorators(member, 'function', propName);
+            continue;
+          }
+          addProperty({
+            name: propName,
+            type: typeText(member.type),
+            className: name,
+            isFinal: hasModifier(member, ts.SyntaxKind.ReadonlyKeyword),
+            isConst: false,
+            isStatic: hasModifier(member, ts.SyntaxKind.StaticKeyword),
+            isPrivate: hasModifier(member, ts.SyntaxKind.PrivateKeyword) || propName.startsWith('_') || propName.startsWith('#'),
+            isGetter: false,
+            isSetter: false,
+            line: startLine(member),
+          });
+          addDecorators(member, 'field', propName);
+        }
+      }
+    };
+
+    // ── functions & variables ──
+    const addTopLevelFunction = (
+      name: string,
+      lineNode: ts.Node,
+      signature: ts.SignatureDeclarationBase,
+      bodyNode: ts.Node,
+      forceComponent: boolean,
+    ): void => {
+      const fn: FunctionInfo = {
+        name,
+        returnType: typeText(signature.type),
+        params: paramsText(signature),
+        line: startLine(lineNode),
+        lineEnd: endLine(lineNode),
+        isPrivate: name.startsWith('_'),
+        isAsync: hasModifier(signature, ts.SyntaxKind.AsyncKeyword),
+        isStatic: false,
+        parentClass: null,
+        ...fingerprint(bodyNode, name),
+      };
+      result.functions.push(fn);
+      if (!isJsxFile && (forceComponent || isReactComponentName(name))) {
+        result.widgets.push({ name, line: fn.line, children: [], properties: [] });
+      }
+      addDecorators(lineNode, 'function', name);
+    };
+
+    const visitStatements = (statements: readonly ts.Statement[]): void => {
+      const functionsWithBody = new Set<string>();
+      for (const s of statements) {
+        if (ts.isFunctionDeclaration(s) && s.body && s.name) { functionsWithBody.add(s.name.text); }
+      }
+
+      for (const stmt of statements) {
+        if (ts.isImportDeclaration(stmt)) {
+          if (!ts.isStringLiteral(stmt.moduleSpecifier)) { continue; }
+          const clause = stmt.importClause;
+          let alias: string | null = clause?.name?.text ?? null;
+          const show: string[] = [];
+          const bindings = clause?.namedBindings;
+          if (bindings && ts.isNamespaceImport(bindings)) {
+            alias = bindings.name.text;
+          } else if (bindings && ts.isNamedImports(bindings)) {
+            for (const el of bindings.elements) { show.push((el.propertyName ?? el.name).text); }
+          }
+          addImport(
+            { path: stmt.moduleSpecifier.text, alias, showNames: show, hideNames: [], line: startLine(stmt) },
+            !!clause?.isTypeOnly,
+          );
+        } else if (ts.isImportEqualsDeclaration(stmt)) {
+          if (ts.isExternalModuleReference(stmt.moduleReference) && ts.isStringLiteral(stmt.moduleReference.expression)) {
+            addImport({
+              path: stmt.moduleReference.expression.text,
+              alias: stmt.name.text,
+              showNames: [],
+              hideNames: [],
+              line: startLine(stmt),
+            });
+          }
+        } else if (ts.isExportDeclaration(stmt)) {
+          if (stmt.moduleSpecifier && ts.isStringLiteral(stmt.moduleSpecifier)) {
+            result.exports.push(stmt.moduleSpecifier.text);
+          }
+        } else if (ts.isClassDeclaration(stmt)) {
+          handleClass(stmt);
+        } else if (ts.isFunctionDeclaration(stmt)) {
+          const name = stmt.name?.text ?? (hasModifier(stmt, ts.SyntaxKind.DefaultKeyword) ? 'default' : '');
+          if (!name) { continue; }
+          if (!stmt.body && functionsWithBody.has(name)) { continue; } // overload signature
+          addTopLevelFunction(name, stmt, stmt, stmt, false);
+        } else if (ts.isVariableStatement(stmt)) {
+          const isConst = (stmt.declarationList.flags & ts.NodeFlags.Const) !== 0;
+          for (const decl of stmt.declarationList.declarations) {
+            if (isRequireCall(decl.initializer)) { continue; }
+            if (ts.isIdentifier(decl.name)) {
+              const name = decl.name.text;
+              const fnNode = isFunctionLike(decl.initializer);
+              if (fnNode) {
+                const wrapped = decl.initializer ? unwrap(decl.initializer) : undefined;
+                const viaWrapper = !!wrapped && ts.isCallExpression(wrapped);
+                addTopLevelFunction(name, stmt, fnNode, fnNode, viaWrapper);
+              } else {
+                result.variables.push({
+                  name,
+                  type: typeText(decl.type),
+                  line: startLine(decl),
+                  isConst,
+                  isFinal: false,
+                  isPrivate: name.startsWith('_'),
+                  isTopLevel: true,
+                });
+              }
+            } else {
+              // const { a, b } = ...   /   const [x, y] = ...
+              const collect = (binding: ts.BindingName): void => {
+                if (ts.isIdentifier(binding)) {
+                  result.variables.push({
+                    name: binding.text,
+                    type: 'any',
+                    line: startLine(binding),
+                    isConst,
+                    isFinal: false,
+                    isPrivate: binding.text.startsWith('_'),
+                    isTopLevel: true,
+                  });
+                } else {
+                  for (const el of binding.elements) {
+                    if (ts.isBindingElement(el)) { collect(el.name); }
+                  }
+                }
+              };
+              collect(decl.name);
+            }
+          }
+        } else if (ts.isEnumDeclaration(stmt)) {
+          result.enums.push(withEnd({
+            name: stmt.name.text,
+            values: stmt.members.map(m => nameOf(m.name)),
+            line: startLine(stmt),
+            isPrivate: stmt.name.text.startsWith('_'),
+          }, endLine(stmt)));
+        } else if (ts.isInterfaceDeclaration(stmt)) {
+          const parent = stmt.heritageClauses?.[0]?.types[0];
+          result.mixins.push(withEnd({
+            name: stmt.name.text,
+            on: parent ? textOf(parent.expression) : null,
+            line: startLine(stmt),
+            isPrivate: stmt.name.text.startsWith('_'),
+          }, endLine(stmt)));
+        } else if (ts.isTypeAliasDeclaration(stmt)) {
+          result.typedefs.push({
+            name: stmt.name.text,
+            signature: collapse(textOf(stmt.type)).slice(0, 200),
+            line: startLine(stmt),
+            isPrivate: stmt.name.text.startsWith('_'),
+          });
+        } else if (ts.isModuleDeclaration(stmt) && stmt.body && ts.isModuleBlock(stmt.body)) {
+          visitStatements(stmt.body.statements);
+        }
+      }
+    };
+
+    visitStatements(sf.statements);
+
+    // ── references, calls, usages, requires, JSX ─────────────────────────────
+    interface Symbols {
+      classes: Set<string>;
+      functions: Set<string>;
+      typedefs: Set<string>;
+      variables: Set<string>;
+      enums: Set<string>;
+      mixins: Set<string>;
+    }
+    const symbols: Symbols = {
+      classes: new Set(result.classes.map(c => c.name)),
+      functions: new Set(result.functions.map(f => f.name)),
+      typedefs: new Set(result.typedefs.map(t => t.name)),
+      variables: new Set(result.variables.map(v => v.name)),
+      enums: new Set(result.enums.map(e => e.name)),
+      mixins: new Set(result.mixins.map(m => m.name)),
+    };
+
+    const classUsage = new Map(result.classes.map(c => [c.name, {
+      className: c.name, usedInFiles: [filePath], usedByClasses: [] as string[], usedByFunctions: [] as string[], confidence: 'medium' as const,
+    }]));
+    const funcUsage = new Map(result.functions.map(f => [f.name, {
+      functionName: f.name, parentClass: f.parentClass, calledByFunctions: [] as string[], calledInFiles: [filePath], confidence: 'medium' as const,
+    }]));
+    const typedefUsage = new Map(result.typedefs.map(t => [t.name, { typedefName: t.name, usedInFiles: [] as string[], confidence: 'medium' as const }]));
+    const variableUsage = new Map(result.variables.map(v => [v.name, { variableName: v.name, usedInFiles: [] as string[], confidence: 'medium' as const }]));
+    const enumUsage = new Map(result.enums.map(e => [e.name, { enumName: e.name, usedInFiles: [] as string[], confidence: 'medium' as const }]));
+    const mixinUsage = new Map(result.mixins.map(m => [m.name, { mixinName: m.name, usedInFiles: [] as string[], confidence: 'medium' as const }]));
+
+    const referenced = new Set<string>();
+    const propertyAccessNames = new Set<string>();
+    const instantiated = new Set<string>();
+
+    const addUnique = (list: string[], value: string): void => { if (!list.includes(value)) { list.push(value); } };
+
+    const isDeclarationName = (node: ts.Identifier): boolean => {
+      const parent = node.parent;
+      if (!parent) { return false; }
+      if ((ts.isClassDeclaration(parent) || ts.isFunctionDeclaration(parent) || ts.isVariableDeclaration(parent) ||
+        ts.isEnumDeclaration(parent) || ts.isInterfaceDeclaration(parent) || ts.isTypeAliasDeclaration(parent) ||
+        ts.isParameter(parent) || ts.isMethodDeclaration(parent) || ts.isPropertyDeclaration(parent) ||
+        ts.isPropertySignature(parent) || ts.isMethodSignature(parent) || ts.isGetAccessorDeclaration(parent) ||
+        ts.isSetAccessorDeclaration(parent) || ts.isEnumMember(parent) || ts.isBindingElement(parent) ||
+        ts.isImportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent) ||
+        ts.isPropertyAssignment(parent) || ts.isTypeParameterDeclaration(parent) || ts.isLabeledStatement(parent) ||
+        ts.isClassExpression(parent) || ts.isFunctionExpression(parent)) && (parent as { name?: ts.Node }).name === node) {
+        return true;
+      }
+      if (ts.isPropertyAccessExpression(parent) && parent.name === node) { return true; }
+      if (ts.isQualifiedName(parent) && parent.right === node) { return true; }
+      if (ts.isJsxAttribute(parent) && parent.name === node) { return true; }
+      return false;
+    };
+
+    const handleIdentifier = (node: ts.Identifier, cls: string | null, fn: string | null): void => {
+      const parent = node.parent;
+      if (parent && ts.isPropertyAccessExpression(parent) && parent.name === node) {
+        propertyAccessNames.add(node.text);
+        return;
+      }
+      if (isDeclarationName(node)) { return; }
+      const text = node.text;
+
+      if (symbols.classes.has(text)) {
+        referenced.add(text);
+        const usage = classUsage.get(text)!;
+        if (fn) { addUnique(usage.usedByFunctions, fn); }
+        else if (cls && cls !== text) { addUnique(usage.usedByClasses, cls); }
+      }
+      if (symbols.functions.has(text)) {
+        referenced.add(text);
+        if (fn && fn !== text) { addUnique(funcUsage.get(text)!.calledByFunctions, fn); }
+      }
+      if (symbols.typedefs.has(text)) { addUnique(typedefUsage.get(text)!.usedInFiles, filePath); }
+      if (symbols.variables.has(text)) { addUnique(variableUsage.get(text)!.usedInFiles, filePath); }
+      if (symbols.enums.has(text)) { addUnique(enumUsage.get(text)!.usedInFiles, filePath); }
+      if (symbols.mixins.has(text)) { addUnique(mixinUsage.get(text)!.usedInFiles, filePath); }
+    };
+
+    const contextAround = (line: number): string => {
+      const from = Math.max(0, line - 2);
+      const to = Math.min(sourceLines.length - 1, line);
+      return sourceLines.slice(from, to + 1).join('\n').trim().substring(0, 200);
+    };
+
+    const receiverOf = (expr: ts.Expression): string | undefined => {
+      const inner = unwrap(expr);
+      if (ts.isIdentifier(inner)) { return inner.text; }
+      if (inner.kind === ts.SyntaxKind.ThisKeyword) { return 'this'; }
+      if (inner.kind === ts.SyntaxKind.SuperKeyword) { return 'super'; }
+      if (ts.isPropertyAccessExpression(inner)) { return inner.name.text; }
+      return undefined;
+    };
+
+    const pushCall = (name: string, node: ts.Node, receiver: string | undefined, cls: string | null, fn: string | null): void => {
+      const line = startLine(node);
+      const call: FunctionCall = {
+        name,
+        line,
+        callerClass: cls,
+        callerFunction: fn,
+        context: contextAround(line),
+        isStatic: !receiver || classNames.has(receiver),
+        isChained: !!receiver,
+        receiver,
+      };
+      result.functionCalls.push(call);
+    };
+
+    const handleCall = (node: ts.CallExpression, cls: string | null, fn: string | null): void => {
+      const callee = node.expression;
+      const first = node.arguments[0];
+
+      if (callee.kind === ts.SyntaxKind.ImportKeyword) {
+        if (first && ts.isStringLiteralLike(first)) {
+          addImport({ path: first.text, alias: null, showNames: [], hideNames: [], line: startLine(node) });
+        }
+        return;
+      }
+      if (ts.isIdentifier(callee) && callee.text === 'require') {
+        if (first && ts.isStringLiteralLike(first)) {
+          addImport({ path: first.text, alias: null, showNames: [], hideNames: [], line: startLine(node) });
+        }
+        return;
+      }
+
+      let name: string | undefined;
+      let receiver: string | undefined;
+      if (ts.isIdentifier(callee)) {
+        name = callee.text;
+      } else if (ts.isPropertyAccessExpression(callee)) {
+        name = callee.name.text;
+        receiver = receiverOf(callee.expression);
+      }
+      if (!name || RESERVED_CALLS.has(name) || receiver === 'console') { return; }
+      // direct recursion adds nothing to the graph
+      if (name === fn && (!receiver || receiver === 'this')) { return; }
+      pushCall(name, node, receiver, cls, fn);
+    };
+
+    const handleNew = (node: ts.NewExpression, cls: string | null, fn: string | null): void => {
+      const callee = node.expression;
+      let name: string | undefined;
+      let receiver: string | undefined;
+      if (ts.isIdentifier(callee)) {
+        name = callee.text;
+      } else if (ts.isPropertyAccessExpression(callee)) {
+        name = callee.name.text;
+        receiver = receiverOf(callee.expression);
+      }
+      if (!name) { return; }
+      instantiated.add(name);
+      pushCall(name, node, receiver, cls, fn);
+    };
+
+    const walk = (node: ts.Node, cls: string | null, fn: string | null): void => {
+      let nextCls = cls;
+      let nextFn = fn;
+
+      if (ts.isClassDeclaration(node)) {
+        nextCls = node.name?.text ?? (hasModifier(node, ts.SyntaxKind.DefaultKeyword) ? 'default' : cls);
+        nextFn = null;
+      } else if (ts.isFunctionDeclaration(node)) {
+        nextFn = node.name?.text ?? (hasModifier(node, ts.SyntaxKind.DefaultKeyword) ? 'default' : fn);
+      } else if (ts.isMethodDeclaration(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) {
+        nextFn = nameOf(node.name) || fn;
+      } else if (ts.isConstructorDeclaration(node)) {
+        nextFn = 'constructor';
+      } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && isFunctionLike(node.initializer)) {
+        nextFn = node.name.text;
+      } else if (ts.isPropertyDeclaration(node) && isFunctionLike(node.initializer)) {
+        nextFn = nameOf(node.name) || fn;
+      }
+
+      if (ts.isCallExpression(node)) { handleCall(node, nextCls, nextFn); }
+      else if (ts.isNewExpression(node)) { handleNew(node, nextCls, nextFn); }
+      else if (ts.isIdentifier(node)) { handleIdentifier(node, nextCls, nextFn); }
+
+      ts.forEachChild(node, child => walk(child, nextCls, nextFn));
+    };
+
+    walk(sf, null, null);
+
+    // ── JSX tree + UI warnings (only for .tsx / .jsx) ─────────────────────────
+    if (isJsxFile) {
+      const roots: WidgetInfo[] = [];
+      const attach = (widget: WidgetInfo, parent: WidgetInfo | null): void => {
+        if (parent) { parent.children.push(widget); } else { roots.push(widget); }
+      };
+      const visitJsx = (node: ts.Node, parent: WidgetInfo | null): void => {
+        if (ts.isJsxElement(node)) {
+          const widget: WidgetInfo = { name: textOf(node.openingElement.tagName), line: startLine(node), children: [], properties: [] };
+          attach(widget, parent);
+          ts.forEachChild(node, c => visitJsx(c, widget));
+          return;
+        }
+        if (ts.isJsxSelfClosingElement(node)) {
+          const widget: WidgetInfo = { name: textOf(node.tagName), line: startLine(node), children: [], properties: [] };
+          attach(widget, parent);
+          ts.forEachChild(node, c => visitJsx(c, widget));
+          return;
+        }
+        ts.forEachChild(node, c => visitJsx(c, parent));
+      };
+      visitJsx(sf, null);
+      result.widgets = roots;
+
+      const lowerPath = filePath.toLowerCase();
+      const skipColors = lowerPath.includes('theme') || lowerPath.includes('color');
+      const visitWarnings = (node: ts.Node): void => {
+        if (ts.isJsxText(node)) {
+          const raw = node.text;
+          const trimmed = raw.trim();
+          if (trimmed.length > 1 && /[A-Za-z\u0600-\u06FF]{2,}/.test(trimmed)) {
+            const offset = raw.length - raw.trimStart().length;
+            result.warnings.push({ type: 'hardcoded_text', message: `Hardcoded text: ${trimmed}`, line: lineOf(node.getStart(sf) + offset) } as WarningInfo);
+          }
+        } else if (ts.isJsxAttribute(node) && node.initializer && ts.isStringLiteral(node.initializer) &&
+          TEXT_ATTRIBUTES.has(nameOf(node.name)) && /[A-Za-z\u0600-\u06FF]{2,}/.test(node.initializer.text)) {
+          result.warnings.push({ type: 'hardcoded_text', message: `Hardcoded text: ${node.initializer.text}`, line: startLine(node) } as WarningInfo);
+        } else if (!skipColors && ts.isStringLiteral(node) && COLOR_LITERAL.test(node.text.trim())) {
+          result.warnings.push({ type: 'hardcoded_color', message: `Hardcoded color: ${node.text.trim()}`, line: startLine(node) } as WarningInfo);
+        }
+        ts.forEachChild(node, visitWarnings);
+      };
+      visitWarnings(sf);
+    }
+
+    // ── usage tables ──
+    result.classUsages = [...classUsage.values()];
+    result.functionUsages = [...funcUsage.values()];
+    result.typedefUsages = [...typedefUsage.values()];
+    result.variableUsages = [...variableUsage.values()];
+    result.enumUsages = [...enumUsage.values()];
+    result.mixinUsages = [...mixinUsage.values()];
+
+    for (const a of result.annotations) {
+      if (!result.annotationUsages.find(au => au.annotationName === a.name)) {
+        result.annotationUsages.push({ annotationName: a.name, usedInFiles: [filePath], confidence: 'medium' });
       }
     }
-    return rootWidgets;
+    for (const c of result.constructors) {
+      result.constructorUsages.push({
+        constructorName: c.name,
+        className: c.className,
+        usedInFiles: instantiated.has(c.className) || referenced.has(c.className) ? [filePath] : [],
+        confidence: 'medium',
+      });
+    }
+    for (const p of result.properties) {
+      result.propertyUsages.push({
+        propertyName: p.name,
+        className: p.className,
+        usedInFiles: propertyAccessNames.has(p.name) ? [filePath] : [],
+        confidence: 'medium',
+      });
+    }
   }
 
   public preprocessSource(content: string): string {
@@ -798,248 +903,4 @@ export class JsTsParser extends BaseParser<DartFileInfo> {
       // Block comments /* */
       .replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, ' '));
   }
-
-  private extractEnumValues(lines: string[], startIndex: number, maskedLines?: string[]): string[] {
-    const values: string[] = [];
-    const safeLines = maskedLines ?? lines;
-    let depth = 0;
-    let started = false;
-    for (let i = startIndex; i < safeLines.length; i++) {
-      for (const ch of safeLines[i]) {
-        if (ch === '{') { depth++; started = true; }
-        else if (ch === '}') { depth--; if (started && depth === 0) { return values; } }
-      }
-      if (started && depth === 1) {
-        const t = lines[i].trim();
-        if (t && !t.startsWith('{') && !t.startsWith('//')) {
-          const v = t.match(/^(\w+)/);
-          if (v) { values.push(v[1]); }
-        }
-      }
-    }
-    return values;
-  }
-
-  private extractFunctionCalls(maskedLines: string[], result: DartFileInfo, originalLines?: string[]): void {
-    const lines = originalLines ?? maskedLines;
-
-    const classNameSet = new Set(result.classes.map(c => c.name));
-    const RESERVED_CALLS = new Set([
-      'print', 'console', 'log', 'error', 'warn', 'info', 'require',
-      'import', 'export', 'default', 'setState', 'useState', 'useEffect',
-      'useContext', 'useReducer', 'useCallback', 'useMemo', 'useRef',
-      'useImperativeHandle', 'useLayoutEffect', 'useDebugValue',
-      'if', 'for', 'while', 'switch', 'catch', 'throw', 'return', 'await',
-      'async', 'try', 'finally', 'break', 'continue', 'typeof', 'instanceof',
-      'super', 'this', 'new', 'delete', 'void', 'in', 'of'
-    ]);
-
-    let callCurrentClass: string | null = null;
-    let callCurrentFunction: string | null = null;
-    let callBraceDepth = 0;
-    let callClassBrace = 0;
-    let callFuncBrace = 0;
-    const callPatLocal = /(?:([a-zA-Z_]\w*)\.)?([a-zA-Z_]\w*)\s*\(/g;
-
-    for (let i = 0; i < maskedLines.length; i++) {
-      const mLine = maskedLines[i];
-      const trimmed = mLine.trim();
-      const lineNum = i + 1;
-
-      if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) continue;
-      if (trimmed.match(/^(class|import|export)\s/)) continue;
-
-      for (const ch of mLine) {
-        if (ch === '{') callBraceDepth++;
-        else if (ch === '}') {
-          callBraceDepth--;
-          if (callCurrentClass && callBraceDepth <= callClassBrace) callCurrentClass = null;
-          if (callCurrentFunction && callBraceDepth <= callFuncBrace) callCurrentFunction = null;
-        }
-      }
-
-      const classM = trimmed.match(/class\s+(\w+)/);
-      if (classM) { callCurrentClass = classM[1]; callClassBrace = callBraceDepth - 1; continue; }
-      const funcM = trimmed.match(/(?:function|const|let|var)\s+(\w+)\s*\(/) || trimmed.match(/^(\w+)\s*\([^)]*\)\s*\{/);
-      if (funcM && !RESERVED_CALLS.has(funcM[1])) { callCurrentFunction = funcM[1]; callFuncBrace = callBraceDepth - 1; }
-
-      if (trimmed.match(/^\s*(?:static\s+)?(?:async\s+)?\w+\s*\([^)]*\)\s*\{/)) continue;
-
-      callPatLocal.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while ((match = callPatLocal.exec(mLine)) !== null) {
-        const receiver = match[1];
-        const funcName = match[2];
-        if (RESERVED_CALLS.has(funcName)) continue;
-        if (funcName === callCurrentFunction) continue;
-        if (classNameSet.has(funcName) && mLine.includes(`new ${funcName}`)) continue;
-
-        const contextStart = Math.max(0, i - 1);
-        const contextEnd = Math.min(lines.length - 1, i + 1);
-        const context = lines.slice(contextStart, contextEnd + 1).join('\n').trim();
-
-        result.functionCalls.push({
-          name: funcName,
-          line: lineNum,
-          callerClass: callCurrentClass,
-          callerFunction: callCurrentFunction,
-          isStatic: !receiver || classNameSet.has(receiver),
-          isChained: !!receiver,
-          receiver: receiver || undefined,
-          context: context.substring(0, 200),
-        });
-      }
-    }
-  }
-
-  private analyzeUsages(maskedLines: string[], result: DartFileInfo): void {
-    type SymbolKind =
-      | 'class' | 'function' | 'typedef'
-      | 'variable' | 'enum' | 'mixin';
-
-    interface SymbolEntry {
-      kind: SymbolKind;
-      name: string;
-      pattern: RegExp;
-      defSnippets: string[];
-    }
-
-    const symbols: SymbolEntry[] = [];
-    const addSymbol = (kind: SymbolKind, name: string, defSnippets: string[]) =>
-      symbols.push({ kind, name, pattern: new RegExp(`\\b${name}\\b`), defSnippets });
-
-    for (const c of result.classes) addSymbol('class', c.name, [`class ${c.name}`, `extends ${c.name}`]);
-    for (const f of result.functions) addSymbol('function', f.name, [`function ${f.name}`, `${f.name}(`]);
-    for (const t of result.typedefs) addSymbol('typedef', t.name, [`type ${t.name}`]);
-    for (const v of result.variables) addSymbol('variable', v.name, [`${v.name} =`, `${v.name}=`]);
-    for (const e of result.enums) addSymbol('enum', e.name, [`enum ${e.name}`]);
-    for (const m of result.mixins) addSymbol('mixin', m.name, [`interface ${m.name}`]);
-
-    const classUsageMap = new Map(result.classes.map(c => [c.name, { className: c.name, usedInFiles: [result.filePath], usedByClasses: [] as string[], usedByFunctions: [] as string[], confidence: 'medium' as const }]));
-    const funcUsageMap = new Map(result.functions.map(f => [f.name, { functionName: f.name, parentClass: f.parentClass, calledByFunctions: [] as string[], calledInFiles: [result.filePath], confidence: 'medium' as const }]));
-    const typedefUsageMap = new Map(result.typedefs.map(t => [t.name, { typedefName: t.name, usedInFiles: [] as string[], confidence: 'medium' as const }]));
-    const varUsageMap = new Map(result.variables.map(v => [v.name, { variableName: v.name, usedInFiles: [] as string[], confidence: 'medium' as const }]));
-    const enumUsageMap = new Map(result.enums.map(e => [e.name, { enumName: e.name, usedInFiles: [] as string[], confidence: 'medium' as const }]));
-    const mixinUsageMap = new Map(result.mixins.map(m => [m.name, { mixinName: m.name, usedInFiles: [] as string[], confidence: 'medium' as const }]));
-
-    const symbolMap = new Map<string, SymbolEntry[]>();
-    for (const sym of symbols) {
-      let arr = symbolMap.get(sym.name);
-      if (!arr) { arr = []; symbolMap.set(sym.name, arr); }
-      arr.push(sym);
-    }
-
-    let curCls: string | null = null;
-    let curFunc: string | null = null;
-    let bDepth = 0;
-    let clsBrace = 0;
-    let funcBrace = 0;
-
-    const RESERVED_WORDS = new Set(['class', 'enum', 'interface', 'type', 'const', 'let', 'var', 'function', 'return', 'import', 'export', 'default']);
-
-    for (let i = 0; i < maskedLines.length; i++) {
-      const mLine = maskedLines[i];
-      const trimmed = mLine.trim();
-
-      for (const ch of mLine) {
-        if (ch === '{') bDepth++;
-        else if (ch === '}') {
-          bDepth--;
-          if (curCls && bDepth <= clsBrace) curCls = null;
-          if (curFunc && bDepth <= funcBrace) curFunc = null;
-        }
-      }
-
-      const cMatch = trimmed.match(/^(class|interface|enum)\s+(\w+)/);
-      if (cMatch) { curCls = cMatch[2]; clsBrace = bDepth - 1; }
-      const fMatch = trimmed.match(/(?:function|const|let|var)\s+(\w+)\s*\(/) || trimmed.match(/^(\w+)\s*\([^)]*\)\s*\{/);
-      if (fMatch && !RESERVED_WORDS.has(fMatch[1])) { curFunc = fMatch[1]; funcBrace = bDepth - 1; }
-
-      const ctx = {
-        type: curFunc ? 'function' : (curCls ? 'class' : 'none') as any,
-        name: curFunc || curCls || ''
-      };
-
-      const words = mLine.match(/\b[A-Za-z_]\w*\b/g);
-      if (!words) continue;
-      const uniqueWords = new Set(words);
-
-      for (const word of uniqueWords) {
-        const syms = symbolMap.get(word);
-        if (!syms) continue;
-
-        for (const sym of syms) {
-          if (sym.defSnippets.some(s => mLine.includes(s))) continue;
-
-          switch (sym.kind) {
-            case 'class': {
-              const u = classUsageMap.get(sym.name)!;
-              if (ctx.type === 'class' && ctx.name !== sym.name && !u.usedByClasses.includes(ctx.name)) u.usedByClasses.push(ctx.name);
-              if (ctx.type === 'function' && !u.usedByFunctions.includes(ctx.name)) u.usedByFunctions.push(ctx.name);
-              break;
-            }
-            case 'function': {
-              const u = funcUsageMap.get(sym.name)!;
-              if (ctx.type === 'function' && ctx.name !== sym.name && !u.calledByFunctions.includes(ctx.name)) u.calledByFunctions.push(ctx.name);
-              break;
-            }
-            case 'typedef': {
-              const u = typedefUsageMap.get(sym.name)!;
-              if (!u.usedInFiles.includes(result.filePath)) u.usedInFiles.push(result.filePath);
-              break;
-            }
-            case 'variable': {
-              const u = varUsageMap.get(sym.name)!;
-              if (!u.usedInFiles.includes(result.filePath)) u.usedInFiles.push(result.filePath);
-              break;
-            }
-            case 'enum': {
-              const u = enumUsageMap.get(sym.name)!;
-              if (!u.usedInFiles.includes(result.filePath)) u.usedInFiles.push(result.filePath);
-              break;
-            }
-            case 'mixin': {
-              const u = mixinUsageMap.get(sym.name)!;
-              if (!u.usedInFiles.includes(result.filePath)) u.usedInFiles.push(result.filePath);
-              break;
-            }
-          }
-        }
-      }
-    }
-
-    result.classUsages = [...classUsageMap.values()];
-    result.functionUsages = [...funcUsageMap.values()];
-    result.typedefUsages = [...typedefUsageMap.values()];
-    result.variableUsages = [...varUsageMap.values()];
-    result.enumUsages = [...enumUsageMap.values()];
-    result.mixinUsages = [...mixinUsageMap.values()];
-
-    for (const a of result.annotations) {
-      if (!result.annotationUsages.find(au => au.annotationName === a.name))
-        result.annotationUsages.push({ annotationName: a.name, usedInFiles: [result.filePath], confidence: 'medium' });
-    }
-
-    for (const c of result.constructors) {
-      const pattern = new RegExp(`\\bnew\\s+${c.className}\\b|\\b${c.className}\\b`);
-      const usage = { constructorName: c.name, className: c.className, usedInFiles: [] as string[], confidence: 'medium' as const };
-      for (const ml of maskedLines) {
-        if (pattern.test(ml) && !ml.includes(`class ${c.className}`) && !usage.usedInFiles.includes(result.filePath))
-          usage.usedInFiles.push(result.filePath);
-      }
-      result.constructorUsages.push(usage);
-    }
-
-    for (const p of result.properties) {
-      const pattern = new RegExp(`\\b${p.name}\\b`);
-      const usage = { propertyName: p.name, className: p.className, usedInFiles: [] as string[], confidence: 'medium' as const };
-      for (const ml of maskedLines) {
-        if (pattern.test(ml) && !ml.includes(`${p.name}:`) && !ml.includes(`get ${p.name}`) && !ml.includes(`set ${p.name}`) && !usage.usedInFiles.includes(result.filePath))
-          usage.usedInFiles.push(result.filePath);
-      }
-      result.propertyUsages.push(usage);
-    }
-  }
-
-
 }

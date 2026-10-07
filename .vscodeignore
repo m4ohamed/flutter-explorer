@@ -17,6 +17,10 @@ error.md
 FIX.md
 lessons.md
 .flutter-explorer/**
+.test-out/**
+tests/**
+patches.ts
+out.json
 !out/**
 !resources/**
 !tools/**
@@ -26,3 +30,4 @@ lessons.md
 !package.json
 !package-lock.json
 cline_docs/**
+
