@@ -5,14 +5,16 @@ import * as fs from "fs";
 import * as path from "path";
 import * as net from "net";
 import * as os from "os";
-import { DirectSearch } from './mcp-direct-search.js';
-import { ArbEditor } from './mcp-arb-editor.js';
-import { CodeAnalyzer } from './mcp-code-analyzer.js';
-import { DartParser, DartFileInfo, ClassInfo, FunctionInfo } from './indexer/dartParser.js';
-import { JsTsParser } from './indexer/jsTsParser.js';
-import { AndroidParser } from './indexer/androidParser.js';
-import { BM25Search, BM25Document } from './indexer/bm25Search.js';
-import { spawn } from 'child_process';
+import { DirectSearch } from './mcp-direct-search';
+import { ArbEditor } from './mcp-arb-editor';
+import { CodeAnalyzer } from './mcp-code-analyzer';
+import { DartParser, DartFileInfo, ClassInfo, FunctionInfo } from './indexer/dartParser';
+import { JsTsParser } from './indexer/jsTsParser';
+import { AndroidParser } from './indexer/androidParser';
+import { BM25Search, BM25Document } from './indexer/bm25Search';
+import { PackageResolver } from './indexer/packageResolver';
+import { VmServiceBridge } from './runtime/vmServiceBridge';
+import { runProjectAnalysis, runBuildRunner } from './utils/analysisRunner';
 
 // Redirect console.log to console.error to prevent corrupting MCP stdio JSON-RPC protocol
 const originalConsoleLog = console.log;
@@ -25,8 +27,24 @@ console.log = function (...args) {
  * Exposes indexed Dart/Flutter data to AI agents via stdio
  */
 
-import { ProjectDetector } from './utils/projectDetector.js';
-import { SqliteCache } from './indexer/sqliteCache.js';
+import { ProjectDetector } from './utils/projectDetector';
+import { SqliteCache } from './indexer/sqliteCache';
+
+let packageResolver: PackageResolver | null = null;
+function getPackageResolver(): PackageResolver {
+  if (!packageResolver) {
+    packageResolver = new PackageResolver(currentProjectPath);
+  }
+  return packageResolver;
+}
+
+let vmServiceBridge: VmServiceBridge | null = null;
+function getVmServiceBridge(): VmServiceBridge {
+  if (!vmServiceBridge) {
+    vmServiceBridge = new VmServiceBridge(currentProjectPath);
+  }
+  return vmServiceBridge;
+}
 
 // Current project path, resolved via environment variable or global active project fallback
 let currentProjectPath: string = process.env.FLUTTER_PROJECT_PATH || "";
@@ -109,10 +127,39 @@ function getParserForFile(filePath: string) {
   if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
     return new JsTsParser() as any;
   }
-  if (['.kt', '.java'].includes(ext)) {
+  if (['.kt', '.java', '.xml', '.gradle'].includes(ext) || filePath.endsWith('.gradle.kts')) {
     return new AndroidParser() as any;
   }
   return new DartParser();
+}
+
+/**
+ * Normalizes input arguments across MCP tools to resolve a file's relative and absolute paths.
+ * Supports aliases: filePath, relativePath, path.
+ */
+function resolveFilePath(args: { filePath?: string; relativePath?: string; path?: string } | undefined | null): { relative: string; absolute: string } | null {
+  if (!args) return null;
+  const raw = args.filePath || args.relativePath || args.path;
+  if (!raw || typeof raw !== 'string') return null;
+  const cleanRaw = raw.trim().replace(/^['"]|['"]$/g, '');
+  if (!cleanRaw) return null;
+
+  let absPath: string;
+  if (path.isAbsolute(cleanRaw)) {
+    absPath = path.normalize(cleanRaw);
+  } else {
+    absPath = path.normalize(path.join(currentProjectPath, cleanRaw));
+  }
+
+  let relPath = path.relative(currentProjectPath, absPath).replace(/\\/g, '/');
+  if (relPath.startsWith('./')) {
+    relPath = relPath.substring(2);
+  }
+
+  return {
+    relative: relPath,
+    absolute: absPath.replace(/\\/g, '/')
+  };
 }
 
 const server = new McpServer({
@@ -688,14 +735,14 @@ server.registerTool(
     description: "Search for classes, functions, widgets, and other Dart elements. Use flutter_get_code_block to get full function/class bodies.",
     inputSchema: z.object({
       query: z.string().describe("The search term (class name, function name, etc.)"),
-      filter: z.enum(["class", "function", "widget", "enum", "mixin", "extension", "ext", "typedef", "type", "variable", "vars", "constructor", "property", "annotation", "file", "call", "translation"]).optional().describe("Filter by type (aliases: ext, type, vars)"),
+      filter: z.enum(["class", "function", "widget", "enum", "mixin", "extension", "ext", "extensionType", "typedef", "type", "variable", "vars", "constructor", "property", "annotation", "file", "call", "translation"]).optional().describe("Filter by type (aliases: ext, type, vars)"),
       searchMode: z.enum(["definitions", "calls", "both"]).optional().describe("Search in definitions, calls, or both (default: both)"),
       useDirectSearch: z.boolean().optional().describe("Force direct file search even if index exists (default: false)"),
     }),
   },
   async ({ query, filter, searchMode = "both", useDirectSearch = false }: {
     query: string;
-    filter?: "class" | "function" | "widget" | "enum" | "mixin" | "extension" | "ext" | "typedef" | "type" | "variable" | "vars" | "constructor" | "property" | "annotation" | "file" | "call" | "translation";
+    filter?: "class" | "function" | "widget" | "enum" | "mixin" | "extension" | "ext" | "extensionType" | "typedef" | "type" | "variable" | "vars" | "constructor" | "property" | "annotation" | "file" | "call" | "translation";
     searchMode?: "definitions" | "calls" | "both";
     useDirectSearch?: boolean;
   }) => {
@@ -776,6 +823,16 @@ server.registerTool(
             for (const e of info.extensions || []) {
               if (e.name.toLowerCase().includes(q)) {
                 results.push({ name: e.name, type: "extension_definition", file, line: e.line, on: e.onType });
+              }
+            }
+          }
+        }
+
+        if (!targetFilter || targetFilter === "extensionType") {
+          if (mode === "definitions" || mode === "both") {
+            for (const et of info.extensionTypes || []) {
+              if (et.name.toLowerCase().includes(q)) {
+                results.push({ name: et.name, type: "extension_type_definition", file, line: et.line, on: et.representationType });
               }
             }
           }
@@ -1022,15 +1079,28 @@ server.registerTool(
   {
     description: "Get detailed information about a specific Dart file",
     inputSchema: z.object({
-      relativePath: z.string().describe("The relative path of the file (e.g. lib/main.dart)"),
+      relativePath: z.string().optional().describe("The relative path of the file (e.g. lib/main.dart)"),
+      filePath: z.string().optional().describe("Alias for relativePath"),
+      path: z.string().optional().describe("Alias for relativePath"),
     }),
   },
-  async ({ relativePath }: { relativePath: string }) => {
+  async (args: { relativePath?: string; filePath?: string; path?: string }) => {
+    const resolved = resolveFilePath(args);
+    if (!resolved) {
+      return { content: [{ type: "text" as const, text: "Error: File path is required (provide relativePath, filePath, or path)." }] };
+    }
+
     const index = await readIndex();
     if (!index) return await handleIndexError();
 
-    const info = index.dart?.[relativePath];
-    if (!info) return { content: [{ type: "text" as const, text: `File not found in index: ${relativePath}` }] };
+    let info = index.dart?.[resolved.relative];
+    if (!info && index.dart) {
+      const lower = resolved.relative.toLowerCase();
+      const key = Object.keys(index.dart).find(k => k.toLowerCase() === lower || k.endsWith(resolved.relative));
+      if (key) info = index.dart[key];
+    }
+
+    if (!info) return { content: [{ type: "text" as const, text: `File not found in index: ${resolved.relative}` }] };
 
     return { content: [{ type: "text" as const, text: JSON.stringify(info, null, 2) }] };
   }
@@ -1039,7 +1109,7 @@ server.registerTool(
 server.registerTool(
   "flutter_get_pubspec",
   {
-    description: "Read and analyze the project's pubspec.yaml file",
+    description: "Read and analyze the project's pubspec.yaml, package.json, or build.gradle/settings.gradle file",
     inputSchema: z.object({}),
   },
   async () => {
@@ -1049,9 +1119,21 @@ server.registerTool(
         const content = fs.readFileSync(pubspecPath, "utf-8");
         return { content: [{ type: "text" as const, text: content }] };
       }
-      return { content: [{ type: "text" as const, text: `pubspec.yaml not found at: ${pubspecPath}` }] };
+      const pkgPath = path.join(currentProjectPath, "package.json");
+      if (fs.existsSync(pkgPath)) {
+        const content = fs.readFileSync(pkgPath, "utf-8");
+        return { content: [{ type: "text" as const, text: content }] };
+      }
+      for (const f of ['build.gradle.kts', 'app/build.gradle.kts', 'build.gradle', 'app/build.gradle', 'settings.gradle.kts', 'settings.gradle']) {
+        const gp = path.join(currentProjectPath, f);
+        if (fs.existsSync(gp)) {
+          const content = fs.readFileSync(gp, "utf-8");
+          return { content: [{ type: "text" as const, text: `// File: ${f}\n${content}` }] };
+        }
+      }
+      return { content: [{ type: "text" as const, text: `No project configuration file (pubspec.yaml, package.json, build.gradle) found at: ${currentProjectPath}` }] };
     } catch (error) {
-      return { content: [{ type: "text" as const, text: `Error reading pubspec: ${error}` }] };
+      return { content: [{ type: "text" as const, text: `Error reading project config: ${error}` }] };
     }
   }
 );
@@ -1185,13 +1267,39 @@ server.registerTool(
 server.registerTool(
   "flutter_get_diagnostics",
   {
-    description: "Get all VS Code diagnostics (errors and warnings) for the project",
-    inputSchema: z.object({}),
+    description: "Get VS Code diagnostics (errors and warnings) for the project, optionally filtered by file or severity",
+    inputSchema: z.object({
+      filePath: z.string().optional().describe("Optional relative or absolute file path to filter diagnostics for"),
+      relativePath: z.string().optional().describe("Alias for filePath"),
+      path: z.string().optional().describe("Alias for filePath"),
+      severity: z.enum(["error", "warning", "info"]).optional().describe("Optional severity level to filter by"),
+    }),
   },
-  async () => {
+  async (args: { filePath?: string; relativePath?: string; path?: string; severity?: "error" | "warning" | "info" }) => {
     const index = await readIndex();
     if (!index || !index.diagnostics) return { content: [{ type: "text" as const, text: "No diagnostics found in index." }] };
-    return { content: [{ type: "text" as const, text: JSON.stringify(index.diagnostics, null, 2) }] };
+
+    let diagnostics = index.diagnostics as any[];
+    const resolved = resolveFilePath(args);
+
+    if (resolved) {
+      const targetRel = resolved.relative.toLowerCase();
+      diagnostics = diagnostics.filter((d: any) => {
+        const dPath = (d.filePath || d.file || "").replace(/\\/g, '/').toLowerCase();
+        return dPath === targetRel || dPath.endsWith(targetRel);
+      });
+    }
+
+    if (args?.severity) {
+      const targetSev = args.severity.toLowerCase();
+      diagnostics = diagnostics.filter((d: any) => (d.severity || "").toLowerCase() === targetSev);
+    }
+
+    if (diagnostics.length === 0) {
+      return { content: [{ type: "text" as const, text: resolved ? `No diagnostics found for ${resolved.relative}.` : "No diagnostics found in index." }] };
+    }
+
+    return { content: [{ type: "text" as const, text: JSON.stringify(diagnostics, null, 2) }] };
   }
 );
 
@@ -1216,20 +1324,30 @@ server.registerTool(
 server.registerTool(
   "flutter_update_translation",
   {
-    description: "Update or add a translation key across all ARB files",
+    description: "Update or add a translation key across all ARB files, supporting dynamic multi-locale maps or Arabic/English values",
     inputSchema: z.object({
       key: z.string().describe("Translation key (e.g. loginButton)"),
-      arValue: z.string().describe("Arabic translation value"),
-      enValue: z.string().describe("English translation value"),
+      arValue: z.string().optional().describe("Arabic translation value (optional if translations map is provided)"),
+      enValue: z.string().optional().describe("English translation value (optional if translations map is provided)"),
+      translations: z.record(z.string(), z.string()).optional().describe("Dynamic map of locale to value (e.g. {'en': 'Hello', 'ar': 'مرحبا', 'fr': 'Bonjour'})"),
       description: z.string().optional().describe("Optional description for the translation key"),
+      placeholders: z.record(z.string(), z.any()).optional().describe("Optional ICU placeholder definitions"),
     }),
   },
-  async ({ key, arValue, enValue, description }) => {
+  async ({ key, arValue, enValue, translations, description, placeholders }) => {
     const arbEditor = new ArbEditor(currentProjectPath);
-    const result = arbEditor.updateTranslation(key, arValue, enValue, description);
+    const result = arbEditor.updateTranslation(
+      key,
+      translations || (arValue ?? ""),
+      enValue,
+      description,
+      placeholders as Record<string, any> | undefined
+    );
     return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
   }
 );
+
+
 
 server.registerTool(
   "flutter_delete_translation",
@@ -1264,19 +1382,27 @@ server.registerTool(
   {
     description: "Analyze the 'blast radius' of a file: find all application entry points (UI/Main/Events) that eventually call code in this file.",
     inputSchema: z.object({
-      relativePath: z.string().describe("The relative path of the file to analyze (e.g. lib/core/utils.dart)"),
+      relativePath: z.string().optional().describe("The relative path of the file to analyze (e.g. lib/core/utils.dart)"),
+      filePath: z.string().optional().describe("Alias for relativePath"),
+      path: z.string().optional().describe("Alias for relativePath"),
       maxDepth: z.number().optional().describe("Maximum search depth (default: 25)"),
     }),
   },
-  async ({ relativePath, maxDepth = 25 }) => {
+  async (args: { relativePath?: string; filePath?: string; path?: string; maxDepth?: number }) => {
+    const resolved = resolveFilePath(args);
+    if (!resolved) {
+      return { content: [{ type: "text" as const, text: "Error: File path is required (provide relativePath, filePath, or path)." }] };
+    }
+
     const index = await readIndex();
     if (!index || !index.dart) return await handleIndexError();
 
+    const maxDepth = args.maxDepth ?? 25;
     const analyzer = new CodeAnalyzer(currentProjectPath);
-    const affectedFlows = analyzer.findImpactBackwards(index, relativePath, maxDepth);
+    const affectedFlows = analyzer.findImpactBackwards(index, resolved.relative, maxDepth);
 
     const result = {
-      targetFile: relativePath,
+      targetFile: resolved.relative,
       affectedFlows,
       summary: affectedFlows.length > 0
         ? `Found ${affectedFlows.length} execution flows from entry points reaching this file.`
@@ -1346,20 +1472,49 @@ server.registerTool(
   {
     description: "Set the Flutter project root path for the MCP server",
     inputSchema: z.object({
-      projectPath: z.string().describe("Absolute path to the Flutter project root (directory containing pubspec.yaml or .git)"),
+      projectPath: z.string().optional().describe("Absolute path to the Flutter project root (directory containing pubspec.yaml, package.json, or .git)"),
+      path: z.string().optional().describe("Alias for projectPath"),
     }),
   },
-  async ({ projectPath }: { projectPath: string }) => {
-    const hasPubspec = fs.existsSync(path.join(projectPath, "pubspec.yaml"));
-    const hasGit = fs.existsSync(path.join(projectPath, ".git"));
-
-    if (!hasPubspec && !hasGit) {
-      return { content: [{ type: "text" as const, text: "Error: No Flutter project (pubspec.yaml) or repository root (.git) found in the specified path." }] };
+  async (args: { projectPath?: string; path?: string }) => {
+    const targetPath = args.projectPath || args.path;
+    if (!targetPath) {
+      return { content: [{ type: "text" as const, text: "Error: Project path is required (provide projectPath or path)." }] };
     }
 
-    currentProjectPath = projectPath;
+    const cleanPath = path.normalize(targetPath.trim().replace(/^['"]|['"]$/g, ''));
+    const hasPubspec = fs.existsSync(path.join(cleanPath, "pubspec.yaml"));
+    const hasGit = fs.existsSync(path.join(cleanPath, ".git"));
+    const hasPackageJson = fs.existsSync(path.join(cleanPath, "package.json"));
+    const hasGradle = fs.existsSync(path.join(cleanPath, "build.gradle")) ||
+      fs.existsSync(path.join(cleanPath, "build.gradle.kts")) ||
+      fs.existsSync(path.join(cleanPath, "settings.gradle")) ||
+      fs.existsSync(path.join(cleanPath, "settings.gradle.kts"));
+
+    if (!hasPubspec && !hasGit && !hasPackageJson && !hasGradle) {
+      return { content: [{ type: "text" as const, text: `Error: No Flutter project (pubspec.yaml), JS/TS project (package.json), Android project (build.gradle/settings.gradle), or repository root (.git) found in: ${cleanPath}` }] };
+    }
+
+    currentProjectPath = cleanPath;
     sqliteCache = null; // Force re-initialization with new path
-    return { content: [{ type: "text" as const, text: `Project path set to: ${projectPath}` }] };
+    packageResolver = null;
+    if (vmServiceBridge) {
+      vmServiceBridge.disconnect();
+      vmServiceBridge = null;
+    }
+
+    // Persist to ~/.gemini/active-project.txt so it survives MCP server restarts
+    try {
+      const geminiDir = path.join(os.homedir(), '.gemini');
+      if (!fs.existsSync(geminiDir)) {
+        fs.mkdirSync(geminiDir, { recursive: true });
+      }
+      fs.writeFileSync(path.join(geminiDir, 'active-project.txt'), cleanPath, 'utf-8');
+    } catch {
+      // ignore persistence error
+    }
+
+    return { content: [{ type: "text" as const, text: `Project path set to: ${cleanPath}` }] };
   }
 );
 
@@ -1420,19 +1575,39 @@ server.registerTool(
       elementType: z.enum(["class", "function", "method", "enum", "mixin", "extension"]).describe("Type of element to extract"),
       name: z.string().describe("Name of the class, function, or method"),
       filePath: z.string().optional().describe("Relative path to the file (optional, will search all files if not provided)"),
-      parentClass: z.string().optional().describe("Parent class name (required for methods)"),
+      relativePath: z.string().optional().describe("Alias for filePath"),
+      path: z.string().optional().describe("Alias for filePath"),
+      parentClass: z.string().optional().describe("Parent class name (optional, auto-detected if not provided)"),
     }),
   },
-  async ({ elementType, name, filePath, parentClass }: {
+  async (args: {
     elementType: "class" | "function" | "method" | "enum" | "mixin" | "extension";
     name: string;
     filePath?: string;
+    relativePath?: string;
+    path?: string;
     parentClass?: string;
   }) => {
+    const { elementType, name } = args;
+    let parentClass = args.parentClass;
+    const resolved = resolveFilePath(args);
     const index = await readIndex();
     if (!index || !index.dart) return { content: [{ type: "text", text: "Index not found." }] };
 
-    let targetFile = filePath;
+    let targetFile = resolved ? resolved.relative : (args.filePath || args.relativePath || args.path);
+
+    // Auto-detect parentClass if not provided and targetFile is known
+    if (targetFile && elementType === 'method' && !parentClass && index.dart) {
+      const info = index.dart[targetFile] as DartFileInfo | undefined;
+      if (info) {
+        const cls = info.classes.find((c: ClassInfo) => c.methods.some(m => m.name === name));
+        if (cls) parentClass = cls.name;
+        else {
+          const ext = (info.extensions || []).find((e: any) => e.methods?.some((m: any) => m.name === name));
+          if (ext) parentClass = ext.name;
+        }
+      }
+    }
 
     if (!targetFile) {
       for (const file in index.dart) {
@@ -1486,14 +1661,18 @@ server.registerTool(
     inputSchema: z.object({
       functionName: z.string().describe("Name of the function to analyze"),
       filePath: z.string().optional().describe("Relative path to the file (optional, will search if not provided)"),
+      relativePath: z.string().optional().describe("Alias for filePath"),
+      path: z.string().optional().describe("Alias for filePath"),
       parentClass: z.string().optional().describe("Parent class name (required for methods)"),
     }),
   },
-  async ({ functionName, filePath, parentClass }: { functionName: string; filePath?: string; parentClass?: string }) => {
+  async (args: { functionName: string; filePath?: string; relativePath?: string; path?: string; parentClass?: string }) => {
+    const { functionName, parentClass } = args;
+    const resolved = resolveFilePath(args);
     const index = await readIndex();
     if (!index || !index.dart) return await handleIndexError();
     const analyzer = new CodeAnalyzer(currentProjectPath);
-    let targetFile = filePath;
+    let targetFile = resolved ? resolved.relative : (args.filePath || args.relativePath || args.path);
     let resolvedParentClass = parentClass;
 
     if (!targetFile) {
@@ -1706,24 +1885,61 @@ server.registerTool(
       name: z.string().describe("Name of the element to read"),
       elementType: z.enum(["class", "function", "method"]).optional().describe("Type of element (auto-detected if not provided)"),
       filePath: z.string().optional().describe("Relative path to the file (optional, will search if not provided)"),
-      parentClass: z.string().optional().describe("Parent class name (required for methods)"),
+      relativePath: z.string().optional().describe("Alias for filePath"),
+      path: z.string().optional().describe("Alias for filePath"),
+      parentClass: z.string().optional().describe("Parent class name (optional, auto-detected if not provided)"),
       includeContext: z.boolean().optional().describe("Include surrounding context lines (default: false)"),
       contextLines: z.number().optional().describe("Number of context lines before/after (default: 3)"),
     }),
   },
-  async ({ name, elementType, filePath, parentClass, includeContext = false, contextLines = 3 }: {
+  async (args: {
     name: string;
     elementType?: "class" | "function" | "method";
     filePath?: string;
+    relativePath?: string;
+    path?: string;
     parentClass?: string;
     includeContext?: boolean;
     contextLines?: number;
   }) => {
+    const { name, elementType } = args;
+    const includeContext = args.includeContext ?? false;
+    const contextLines = args.contextLines ?? 3;
+    let parentClass = args.parentClass;
+    const resolved = resolveFilePath(args);
+
     const index = await readIndex();
     if (!index || !index.dart) return { content: [{ type: "text", text: "Index not found." }] };
 
-    let targetFile = filePath;
+    let targetFile = resolved ? resolved.relative : (args.filePath || args.relativePath || args.path);
     let detectedType = elementType;
+
+    // Auto-detect type and parentClass if targetFile is provided
+    if (targetFile && index.dart) {
+      const info = index.dart[targetFile] as DartFileInfo | undefined;
+      if (info) {
+        if (!detectedType) {
+          if (info.classes.some((c: ClassInfo) => c.name === name)) detectedType = 'class';
+          else if (info.functions.some((f: FunctionInfo) => f.name === name && !f.parentClass)) detectedType = 'function';
+          else {
+            const matchClass = info.classes.find((c: ClassInfo) => c.methods.some(m => m.name === name));
+            if (matchClass) {
+              detectedType = 'method';
+              if (!parentClass) parentClass = matchClass.name;
+            } else {
+              const matchExt = (info.extensions || []).find((e: any) => e.methods?.some((m: any) => m.name === name));
+              if (matchExt) {
+                detectedType = 'method';
+                if (!parentClass) parentClass = matchExt.name;
+              }
+            }
+          }
+        } else if (detectedType === 'method' && !parentClass) {
+          const matchClass = info.classes.find((c: ClassInfo) => c.methods.some(m => m.name === name));
+          if (matchClass) parentClass = matchClass.name;
+        }
+      }
+    }
 
     if (!targetFile) {
       for (const file in index.dart) {
@@ -1933,119 +2149,97 @@ server.registerTool(
   }
 );
 
+server.registerTool(
+  "flutter_read_lines",
+  {
+    description: "Read a specific range of lines from any file in the project with 1-based line numbers. Highly recommended for inspecting code around errors or reviewing large files without token bloat.",
+    inputSchema: z.object({
+      filePath: z.string().optional().describe("Path to the file (relative or absolute)"),
+      relativePath: z.string().optional().describe("Alias for filePath"),
+      path: z.string().optional().describe("Alias for filePath"),
+      startLine: z.number().optional().describe("Starting line number (1-indexed, inclusive, default: 1)"),
+      endLine: z.number().optional().describe("Ending line number (1-indexed, inclusive, default: startLine + 100)"),
+      maxLines: z.number().optional().describe("Maximum lines to return (default: 300, max: 800)"),
+    }),
+  },
+  async (args: {
+    filePath?: string;
+    relativePath?: string;
+    path?: string;
+    startLine?: number;
+    endLine?: number;
+    maxLines?: number;
+  }) => {
+    const resolved = resolveFilePath(args);
+    if (!resolved) {
+      return { content: [{ type: "text" as const, text: "Error: File path is required (filePath, relativePath, or path)." }] };
+    }
+
+    const fullPath = resolved.absolute;
+    if (!fs.existsSync(fullPath)) {
+      return { content: [{ type: "text" as const, text: `Error: File not found: ${resolved.relative} (resolved: ${fullPath})` }] };
+    }
+
+    let fileContent = "";
+    try {
+      fileContent = fs.readFileSync(fullPath, "utf-8");
+    } catch (e: any) {
+      return { content: [{ type: "text" as const, text: `Error reading file: ${e?.message || e}` }] };
+    }
+
+    const lines = fileContent.split("\n");
+    const totalLines = lines.length;
+
+    const start = Math.max(1, Math.min(totalLines, args.startLine ?? 1));
+    const capMax = Math.min(800, Math.max(1, args.maxLines ?? 300));
+    const defaultEnd = Math.min(totalLines, start + 100 - 1);
+    let end = Math.max(start, Math.min(totalLines, args.endLine ?? defaultEnd));
+
+    if (end - start + 1 > capMax) {
+      end = start + capMax - 1;
+    }
+
+    const sliced = lines.slice(start - 1, end);
+    const numbered = sliced.map((line, idx) => `${start + idx}: ${line}`).join("\n");
+    const header = `File: ${resolved.relative} (Lines ${start}-${end} of ${totalLines}):\n\n`;
+
+    return {
+      content: [{
+        type: "text" as const,
+        text: header + numbered,
+      }],
+    };
+  }
+);
+
 let isAnalyzeRunning = false;
 server.registerTool(
   "flutter_run_analyze",
   {
-    description: "Run compiler checks or linters on the current project based on its detected type (Flutter, TS/JS, Android).",
-    inputSchema: z.object({}),
+    description: "Run compiler checks or linters on the current project based on its detected type (Flutter, TS/JS, Android), optionally targeting a specific file or directory.",
+    inputSchema: z.object({
+      targetPath: z.string().optional().describe("Optional relative or absolute path to a specific file or folder to analyze (e.g. lib/features/posts)"),
+      filePath: z.string().optional().describe("Alias for targetPath"),
+      path: z.string().optional().describe("Alias for targetPath"),
+    }),
   },
-  async () => {
+  async (analyzeArgs?: { targetPath?: string; filePath?: string; path?: string }) => {
     if (isAnalyzeRunning) {
       return { content: [{ type: "text", text: "Another analysis is already running. Please wait." }] };
     }
     
-    const projectType = ProjectDetector.getProjectType(currentProjectPath);
-    let command = "";
-    let args: string[] = [];
-
-    if (projectType === "flutter") {
-      command = "flutter";
-      args = ["analyze"];
-    } else if (projectType === "ts") {
-      command = "npx";
-      args = ["tsc", "--noEmit"];
-    } else if (projectType === "android") {
-      const isWindows = process.platform === "win32";
-      const gradlewFile = isWindows ? "gradlew.bat" : "./gradlew";
-      if (fs.existsSync(path.join(currentProjectPath, gradlewFile))) {
-        command = gradlewFile;
-        args = ["lint"];
-      } else {
-        command = "gradle";
-        args = ["lint"];
-      }
-    } else {
-      return { content: [{ type: "text", text: `Error: Could not determine project type for analysis at: ${currentProjectPath}.` }] };
-    }
-
     isAnalyzeRunning = true;
     try {
-      const result = await new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
-        const child = spawn(command, args, { cwd: currentProjectPath, shell: true });
-        let stdout = "";
-        let stderr = "";
-        
-        const timer = setTimeout(() => {
-          child.kill();
-          resolve({ stdout, stderr: stderr + "\nProcess timed out after 5 minutes.", code: -1 });
-        }, 300000);
-
-        child.stdout.on("data", (data) => stdout += data.toString());
-        child.stderr.on("data", (data) => stderr += data.toString());
-        child.on("close", (code) => {
-          clearTimeout(timer);
-          resolve({ stdout, stderr, code: code ?? 0 });
-        });
-      });
-
-      const lines = result.stdout.split("\n").concat(result.stderr.split("\n"));
-      const diagnostics: any[] = [];
-      const flutterRegex = /^\s*(info|warning|error)\s+•\s+(.*?)\s+•\s+(.*?):(\d+):(\d+)\s+•\s+(.*)$/i;
-      const tscRegex = /^(.*?)\((\d+),(\d+)\):\s+(error|warning|info)\s+(TS\d+):\s+(.*)$/i;
-      const javaRegex = /^(.*?):(\d+):\s+(error|warning|info):\s+(.*)$/i;
-
-      for (const line of lines) {
-        const flutterMatch = line.match(flutterRegex);
-        if (flutterMatch) {
-          diagnostics.push({
-            severity: flutterMatch[1].toLowerCase(),
-            description: flutterMatch[2].trim(),
-            file: flutterMatch[3].trim(),
-            line: parseInt(flutterMatch[4], 10),
-            column: parseInt(flutterMatch[5], 10),
-            message: flutterMatch[6].trim()
-          });
-          continue;
-        }
-
-        const tscMatch = line.match(tscRegex);
-        if (tscMatch) {
-          diagnostics.push({
-            severity: tscMatch[4].toLowerCase(),
-            description: tscMatch[5].trim(),
-            file: tscMatch[1].trim(),
-            line: parseInt(tscMatch[2], 10),
-            column: parseInt(tscMatch[3], 10),
-            message: tscMatch[6].trim()
-          });
-          continue;
-        }
-
-        const javaMatch = line.match(javaRegex);
-        if (javaMatch) {
-          diagnostics.push({
-            severity: javaMatch[3].toLowerCase(),
-            description: "Compilation Issue",
-            file: javaMatch[1].trim(),
-            line: parseInt(javaMatch[2], 10),
-            column: 1,
-            message: javaMatch[4].trim()
-          });
-          continue;
-        }
+      const projectType = ProjectDetector.getProjectType(currentProjectPath);
+      const target = analyzeArgs?.targetPath || analyzeArgs?.filePath || analyzeArgs?.path;
+      const result = await runProjectAnalysis(currentProjectPath, projectType, target);
+      if (!result.ok) {
+        return { content: [{ type: "text", text: result.error }] };
       }
-
       return {
         content: [{
           type: "text" as const,
-          text: JSON.stringify({
-            success: result.code !== -1 && diagnostics.filter(d => d.severity === "error").length === 0,
-            exitCode: result.code,
-            diagnosticsCount: diagnostics.length,
-            diagnostics: diagnostics.slice(0, 100),
-            rawOutput: result.stdout.substring(0, 2000)
-          }, null, 2)
+          text: JSON.stringify(result.report, null, 2)
         }]
       };
     } catch (error) {
@@ -2068,39 +2262,16 @@ server.registerTool(
       return { content: [{ type: "text", text: "Another build_runner process is already running. Please wait." }] };
     }
 
-    const hasPubspec = fs.existsSync(path.join(currentProjectPath, "pubspec.yaml"));
-    if (!hasPubspec) {
-      return { content: [{ type: "text", text: `Error: 'pubspec.yaml' not found in current project path: ${currentProjectPath}. Use 'flutter_set_project_path' to set it first.` }] };
-    }
-
     isBuildRunnerRunning = true;
     try {
-      const result = await new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
-        const child = spawn("dart", ["run", "build_runner", "build", "--delete-conflicting-outputs"], { cwd: currentProjectPath, shell: true });
-        let stdout = "";
-        let stderr = "";
-        
-        const timer = setTimeout(() => {
-          child.kill();
-          resolve({ stdout, stderr: stderr + "\nProcess timed out after 3 minutes.", code: -1 });
-        }, 180000);
-
-        child.stdout.on("data", (data) => stdout += data.toString());
-        child.stderr.on("data", (data) => stderr += data.toString());
-        child.on("close", (code) => {
-          clearTimeout(timer);
-          resolve({ stdout, stderr, code: code ?? 0 });
-        });
-      });
-
+      const result = await runBuildRunner(currentProjectPath);
+      if (!result.ok) {
+        return { content: [{ type: "text", text: result.error }] };
+      }
       return {
         content: [{
           type: "text" as const,
-          text: JSON.stringify({
-            success: result.code === 0,
-            exitCode: result.code,
-            rawOutput: result.stdout.substring(result.stdout.length - 2000)
-          }, null, 2)
+          text: JSON.stringify(result.report, null, 2)
         }]
       };
     } catch (error) {
@@ -2265,7 +2436,7 @@ server.registerTool("flutter_run_intl_generate", {
   inputSchema: z.object({})
 }, async () => {
   try {
-    const { IntlGenerator } = await import('./indexer/intlGenerator.js');
+    const { IntlGenerator } = await import('./indexer/intlGenerator');
     const generator = new IntlGenerator(currentProjectPath);
     if (!generator.isEnabled()) {
       return { content: [{ type: "text", text: "Flutter Intl is not enabled in pubspec.yaml." }] };
@@ -2290,6 +2461,365 @@ server.registerTool("flutter_rebuild_index", {
     return { content: [{ type: "text", text: `Error triggering re-index: ${error.message}` }], isError: true };
   }
 });
+
+// ─── External Package & Flutter SDK Exploration Tools ─────────────────────────
+
+server.registerTool(
+  "flutter_search_packages",
+  {
+    description: "Search across all cached third-party Dart/Flutter package dependencies in .pub-cache or Flutter SDK (similar to rip_grep_packages).",
+    inputSchema: z.object({
+      query: z.string().describe("Search term or regex pattern"),
+      packageName: z.string().optional().describe("Optional package name to limit search (e.g. 'dio' or 'flutter')"),
+      isRegex: z.boolean().optional().describe("Whether query is a regex (default: false)"),
+      caseSensitive: z.boolean().optional().describe("Case-sensitive match (default: false)"),
+      maxResults: z.number().optional().describe("Max number of matches to return (default: 50)")
+    }),
+  },
+  async ({ query, packageName, isRegex, caseSensitive, maxResults }) => {
+    try {
+      const resolver = getPackageResolver();
+      const results = resolver.searchInPackages(query, { packageName, isRegex, caseSensitive, maxResults });
+      return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+    } catch (error: any) {
+      return { content: [{ type: "text" as const, text: `Error searching packages: ${error.message}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "flutter_read_package_source",
+  {
+    description: "Read the source code of any cached third-party package or Flutter SDK library by package URI (e.g. package:flutter/material.dart or package:dio/dio.dart).",
+    inputSchema: z.object({
+      uri: z.string().describe("Package URI (e.g. package:flutter/widgets.dart or package:provider/provider.dart)"),
+      startLine: z.number().optional().describe("Starting line number (1-based, default: 1)"),
+      lineCount: z.number().optional().describe("Number of lines to read (default: 100)")
+    }),
+  },
+  async ({ uri, startLine, lineCount }) => {
+    try {
+      const resolver = getPackageResolver();
+      const result = resolver.readPackageSource(uri, startLine, lineCount);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (error: any) {
+      return { content: [{ type: "text" as const, text: `Error reading package source: ${error.message}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "flutter_pub_dev_search",
+  {
+    description: "Live search for packages on pub.dev to discover libraries, popularity, descriptions, and latest versions.",
+    inputSchema: z.object({
+      query: z.string().describe("Search query for pub.dev (e.g. 'state management' or 'sqlite')"),
+      page: z.number().optional().describe("Page number (default: 1)")
+    }),
+  },
+  async ({ query, page }) => {
+    try {
+      const resolver = getPackageResolver();
+      const result = await resolver.searchPubDev(query, page);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (error: any) {
+      return { content: [{ type: "text" as const, text: `Error querying pub.dev: ${error.message}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "flutter_get_pub_package_info",
+  {
+    description: "Get detailed metrics for a package from pub.dev, including pub points, popularity score, likes, description, and repository.",
+    inputSchema: z.object({
+      packageName: z.string().describe("Package name on pub.dev (e.g. 'riverpod' or 'dio')")
+    }),
+  },
+  async ({ packageName }) => {
+    try {
+      const resolver = getPackageResolver();
+      const result = await resolver.getPubPackageInfo(packageName);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (error: any) {
+      return { content: [{ type: "text" as const, text: `Error fetching package info: ${error.message}` }], isError: true };
+    }
+  }
+);
+
+// ─── Live Runtime Bridge Tools (VM Service) ─────────────────────────────────
+
+server.registerTool(
+  "flutter_hot_reload",
+  {
+    description: "Trigger Hot Reload (ext.flutter.reassemble) on the running Flutter app via the Dart VM Service.",
+    inputSchema: z.object({
+      vmServiceUri: z.string().optional().describe("Optional WebSocket VM Service URI. If omitted, automatically discovered.")
+    }),
+  },
+  async ({ vmServiceUri }) => {
+    const bridge = getVmServiceBridge();
+    const result = await bridge.hotReload(vmServiceUri);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "flutter_hot_restart",
+  {
+    description: "Trigger a full Hot Restart on the running Flutter application via the Dart VM Service.",
+    inputSchema: z.object({
+      vmServiceUri: z.string().optional().describe("Optional WebSocket VM Service URI. If omitted, automatically discovered.")
+    }),
+  },
+  async ({ vmServiceUri }) => {
+    const bridge = getVmServiceBridge();
+    const result = await bridge.hotRestart(vmServiceUri);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "flutter_get_runtime_errors",
+  {
+    description: "Fetch real-time Flutter runtime errors, uncaught exceptions, and stderr logs from the running application.",
+    inputSchema: z.object({
+      vmServiceUri: z.string().optional().describe("Optional WebSocket VM Service URI. If omitted, automatically discovered.")
+    }),
+  },
+  async ({ vmServiceUri }) => {
+    const bridge = getVmServiceBridge();
+    const result = await bridge.getRuntimeErrors(vmServiceUri);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "flutter_inspect_live_widgets",
+  {
+    description: "Inspect the live running widget tree and render objects of the active Flutter application.",
+    inputSchema: z.object({
+      vmServiceUri: z.string().optional().describe("Optional WebSocket VM Service URI. If omitted, automatically discovered."),
+      objectGroup: z.string().optional().describe("Inspector object group name (default: 'flutter_explorer_group')")
+    }),
+  },
+  async ({ vmServiceUri, objectGroup }) => {
+    const bridge = getVmServiceBridge();
+    const result = await bridge.inspectLiveWidgets(vmServiceUri, objectGroup);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+// ─── Advanced Localization Tools ─────────────────────────────────────────────
+
+server.registerTool(
+  "flutter_find_unused_translations",
+  {
+    description: "Scan all ARB translation keys and compare with lib/ code to find unused/dead translation keys.",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    const arbEditor = new ArbEditor(currentProjectPath);
+    const result = arbEditor.findUnusedTranslations();
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "flutter_validate_icu_translations",
+  {
+    description: "Validate ICU syntax, placeholder consistency ({name}), and plural balance across all ARB translation files.",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    const arbEditor = new ArbEditor(currentProjectPath);
+    const result = arbEditor.validateIcuPlaceholders();
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "flutter_auto_translate_missing",
+  {
+    description: "Generate structured translation payload for missing keys across locales, or batch apply translated keys.",
+    inputSchema: z.object({
+      action: z.enum(["generate_payload", "batch_apply"]).describe("Action to perform: generate_payload to get missing keys, or batch_apply to write translations"),
+      sourceLocale: z.string().optional().describe("Base locale (default: 'en')"),
+      translationsToApply: z.array(z.object({
+        key: z.string(),
+        translations: z.record(z.string(), z.string()),
+        description: z.string().optional(),
+        placeholders: z.record(z.string(), z.any()).optional()
+      })).optional().describe("Translations to batch apply if action is 'batch_apply'")
+    }),
+  },
+  async ({ action, sourceLocale, translationsToApply }) => {
+    const arbEditor = new ArbEditor(currentProjectPath);
+    if (action === "batch_apply") {
+      if (!translationsToApply || translationsToApply.length === 0) {
+        return { content: [{ type: "text" as const, text: "Error: translationsToApply array is required for batch_apply" }] };
+      }
+      const result = arbEditor.batchApplyTranslations(translationsToApply as any);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } else {
+      const result = arbEditor.generateMissingTranslationsPayload(sourceLocale || "en");
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    }
+  }
+);
+
+
+// ─── Advanced Architectural & Static Analysis Tools ──────────────────────────
+
+server.registerTool(
+  "flutter_detect_circular_dependencies",
+  {
+    description: "Detect circular dependency cycles across project files (A -> B -> C -> A) to prevent architectural degradation.",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    const index = await readIndex();
+    if (!index || !index.dart) return await handleIndexError();
+    const analyzer = new CodeAnalyzer(currentProjectPath);
+    const result = analyzer.detectCircularDependencies(index);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "flutter_validate_architecture_rules",
+  {
+    description: "Validate layer boundary rules (e.g. Domain must not depend on Data/UI, Core must not depend on Features).",
+    inputSchema: z.object({
+      customRules: z.array(z.object({
+        name: z.string(),
+        fromLayer: z.string(),
+        forbiddenLayers: z.array(z.string()),
+        description: z.string()
+      })).optional().describe("Optional custom layer boundary rules. If omitted, standard Clean Architecture rules are applied.")
+    }),
+  },
+  async ({ customRules }) => {
+    const index = await readIndex();
+    if (!index || !index.dart) return await handleIndexError();
+    const analyzer = new CodeAnalyzer(currentProjectPath);
+    const result = analyzer.validateLayerBoundaries(index, customRules);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "flutter_detect_unused_assets",
+  {
+    description: "Scan pubspec.yaml asset directories and detect unused/unreferenced image, icon, or data assets.",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    const analyzer = new CodeAnalyzer(currentProjectPath);
+    const result = analyzer.detectUnusedAssets();
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "flutter_get_git_blast_radius",
+  {
+    description: "Automatically calculate blast radius and affected entry points/execution flows from current Git diff changes.",
+    inputSchema: z.object({
+      maxDepth: z.number().optional().describe("Max traversal depth (default: 25)")
+    }),
+  },
+  async ({ maxDepth }) => {
+    const index = await readIndex();
+    if (!index || !index.dart) return await handleIndexError();
+    const analyzer = new CodeAnalyzer(currentProjectPath);
+    const result = analyzer.getGitDiffImpactAnalysis(index, maxDepth);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "flutter_analyze_widget_depth",
+  {
+    description: "Analyze widget hierarchy nesting depth across project files and detect excessive nesting exceeding thresholds (inspired by DCM widget-nesting-depth).",
+    inputSchema: z.object({
+      maxDepthThreshold: z.number().optional().describe("Maximum allowed nesting depth before raising a violation (default: 5)")
+    }),
+  },
+  async ({ maxDepthThreshold }) => {
+    const index = await readIndex();
+    if (!index || !index.dart) return await handleIndexError();
+    const analyzer = new CodeAnalyzer(currentProjectPath);
+    const result = analyzer.analyzeWidgetDepth(index, maxDepthThreshold);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "flutter_detect_duplicate_widgets",
+  {
+    description: "Detect duplicate or near-identical widget subtrees across project files and generate proposals for extracting reusable custom widgets (inspired by DCM Duplicate Widget Analyzer).",
+    inputSchema: z.object({
+      minNodeCount: z.number().optional().describe("Minimum number of widgets in a subtree to consider for duplication (default: 3)")
+    }),
+  },
+  async ({ minNodeCount }) => {
+    const index = await readIndex();
+    if (!index || !index.dart) return await handleIndexError();
+    const analyzer = new CodeAnalyzer(currentProjectPath);
+    const result = analyzer.detectDuplicateWidgets(index, minNodeCount);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "flutter_detect_memory_leaks",
+  {
+    description: "Detect potential memory leaks and undisposed controllers (TextEditingController, AnimationController, ScrollController, StreamSubscription, FocusNode, etc.) in State classes (inspired by leak_tracker & saropa_lints).",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    const index = await readIndex();
+    if (!index || !index.dart) return await handleIndexError();
+    const analyzer = new CodeAnalyzer(currentProjectPath);
+    const result = analyzer.detectMemoryLeaks(index);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "flutter_simulate_ui_action",
+  {
+    description: "Simulate user UI interactions (tap, enterText, scroll) on the live running Flutter app via VM Service (inspired by Marionette MCP & Flutter Driver).",
+    inputSchema: z.object({
+      action: z.enum(["tap", "enterText", "scroll"]).describe("Type of UI action to simulate"),
+      target: z.string().describe("Target widget key, text, or identifier to interact with"),
+      value: z.string().optional().describe("Text value to enter (for enterText) or scroll offset in pixels (for scroll, default: -300)"),
+      vmUri: z.string().optional().describe("Optional VM Service URI override")
+    }),
+  },
+  async ({ action, target, value, vmUri }) => {
+    const bridge = getVmServiceBridge();
+    const result = await bridge.simulateUiAction(action, target, value, vmUri);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "flutter_get_architectural_layers",
+  {
+    description: "Classify project files into Clean Architecture layers (Presentation, Domain, Data, Core), calculate Lakos coupling metrics (Ca, Ce, Instability), and detect cross-layer violations (inspired by Lakos Architecture Visualizer).",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    const index = await readIndex();
+    if (!index || !index.dart) return await handleIndexError();
+    const analyzer = new CodeAnalyzer(currentProjectPath);
+    const result = analyzer.getArchitecturalLayers(index);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
 
 // Start the server
 async function main() {

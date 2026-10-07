@@ -212,45 +212,63 @@
     if (!fileNameEl || !treeView) return;
 
     if (!data || !data.fileName) {
-      fileNameEl.textContent = 'No Dart file open';
-      treeView.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🌳</div><div class="empty-state-text">Open a Dart file to see its widget tree</div></div>';
+      fileNameEl.textContent = 'No file open';
+      treeView.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🌳</div><div class="empty-state-text">Open a code or markdown file to see its outline</div></div>';
       return;
     }
 
+    const targetFile = data.filePath || data.fileName;
     fileNameEl.textContent = data.fileName;
     let html = '';
 
-    // Helper to render sections
-    function renderSection(title, items, iconText, badgeClass) {
-      if (!items || items.length === 0) return '';
-      let sectionHtml = '<div class="class-list"><div style="font-size: 11px; color: #888; font-weight: bold; margin-bottom: 4px; text-transform: uppercase;">' + title + '</div>';
-      for (const item of items) {
-        let opacityStyle = item.isPrivate ? 'opacity: 0.7; font-style: italic;' : '';
-        let typeName = item.type || iconText;
-        sectionHtml += `<div class="class-item" data-line="${item.line}">
-          <span class="class-type-badge ${badgeClass}">${typeName}</span>
-          <span style="${opacityStyle}">${escapeHtml(item.name)}</span>
-        </div>`;
+    // If hierarchical Outline is available from IDE/Language Server
+    if (data.outline && data.outline.length > 0) {
+      const isMarkdown = data.fileName && data.fileName.endsWith('.md');
+      const outlineTitle = isMarkdown ? 'Headings & Outline' : 'Code Outline';
+      html += '<div class="class-list" style="border-bottom: none; padding-bottom: 2px;"><div style="font-size: 11px; color: #888; font-weight: bold; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">' + outlineTitle + '</div></div>';
+      html += renderOutlineNodes(data.outline, 0);
+
+      // Render UI Components (Widget Tree) if present in Flutter/Dart files
+      if (data.tree && data.tree.length > 0) {
+        html += '<div class="class-list" style="border-bottom: none; margin-top: 14px; padding-bottom: 2px;"><div style="font-size: 11px; color: #888; font-weight: bold; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">UI Components (Widget Tree)</div></div>';
+        html += renderTreeNodes(data.tree, 0);
       }
-      sectionHtml += '</div>';
-      return sectionHtml;
-    }
+    } else {
+      // Fallback: Grouped sections
+      function renderSection(title, items, iconText, badgeClass) {
+        if (!items || items.length === 0) return '';
+        let sectionHtml = '<div class="class-list"><div style="font-size: 11px; color: #888; font-weight: bold; margin-bottom: 4px; text-transform: uppercase;">' + title + '</div>';
+        for (const item of items) {
+          let opacityStyle = item.isPrivate ? 'opacity: 0.7; font-style: italic;' : '';
+          let typeName = item.type || iconText;
+          sectionHtml += `<div class="class-item" data-line="${item.line}">
+            <span class="class-type-badge ${badgeClass}">${typeName}</span>
+            <span style="${opacityStyle}">${escapeHtml(item.name)}</span>
+          </div>`;
+        }
+        sectionHtml += '</div>';
+        return sectionHtml;
+      }
 
-    html += renderSection('Classes', data.classNames, 'class', 'badge-class');
-    html += renderSection('Mixins', data.mixins, 'mixin', 'badge-mixin');
-    html += renderSection('Extensions', data.extensions, 'ext', 'badge-extension');
-    html += renderSection('Enums', data.enums, 'enum', 'badge-enum');
-    html += renderSection('Typedefs', data.typedefs, 'type', 'badge-typedef');
-    html += renderSection('Functions', data.functions, 'fn', 'badge-function');
-    html += renderSection('Variables', data.variables, 'var', 'badge-variable');
+      const areAllHeadings = data.classNames && data.classNames.length > 0 && data.classNames.every(c => /^H\d+/i.test(c.type));
+      const classesTitle = areAllHeadings ? 'Headings' : 'Classes';
+      html += renderSection(classesTitle, data.classNames, 'class', 'badge-class');
+      html += renderSection('Mixins', data.mixins, 'mixin', 'badge-mixin');
+      html += renderSection('Extensions', data.extensions, 'ext', 'badge-extension');
+      html += renderSection('Enums', data.enums, 'enum', 'badge-enum');
+      html += renderSection('Typedefs', data.typedefs, 'type', 'badge-typedef');
+      html += renderSection('Functions', data.functions, 'fn', 'badge-function');
+      html += renderSection('Variables', data.variables, 'var', 'badge-variable');
 
-    // Render widget tree
-    if (data.tree && data.tree.length > 0) {
-      html += '<div class="class-list" style="border-bottom: none; padding-bottom: 0;"><div style="font-size: 11px; color: #888; font-weight: bold; margin-bottom: 4px; text-transform: uppercase;">UI Components</div></div>';
-      html += renderTreeNodes(data.tree, 0);
+      // Render widget tree
+      if (data.tree && data.tree.length > 0) {
+        html += '<div class="class-list" style="border-bottom: none; padding-bottom: 0;"><div style="font-size: 11px; color: #888; font-weight: bold; margin-bottom: 4px; text-transform: uppercase;">UI Components</div></div>';
+        html += renderTreeNodes(data.tree, 0);
+      }
     }
     
-    const hasItems = (data.classNames && data.classNames.length > 0) || 
+    const hasItems = (data.outline && data.outline.length > 0) ||
+                     (data.classNames && data.classNames.length > 0) || 
                      (data.functions && data.functions.length > 0) ||
                      (data.variables && data.variables.length > 0) ||
                      (data.enums && data.enums.length > 0) ||
@@ -269,15 +287,15 @@
     treeView.querySelectorAll('.class-item').forEach(item => {
       item.addEventListener('click', () => {
         const line = parseInt(item.getAttribute('data-line') || '1', 10);
-        vscode.postMessage({ command: 'openFile', file: data.fileName, line: line });
+        vscode.postMessage({ command: 'openFile', file: targetFile, line: line });
       });
     });
 
-    // Add handlers for widget nodes
+    // Add handlers for tree & outline nodes
     treeView.querySelectorAll('.tree-node').forEach(node => {
       node.addEventListener('click', () => {
         const line = parseInt(node.getAttribute('data-line') || '1', 10);
-        vscode.postMessage({ command: 'openFile', file: data.fileName, line: line });
+        vscode.postMessage({ command: 'openFile', file: targetFile, line: line });
         
         // Visual selection
         treeView.querySelectorAll('.tree-node').forEach(n => n.classList.remove('active'));
@@ -299,6 +317,45 @@
         }
       });
     });
+  }
+
+  function renderOutlineNodes(nodes, depth) {
+    let html = '';
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      const nodeId = 'outline-' + Math.random().toString(36).substring(2, 9);
+      const hasChildren = node.children && node.children.length > 0;
+      
+      let indentHtml = '';
+      for (let d = 0; d < depth; d++) {
+        indentHtml += '<span class="tree-indent"></span>';
+      }
+
+      const badgeText = node.badgeText || node.kind || 'sym';
+      const badgeClass = node.badgeClass || 'badge-variable';
+      const detailHtml = node.detail ? '<span class="tree-detail" style="font-size: 10px; opacity: 0.6; margin-left: 6px;">' + escapeHtml(node.detail) + '</span>' : '';
+
+      html += '<div class="tree-node" data-line="' + node.line + '">';
+      html += indentHtml;
+
+      if (hasChildren) {
+        html += '<span class="tree-toggle" data-id="' + nodeId + '">▼</span>';
+      } else {
+        html += '<span style="width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 8px; opacity: 0.3;">•</span>';
+      }
+
+      html += '<span class="class-type-badge ' + badgeClass + '" style="margin-right: 4px; font-size: 9px; padding: 1px 5px; font-weight: 700;">' + escapeHtml(badgeText) + '</span>';
+      html += '<span class="tree-label" style="font-weight: 500; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(node.name) + '</span>';
+      html += detailHtml;
+      html += '</div>';
+
+      if (hasChildren) {
+        html += '<div class="tree-children" id="children-' + nodeId + '">';
+        html += renderOutlineNodes(node.children, depth + 1);
+        html += '</div>';
+      }
+    }
+    return html;
   }
 
   function renderTreeNodes(nodes, depth) {
@@ -433,7 +490,8 @@
     // Click to open file
     container.querySelectorAll('.graph-node').forEach(function (node) {
       node.addEventListener('click', function () {
-        const file = this.getAttribute('data-file');
+        const rawFile = this.getAttribute('data-file') || '';
+        const file = rawFile.replace(/^file:\/\/?/, '').replace(/^file:/, '');
         vscode.postMessage({ command: 'openFile', file: file, line: 1 });
       });
     });
@@ -652,6 +710,9 @@
                         warn.type === 'mockup_unbound_input' ? '#3d3300' :
                         warn.type === 'mockup_fake_delay' ? '#1a2d3d' :
                         warn.type === 'mockup_todo_comment' ? '#2d2d00' :
+                        warn.type === 'memory_leak' ? '#4d1f00' :
+                        warn.type === 'widget_depth' ? '#00334d' :
+                        warn.type === 'duplicate_widgets' ? '#330033' :
                         '#4d1a4d'; // Purple for duplicated logic
           const fgColor = warn.type === 'hardcoded_text' ? '#e2c08d' : 
                         warn.type === 'hardcoded_color' ? '#73c991' :
@@ -661,10 +722,16 @@
                         warn.type === 'mockup_unbound_input' ? '#ffd966' :
                         warn.type === 'mockup_fake_delay' ? '#99ccff' :
                         warn.type === 'mockup_todo_comment' ? '#e6e666' :
+                        warn.type === 'memory_leak' ? '#ff9966' :
+                        warn.type === 'widget_depth' ? '#66d9ff' :
+                        warn.type === 'duplicate_widgets' ? '#e680ff' :
                         '#e699ff';
 
-          // Mockup icon/prefix for mockup warnings
-          const mockupIcon = warn.type && warn.type.startsWith('mockup_') 
+          // Mockup icon/prefix for mockup & advanced analysis warnings
+          const mockupIcon = warn.type === 'memory_leak' ? '💧 ' :
+            warn.type === 'widget_depth' ? '📏 ' :
+            warn.type === 'duplicate_widgets' ? '👥 ' :
+            warn.type && warn.type.startsWith('mockup_') 
             ? (warn.type === 'mockup_empty_callback' ? '🔇 ' :
                warn.type === 'mockup_fake_data' ? '📦 ' :
                warn.type === 'mockup_stub_widget' ? '🧩 ' :
@@ -857,9 +924,12 @@
 
   function escapeHtml(text) {
     if (!text) { return ''; }
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    return String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   // ─── Initial Load ─────────────────────────────────────

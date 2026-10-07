@@ -2,7 +2,7 @@
     "name": "flutter-explorer",
     "displayName": "Flutter Explorer",
     "description": "Code Search, Widget Tree Viewer, Dependency Graph, and pubspec.yaml Analysis for Flutter projects",
-    "version": "1.2.3",
+    "version": "1.2.5",
     "publisher": "flutter-explorer",
     "icon": "resources/icon.png",
     "repository": {
@@ -31,7 +31,8 @@
         "workspaceContains:**/pubspec.yaml",
         "workspaceContains:**/package.json",
         "workspaceContains:**/build.gradle",
-        "workspaceContains:**/build.gradle.kts"
+        "workspaceContains:**/build.gradle.kts",
+        "onView:flutterExplorer.sidebar"
     ],
     "main": "./out/extension.js",
     "contributes": {
@@ -104,6 +105,31 @@
                 "command": "flutterExplorer.openSettings",
                 "title": "Open Flutter Explorer Settings",
                 "icon": "$(settings-gear)"
+            },
+            {
+                "command": "flutterExplorer.analyzeWidgetDepth",
+                "title": "Flutter Explorer: Analyze Widget Nesting Depth",
+                "icon": "$(layers)"
+            },
+            {
+                "command": "flutterExplorer.detectDuplicateWidgets",
+                "title": "Flutter Explorer: Detect Duplicate Widgets & UI Patterns",
+                "icon": "$(copy)"
+            },
+            {
+                "command": "flutterExplorer.detectMemoryLeaks",
+                "title": "Flutter Explorer: Detect Memory Leaks (Undisposed Controllers)",
+                "icon": "$(warning)"
+            },
+            {
+                "command": "flutterExplorer.simulateUiAction",
+                "title": "Flutter Explorer: Simulate Live UI Action (Tap/Type/Scroll)",
+                "icon": "$(play)"
+            },
+            {
+                "command": "flutterExplorer.getArchitecturalLayers",
+                "title": "Flutter Explorer: Analyze Architectural Layers (Lakos)",
+                "icon": "$(organization)"
             }
         ],
         "menus": {
@@ -177,7 +203,9 @@
         "watch": "node esbuild.js --watch",
         "lint": "eslint src --ext ts",
         "build": "node esbuild.js",
-        "analyze-dart": "dart tools/dart_analyzer.dart ."
+        "analyze-dart": "dart tools/dart_analyzer.dart .",
+        "test": "node tests/run-tests.js",
+        "typecheck": "tsc --noEmit"
     },
     "devDependencies": {
         "@modelcontextprotocol/sdk": "^1.29.0",
@@ -185,10 +213,12 @@
         "@types/node": "^20.11.0",
         "@types/sqlite3": "^3.1.3",
         "@types/vscode": "^1.85.0",
+        "@types/ws": "^8.18.2",
         "@vscode/vsce": "^3.9.2",
         "d3": "^7.9.0",
         "esbuild": "^0.28.0",
         "typescript": "^5.3.0",
+        "ws": "^8.22.0",
         "zod": "^4.4.3"
     },
     "dependencies": {

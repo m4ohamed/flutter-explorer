@@ -16,6 +16,8 @@ import { PubspecProvider } from './providers/pubspecProvider';
 import { SidebarProvider } from './webview/sidebarProvider';
 import { setupMcpConfig } from './utils/mcpSetup';
 import { IntlGenerator } from './indexer/intlGenerator';
+import { CodeAnalyzer } from './mcp-code-analyzer';
+import { VmServiceBridge } from './runtime/vmServiceBridge';
 
 // ─── Centralized Constants ─────────────────────────────────
 const COMMANDS = {
@@ -31,6 +33,11 @@ const COMMANDS = {
     INTL_REMOVE_LOCALE: 'flutterExplorer.intlRemoveLocale',
     OPEN_SETTINGS: 'flutterExplorer.openSettings',
     COPY_TO_CLIPBOARD: 'flutterExplorer.copyToClipboard',
+    ANALYZE_WIDGET_DEPTH: 'flutterExplorer.analyzeWidgetDepth',
+    DETECT_DUPLICATE_WIDGETS: 'flutterExplorer.detectDuplicateWidgets',
+    DETECT_MEMORY_LEAKS: 'flutterExplorer.detectMemoryLeaks',
+    SIMULATE_UI_ACTION: 'flutterExplorer.simulateUiAction',
+    GET_ARCHITECTURAL_LAYERS: 'flutterExplorer.getArchitecturalLayers',
 } as const;
 
 const MESSAGES = {
@@ -171,7 +178,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(
         vscode.commands.registerCommand(COMMANDS.OPEN_FILE, async (file: string, line: number) => {
             try {
-                const absPath = path.isAbsolute(file) ? file : path.join(workspaceRoot, file);
+                const cleanFile = (file || '').replace(/^file:\/\/?/, '').replace(/^file:/, '');
+                const absPath = path.isAbsolute(cleanFile) ? cleanFile : path.join(workspaceRoot, cleanFile);
                 const uri = vscode.Uri.file(absPath);
                 const doc = await vscode.workspace.openTextDocument(uri);
                 const editor = await vscode.window.showTextDocument(doc);
@@ -296,6 +304,127 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         })
     );
 
+    // ─── Advanced Analyzers & Live Interaction Commands ───
+    context.subscriptions.push(
+        vscode.commands.registerCommand(COMMANDS.ANALYZE_WIDGET_DEPTH, async () => {
+            const index = { dart: indexManager.getAllFiles() };
+            const analyzer = new CodeAnalyzer(workspaceRoot);
+            const res = analyzer.analyzeWidgetDepth(index, 5);
+            if (res.violationsCount === 0) {
+                vscode.window.showInformationMessage(`Flutter Explorer: Excellent! All ${res.totalWidgetsAnalyzed} widgets are within the nesting depth threshold (max observed: ${res.maxObservedDepth}).`);
+            } else {
+                const choice = await vscode.window.showWarningMessage(
+                    `Flutter Explorer: Found ${res.violationsCount} widget nesting violations (max depth: ${res.maxObservedDepth}).`,
+                    'View Details'
+                );
+                if (choice === 'View Details') {
+                    const content = `# Widget Nesting Depth Analysis\n\nTotal Widgets Analyzed: ${res.totalWidgetsAnalyzed}\nMax Observed Depth: ${res.maxObservedDepth}\nViolations Count: ${res.violationsCount}\n\n` +
+                        res.violations.map(v => `### 📄 ${v.file} (Depth ${v.maxDepth})\n- **Path**: \`${v.deepestPath}\`\n- **Recommendation**: ${v.recommendation}\n`).join('\n');
+                    const doc = await vscode.workspace.openTextDocument({ content, language: 'markdown' });
+                    await vscode.window.showTextDocument(doc);
+                }
+            }
+        }),
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand(COMMANDS.DETECT_DUPLICATE_WIDGETS, async () => {
+            const index = { dart: indexManager.getAllFiles() };
+            const analyzer = new CodeAnalyzer(workspaceRoot);
+            const res = analyzer.detectDuplicateWidgets(index, 3);
+            if (res.clustersCount === 0) {
+                vscode.window.showInformationMessage(`Flutter Explorer: No duplicate widget patterns found across ${res.analyzedSubtreesCount} subtrees.`);
+            } else {
+                const choice = await vscode.window.showInformationMessage(
+                    `Flutter Explorer: Found ${res.clustersCount} reusable widget pattern clusters.`,
+                    'View Proposals'
+                );
+                if (choice === 'View Proposals') {
+                    const content = `# Duplicate Widget Analysis & Reusable Proposals\n\nAnalyzed Subtrees: ${res.analyzedSubtreesCount}\nClusters Count: ${res.clustersCount}\n\n` +
+                        res.clusters.map(c => `### 💡 ${c.suggestedName} (${c.occurrences.length} occurrences)\n- **Signature**: \`${c.structureSignature}\`\n- **Proposal**: ${c.proposal}\n- **Locations**:\n${c.occurrences.map(o => `  - \`${o.file}:${o.line}\` (Root: \`${o.rootWidget}\`)`).join('\n')}\n`).join('\n');
+                    const doc = await vscode.workspace.openTextDocument({ content, language: 'markdown' });
+                    await vscode.window.showTextDocument(doc);
+                }
+            }
+        }),
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand(COMMANDS.DETECT_MEMORY_LEAKS, async () => {
+            const index = { dart: indexManager.getAllFiles() };
+            const analyzer = new CodeAnalyzer(workspaceRoot);
+            const res = analyzer.detectMemoryLeaks(index);
+            if (res.warningsCount === 0) {
+                vscode.window.showInformationMessage(`Flutter Explorer: Clean! Analyzed ${res.analyzedClassesCount} classes, zero undisposed controllers or memory leaks found.`);
+            } else {
+                const choice = await vscode.window.showErrorMessage(
+                    `Flutter Explorer: Detected ${res.warningsCount} potential memory leaks (undisposed controllers).`,
+                    'View Leaks & Fixes'
+                );
+                if (choice === 'View Leaks & Fixes') {
+                    const content = `# Memory Leak & Undisposed Controller Warnings\n\nAnalyzed Classes: ${res.analyzedClassesCount}\nWarnings: ${res.warningsCount}\n\n` +
+                        res.warnings.map(w => `### ⚠️ ${w.className} in \`${w.file}\`\n- **Field**: \`${w.field}\` (${w.fieldType})\n- **Has Dispose Method**: ${w.hasDisposeMethod ? 'Yes' : 'No'}\n- **Message**: ${w.message}\n- **Suggested Fix**:\n\`\`\`dart\n${w.fixSuggestion}\n\`\`\`\n`).join('\n');
+                    const doc = await vscode.workspace.openTextDocument({ content, language: 'markdown' });
+                    await vscode.window.showTextDocument(doc);
+                }
+            }
+        }),
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand(COMMANDS.SIMULATE_UI_ACTION, async () => {
+            const action = await vscode.window.showQuickPick(['tap', 'enterText', 'scroll'], {
+                placeHolder: 'Select UI action to simulate'
+            });
+            if (!action) return;
+            const target = await vscode.window.showInputBox({
+                prompt: 'Enter target widget key or text identifier'
+            });
+            if (!target) return;
+            let val: string | undefined;
+            if (action === 'enterText') {
+                val = await vscode.window.showInputBox({ prompt: 'Enter text to type' });
+            } else if (action === 'scroll') {
+                val = await vscode.window.showInputBox({ prompt: 'Enter scroll distance in pixels (e.g. -300)', value: '-300' });
+            }
+            const bridge = new VmServiceBridge(workspaceRoot);
+            const res = await bridge.simulateUiAction(action as any, target, val);
+            if (res.success) {
+                vscode.window.showInformationMessage(`Simulated Action: ${res.message}`);
+            } else {
+                vscode.window.showWarningMessage(`Action Dispatched: ${res.message}`);
+            }
+        }),
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand(COMMANDS.GET_ARCHITECTURAL_LAYERS, async () => {
+            const index = { dart: indexManager.getAllFiles() };
+            const analyzer = new CodeAnalyzer(workspaceRoot);
+            const res = analyzer.getArchitecturalLayers(index);
+            const breakdown = Object.entries(res.layerBreakdown).map(([k, v]) => `${k}: ${v}`).join(', ');
+            const choice = await vscode.window.showInformationMessage(
+                `Architectural Layers (${breakdown}). Cross-layer violations: ${res.detectedCrossLayerViolations.length}`,
+                'Open Graph Explorer',
+                'View Architecture Report'
+            );
+            if (choice === 'Open Graph Explorer') {
+                const { GraphWebviewPanel } = require('./views/graphWebview');
+                GraphWebviewPanel.createOrShow(context.extensionUri, indexManager);
+            } else if (choice === 'View Architecture Report') {
+                const content = `# Clean Architecture & Lakos Coupling Report\n\nTotal Files: ${res.totalFiles}\n\n## Layer Breakdown\n` +
+                    Object.entries(res.layerBreakdown).map(([k, v]) => `- **${k}**: ${v} files`).join('\n') +
+                    `\n\n## Lakos Coupling Summary\n` +
+                    Object.entries(res.layerCouplingSummary).map(([k, v]) => `- **${k}**: ${v.filesCount} files, avg instability: ${v.avgInstability}`).join('\n') +
+                    `\n\n## Cross-layer Violations (${res.detectedCrossLayerViolations.length})\n` +
+                    (res.detectedCrossLayerViolations.length === 0 ? `None! All architectural layer boundaries are properly respected.\n` :
+                        res.detectedCrossLayerViolations.map(v => `- ⚠️ \`${v.from}\` -> \`${v.to}\`: ${v.violation}`).join('\n'));
+                const doc = await vscode.workspace.openTextDocument({ content, language: 'markdown' });
+                await vscode.window.showTextDocument(doc);
+            }
+        }),
+    );
+
     // ─── Index Changed Listener ────────────────────────────
     indexManager.onDidChangeIndex(() => {
         updateStatusBar(indexManager);
@@ -341,7 +470,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     column: d.range.start.character + 1,
                     message: d.message,
                     severity: d.severity === 0 ? 'error' : d.severity === 1 ? 'warning' : d.severity === 2 ? 'info' : 'hint',
-                    source: d.source || 'dart'
+                    source: d.source || (indexManager.getProjectMode() === 'android' ? 'android' : indexManager.getProjectMode() === 'web' ? 'typescript' : 'dart')
                 });
             }
         }
@@ -407,7 +536,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 function updateStatusBar(indexManager: IndexManager): void {
     const stats = indexManager.getStats();
-    statusBarItem.text = `$(symbol-class) ${stats.classes} classes · $(symbol-method) ${stats.functions} fns · $(extensions) ${stats.widgets} widgets · $(globe) ${stats.translations || 0} loc`;
+    const mode = indexManager.getProjectMode();
+    const modeLabel = mode === 'android' ? 'Android' : mode === 'web' ? 'Web' : 'Flutter';
+    let text = `[${modeLabel}] $(symbol-class) ${stats.classes} classes · $(symbol-method) ${stats.functions} fns · $(extensions) ${stats.widgets} widgets`;
+    if (mode === 'flutter' && stats.translations > 0) {
+        text += ` · $(globe) ${stats.translations} loc`;
+    }
+    statusBarItem.text = text;
     statusBarItem.show();
 }
 

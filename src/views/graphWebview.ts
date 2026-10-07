@@ -83,13 +83,25 @@ export class GraphWebviewPanel {
 
   private sendGraphData(): void {
     const detailed = this.indexManager.getDetailedGraph();
-    const nodes = detailed.nodes.map(n => ({
-      id: n.id,
-      name: n.name,
-      kind: n.type.charAt(0).toUpperCase() + n.type.slice(1),
-      filePath: n.file,
-      line: n.line || 1
-    }));
+    const nodes = detailed.nodes.map(n => {
+      const fp = (n.file || '').toLowerCase().replace(/\\/g, '/');
+      let layer = 'core';
+      if (fp.includes('/presentation/') || fp.includes('/views/') || fp.includes('/pages/') || fp.includes('/screens/') || fp.includes('/ui/') || fp.includes('/widgets/')) {
+        layer = 'presentation';
+      } else if (fp.includes('/domain/') || fp.includes('/bloc/') || fp.includes('/cubit/') || fp.includes('/usecases/') || fp.includes('/entities/')) {
+        layer = 'domain';
+      } else if (fp.includes('/data/') || fp.includes('/models/') || fp.includes('/datasources/') || fp.includes('/network/') || fp.includes('/services/')) {
+        layer = 'data';
+      }
+      return {
+        id: n.id,
+        name: n.name,
+        kind: n.type.charAt(0).toUpperCase() + n.type.slice(1),
+        filePath: n.file,
+        line: n.line || 1,
+        layer
+      };
+    });
     
     const edges = detailed.edges.map(e => ({
       source: e.source,
@@ -531,7 +543,10 @@ export class GraphWebviewPanel {
   <div class="inspector-card" id="inspector">
     <div class="inspector-header">
       <div class="inspector-name" id="inspect-name">Select a node</div>
-      <div class="inspector-type" id="inspect-type" style="background-color: #58a6ff;">FILE</div>
+      <div style="display: flex; gap: 4px; align-items: center;">
+        <div class="inspector-type" id="inspect-type" style="background-color: #58a6ff;">FILE</div>
+        <div class="inspector-type" id="inspect-layer" style="display: none; background-color: #3fb950;">LAYER</div>
+      </div>
     </div>
     <div class="inspector-path" id="inspect-path">Hover/click a node to see detail.</div>
     

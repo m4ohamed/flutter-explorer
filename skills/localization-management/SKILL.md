@@ -1,20 +1,24 @@
 ---
 name: Localization Management
-description: Manage ARB translations, find missing keys, and update localizations
+description: "Manage ARB translations, batch auto-translation, ICU syntax validation, unused key cleanup, and intl code generation in Flutter"
 ---
 
-## Localization Management
+# Localization Management
 
-Efficiently manage Flutter localization (ARB files) and ensure all keys are translated.
+Efficiently audit, translate, validate, and generate code for Flutter localization (ARB files).
 
-### Steps
+## Workflow
 
-1. Run `flutter_get_missing_translations` to identify keys present in some languages but missing in others.
-2. Use `flutter_list_translations` to get a full overview of all translation keys.
-3. Use `flutter_update_translation` to add or update translations for multiple languages at once.
-4. If a feature is removed, use `flutter_delete_translation` to clean up the ARB files.
+### 1. Audit & Gap Detection
+1. **Find Missing Keys**: Call `flutter_get_missing_translations` or `flutter_list_translations` to identify untranslated keys across locales.
+2. **Batch Payload Generation**: Call `flutter_auto_translate_missing` with `action: "generate_payload"` to extract all missing keys formatted for translation.
 
-### Best Practices
+### 2. Updating & Batch Translation
+1. **Batch Apply**: Call `flutter_auto_translate_missing` with `action: "batch_apply"` and `translations` map to write translated keys across all ARB files simultaneously.
+2. **Single Key Update**: Use `flutter_update_translation` to add/modify an individual key with `arValue`, `enValue`, or custom locale maps.
+3. **Delete Obsolete Keys**: Use `flutter_delete_translation` to remove deprecated keys from all ARB files at once.
 
-- Always run `flutter_get_missing_translations` before a release.
-- Use descriptive keys for translations to make them easier to find via `flutter_search`.
+### 3. Validation & Code Generation
+1. **Validate ICU Formats**: Run `flutter_validate_icu_translations` to verify ICU plural syntax (`zero`, `one`, `other`), variable placeholders (`{name}`), and curly brace balancing across all languages.
+2. **Detect Dead Keys**: Run `flutter_find_unused_translations` to flag keys declared in ARB but never referenced in `lib/`.
+3. **Regenerate Code**: Run `flutter_run_intl_generate` to generate fresh `l10n.dart` and `messages_*.dart` files.

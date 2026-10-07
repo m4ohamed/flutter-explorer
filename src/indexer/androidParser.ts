@@ -27,7 +27,8 @@ import {
   EnumUsage,
   MixinUsage
 } from './dartParser';
-import { BaseParser } from './baseParser.js';
+import { BaseParser } from './baseParser';
+import { MockupAnalyzer } from './mockupAnalyzer';
 
 export class AndroidParser extends BaseParser<DartFileInfo> {
   /**
@@ -454,6 +455,19 @@ export class AndroidParser extends BaseParser<DartFileInfo> {
     this.analyzeUsages(maskedLines, result);
     this.extractFunctionCalls(maskedLines, result, lines);
 
+    const mockupWarnings = MockupAnalyzer.analyze(filePath, content, masked);
+    for (const mw of mockupWarnings) {
+      result.warnings.push({
+        type: mw.type,
+        message: mw.message,
+        line: mw.line,
+        codeSnippet: mw.codeSnippet,
+        suggestion: mw.suggestion,
+        category: mw.category,
+        severity: mw.severity,
+      });
+    }
+
     return result;
   }
 
@@ -767,6 +781,19 @@ export class AndroidParser extends BaseParser<DartFileInfo> {
           properties: []
         });
       }
+    }
+
+    const mockupWarnings = MockupAnalyzer.analyze(filePath, content, masked);
+    for (const mw of mockupWarnings) {
+      result.warnings.push({
+        type: mw.type,
+        message: mw.message,
+        line: mw.line,
+        codeSnippet: mw.codeSnippet,
+        suggestion: mw.suggestion,
+        category: mw.category,
+        severity: mw.severity,
+      });
     }
 
     return result;

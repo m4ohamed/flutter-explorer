@@ -3,21 +3,17 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { generateSkills } from './skillsGenerator';
+import { upsertMcpServer, upsertMarkedBlock, writeFileAtomic, WriteResult } from './configWriter';
 
-async function setupGeminiMd(homedir: string): Promise<void> {
-    try {
-        const geminiDir = path.join(homedir, '.gemini');
-        if (!fs.existsSync(geminiDir)) {
-            fs.mkdirSync(geminiDir, { recursive: true });
-        }
-        const geminiMdPath = path.join(geminiDir, 'GEMINI.md');
-        const ruleHeader = "# 📑 تعليمات وقواعد التطوير البرمجي لـ Gemini Agent";
-        
-        const skillPath = path.join(homedir, '.gemini', 'config', 'skills', 'flutter-explorer-mcp', 'SKILL.md').replace(/\\/g, '/');
-        const formattedPath = skillPath.startsWith('/') ? skillPath : `/${skillPath}`;
-        const skillUrl = `file://${formattedPath}`;
+const SERVER_NAME = 'flutter-explorer-mcp';
+const RULE_HEADER = '# 📑 تعليمات وقواعد التطوير البرمجي لـ Gemini Agent';
 
-        const content = `${ruleHeader}
+function buildGeminiRules(homedir: string): string {
+    const skillPath = path.join(homedir, '.gemini', 'config', 'skills', 'flutter-explorer-mcp', 'SKILL.md').replace(/\\/g, '/');
+    const formattedPath = skillPath.startsWith('/') ? skillPath : `/${skillPath}`;
+    const skillUrl = `file://${formattedPath}`;
+
+    return `${RULE_HEADER}
 
 مجموعة من القواعد الأساسية والإلزامية لضمان جودة الأكواد، وتسريع عملية التطوير، وتفادي الأخطاء المتكررة. **يجب قراءة هذا الملف وملفات الأخطاء والدروس عند بدء أي جلسة عمل.**
 
@@ -66,133 +62,114 @@ async function setupGeminiMd(homedir: string): Promise<void> {
 * **النمط الخاطئ (Anti-pattern)**: الكود أو السلوك المسبب للمشكلة.
 * **النمط الصحيح (Approved Pattern)**: الكود السليم والآمن المعتمد.
 `;
+}
 
-        if (!fs.existsSync(geminiMdPath)) {
-            fs.writeFileSync(geminiMdPath, content, 'utf8');
-            console.log(`Created GEMINI.md at: ${geminiMdPath}`);
-        } else {
-            const existing = fs.readFileSync(geminiMdPath, 'utf8');
-            if (!existing.includes(ruleHeader)) {
-                const updated = existing + "\n\n" + content;
-                fs.writeFileSync(geminiMdPath, updated, 'utf8');
-                console.log(`Appended Gemini Agent rules to existing GEMINI.md`);
-            } else {
-                const idx = existing.indexOf(ruleHeader);
-                if (idx !== -1) {
-                    const before = existing.substring(0, idx);
-                    fs.writeFileSync(geminiMdPath, before + content, 'utf8');
-                    console.log(`Updated Gemini Agent rules block in GEMINI.md`);
-                }
-            }
+function setupGeminiMd(homedir: string): WriteResult {
+    const geminiMdPath = path.join(homedir, '.gemini', 'GEMINI.md');
+    // The block is delimited by markers, so content that other tools (or the user) keep in this
+    // file is never touched. Files written by older versions (no markers) are migrated in place.
+    return upsertMarkedBlock(geminiMdPath, 'rules', buildGeminiRules(homedir), RULE_HEADER);
+}
+
+function writeActiveProject(homedir: string, workspaceRoot: string): WriteResult {
+    const target = path.join(homedir, '.gemini', 'active-project.txt');
+    try {
+        if (fs.existsSync(target) && fs.readFileSync(target, 'utf8') === workspaceRoot) {
+            return { path: target, status: 'unchanged' };
         }
-    } catch (e) {
-        console.error('Failed to setup GEMINI.md:', e);
+        const existed = fs.existsSync(target);
+        writeFileAtomic(target, workspaceRoot);
+        return { path: target, status: existed ? 'updated' : 'created' };
+    } catch (err) {
+        return { path: target, status: 'error', message: String(err) };
     }
 }
 
-export async function setupMcpConfig(extensionPath: string, workspaceRoot: string): Promise<void> {
+export interface McpSetupOptions {
+    /** Show a notification even when nothing had to change (used by the explicit command). */
+    verbose?: boolean;
+}
+
+export async function setupMcpConfig(
+    extensionPath: string,
+    workspaceRoot: string,
+    options: McpSetupOptions = {},
+): Promise<WriteResult[]> {
+    const results: WriteResult[] = [];
     try {
-        // Generate AI Skills instructions
-        await generateSkills(workspaceRoot);
+        const config = vscode.workspace.getConfiguration('flutterExplorer');
+        const writeWorkspaceSkills = config.get<boolean>('writeWorkspaceSkills', false);
 
-        // Setup global GEMINI.md rules
-        await setupGeminiMd(os.homedir());
+        // AI skill documents. Files inside the user's repository are only written when opted in.
+        // `generateSkills` learns about the options argument in the skillsGenerator patch; until then
+        // the extra argument is ignored and the old behaviour (workspace files too) stays in place.
+        await (generateSkills as (root: string, opts?: { writeWorkspaceFiles?: boolean }) => Promise<void>)(
+            workspaceRoot,
+            { writeWorkspaceFiles: writeWorkspaceSkills },
+        );
 
-        // Write the active project path to a global file for fallback resolution
-        try {
-            const geminiDir = path.join(os.homedir(), '.gemini');
-            if (!fs.existsSync(geminiDir)) {
-                fs.mkdirSync(geminiDir, { recursive: true });
-            }
-            const activeProjectPath = path.join(geminiDir, 'active-project.txt');
-            fs.writeFileSync(activeProjectPath, workspaceRoot, 'utf8');
-        } catch (e) {
-            console.error('Failed to write active project fallback:', e);
+        const homedir = os.homedir();
+
+        results.push(setupGeminiMd(homedir));
+        results.push(writeActiveProject(homedir, workspaceRoot));
+
+        const mcpServerPath = path.join(extensionPath, 'out', 'mcp-server.js').replace(/\\/g, '/');
+
+        const entryDynamic = {
+            command: 'node',
+            args: [mcpServerPath],
+            env: { FLUTTER_PROJECT_PATH: '${workspaceFolder}' },
+        };
+        // Claude Desktop cannot expand ${workspaceFolder}.
+        const entryStatic = {
+            command: 'node',
+            args: [mcpServerPath],
+            env: { FLUTTER_PROJECT_PATH: workspaceRoot },
+        };
+
+        // 1. Global Gemini & Antigravity configs
+        results.push(upsertMcpServer(path.join(homedir, '.gemini', 'config', 'mcp_config.json'), SERVER_NAME, entryDynamic, false));
+        results.push(upsertMcpServer(path.join(homedir, '.gemini', 'antigravity', 'mcp_config.json'), SERVER_NAME, entryDynamic, false));
+        results.push(upsertMcpServer(path.join(homedir, '.gemini', 'antigravity-ide', 'mcp_config.json'), SERVER_NAME, entryDynamic, false));
+
+        // 2. Workspace .vscode/mcp.json (VS Code validates the "servers" key)
+        results.push(upsertMcpServer(path.join(workspaceRoot, '.vscode', 'mcp.json'), SERVER_NAME, entryDynamic, true));
+
+        // 3. Workspace .cursor/mcp.json
+        results.push(upsertMcpServer(path.join(workspaceRoot, '.cursor', 'mcp.json'), SERVER_NAME, entryDynamic, false));
+
+        // 4. Claude Desktop global config
+        const appData = process.env.APPDATA || path.join(homedir, 'AppData', 'Roaming');
+        results.push(upsertMcpServer(path.join(appData, 'Claude', 'claude_desktop_config.json'), SERVER_NAME, entryStatic, false));
+
+        for (const r of results) {
+            if (r.status === 'error') { console.error(`[FlutterExplorer] ${r.path}: ${r.message}`); }
         }
 
-        const username = os.userInfo().username;
-        const mcpServerPath = path.join(extensionPath, 'out', 'mcp-server.js').replace(/\\/g, '/');
-        
-        const mcpEntryDynamic = {
-            command: "node",
-            args: [mcpServerPath],
-            env: {
-                FLUTTER_PROJECT_PATH: "${workspaceFolder}"
-            }
-        };
+        const changed = results.filter(r => r.status === 'created' || r.status === 'updated');
+        const skipped = results.filter(r => r.status === 'skipped');
+        const failed = results.filter(r => r.status === 'error');
 
-        const mcpEntryStatic = {
-            command: "node",
-            args: [mcpServerPath],
-            env: {
-                FLUTTER_PROJECT_PATH: workspaceRoot
-            }
-        };
-
-        // 1. Target: Global Gemini Configs
-        const geminiConfigPath1 = `C:/Users/${username}/.gemini/config/mcp_config.json`;
-        const geminiConfigPath2 = `C:/Users/${username}/.gemini/antigravity/mcp_config.json`;
-        await updateJsonFile(geminiConfigPath1, "flutter-explorer-mcp", mcpEntryDynamic, false);
-        await updateJsonFile(geminiConfigPath2, "flutter-explorer-mcp", mcpEntryDynamic, false);
-
-        // 2. Target: Workspace .vscode/mcp.json (Uses 'servers' to satisfy VS Code validation)
-        const vscodeMcpPath = path.join(workspaceRoot, '.vscode', 'mcp.json');
-        await updateJsonFile(vscodeMcpPath, "flutter-explorer-mcp", mcpEntryDynamic, true);
-
-        // 3. Target: Workspace .cursor/mcp.json
-        const cursorMcpPath = path.join(workspaceRoot, '.cursor', 'mcp.json');
-        await updateJsonFile(cursorMcpPath, "flutter-explorer-mcp", mcpEntryDynamic, false);
-
-        // 4. Target: Claude Desktop Global Config
-        const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
-        const claudeConfigPath = path.join(appData, 'Claude', 'claude_desktop_config.json').replace(/\\/g, '/');
-        // Claude Desktop doesn't support ${workspaceFolder}, so we use the static workspaceRoot
-        await updateJsonFile(claudeConfigPath, "flutter-explorer-mcp", mcpEntryStatic, false);
-
-        vscode.window.showInformationMessage(`MCP Configured for user: ${username} (Gemini, Claude, Cursor, VS Code) 🚀`);
+        if (changed.length > 0 || options.verbose) {
+            const names = changed.map(r => path.basename(path.dirname(r.path)) + '/' + path.basename(r.path));
+            vscode.window.showInformationMessage(
+                changed.length > 0
+                    ? `Flutter Explorer: MCP configuration updated (${names.join(', ')}). Backups: ~/.flutter-explorer/backups`
+                    : 'Flutter Explorer: MCP configuration is already up to date.',
+            );
+        }
+        if (skipped.length > 0) {
+            vscode.window.showWarningMessage(
+                `Flutter Explorer left ${skipped.length} config file(s) untouched because they are not strict JSON: ` +
+                skipped.map(r => r.path).join(', '),
+            );
+        }
+        if (failed.length > 0) {
+            vscode.window.showErrorMessage(`Flutter Explorer could not write ${failed.length} config file(s); see the extension log.`);
+        }
     } catch (error) {
         console.error('Error setting up MCP config:', error);
         vscode.window.showErrorMessage('Failed to setup MCP config automatically.');
     }
-}
-
-async function updateJsonFile(filePath: string, key: string, value: any, useServersKey: boolean): Promise<void> {
-    try {
-        const dir = path.dirname(filePath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
-
-        const mainKey = useServersKey ? "servers" : "mcpServers";
-        let config: any = { [mainKey]: {} };
-
-        if (fs.existsSync(filePath)) {
-            try {
-                const content = fs.readFileSync(filePath, 'utf8');
-                const parsed = JSON.parse(content);
-                
-                // If it has 'servers' but not 'mcpServers', migrate it (or vice versa)
-                const existingServers = parsed.mcpServers || parsed.servers || parsed;
-                config[mainKey] = typeof existingServers === 'object' ? existingServers : {};
-            } catch (e) {
-                config = { [mainKey]: {} };
-            }
-        }
-
-        // Ensure we are working with the correct nested structure
-        if (!config[mainKey] || typeof config[mainKey] !== 'object') {
-            config[mainKey] = {};
-        }
-
-        config[mainKey][key] = value;
-        
-        // Clean up: remove the other key if it exists to avoid validation errors
-        const otherKey = useServersKey ? "mcpServers" : "servers";
-        if (config[otherKey]) delete config[otherKey];
-
-        // Write clean, validated JSON
-        fs.writeFileSync(filePath, JSON.stringify(config, null, 2), 'utf8');
-    } catch (e) {
-        console.error(`Failed to update ${filePath}:`, e);
-    }
+    return results;
 }

@@ -1,19 +1,24 @@
 ---
 name: Advanced Code Search
-description: Deep dive into the codebase using semantic search, text search, and references
+description: "Deep dive into the codebase using BM25 ranked symbol search, full-text regex, index-backed references, code fragments, and external package search"
 ---
 
-## Advanced Code Search
+# Advanced Code Search
 
-Perform precise codebase searches to find hard-to-reach implementations and usages.
+Perform ultra-precise, token-efficient searches across Flutter, Dart, TypeScript, and Android source code without reading entire files.
 
-### Steps
+## Workflow
 
-1. Use `flutter_search` for general symbol lookups (classes, functions, widgets).
-2. For specific strings, URLs, or comments, use `flutter_search_text` to scan all Dart files globally.
-3. Need to see how a specific function/class is implemented? Use `flutter_read_fragment` to extract just that fragment with its surrounding comments.
-4. Want to know everywhere a specific enum or typedef is used? Use `flutter_find_references`.
+### 1. Symbol Search & Full-Text Search
+1. **BM25 Symbol Search**: Call `flutter_search` with `query` and optional `filter` (`class`, `function`, `widget`, `enum`, `mixin`, `extension`, `typedef`, `variable`, `constructor`, `property`, `annotation`, `call`, `translation`).
+   - Use `searchMode: "definitions"` (default), `"calls"` (find call-sites), or `"both"`.
+2. **Regex & Content Search**: Call `flutter_search_text` for raw regex patterns, string literals, API endpoints, or comment tags across the repository.
+3. **Resolve Node at Line**: Call `flutter_get_node_at_cursor` with `filePath` and `line` to instantly identify the symbol at a cursor position.
 
-### Tips
-- `flutter_search_text` is perfect for finding hidden API endpoints, hardcoded strings, or specific comment tags like TODOs.
-- `flutter_read_fragment` is much faster and cleaner than reading an entire 1000-line file when you only need one specific method.
+### 2. Reading Targeted Code
+1. **Full Body with Comments**: Call `flutter_get_code_block` or `flutter_read_fragment` to retrieve only the relevant class, function, or method implementation without loading the full file into context.
+2. **Precise Line Slicing**: Call `flutter_read_lines` (`startLine`, `endLine`) to inspect error zones cheaply without token bloat.
+
+### 3. Usages & Package Code
+1. **Symbol Usages**: Call `flutter_find_references` to retrieve all verified usages, line numbers, and context snippets across importing files.
+2. **External Packages**: Call `flutter_search_packages` to grep for classes or methods directly inside cached pub dependencies or Flutter framework internals.

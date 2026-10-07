@@ -127,16 +127,37 @@ export class IntlGenerator {
     const arbDir = path.join(this.projectRoot, config.arbDir);
     fs.mkdirSync(arbDir, { recursive: true });
 
-    const arbFile = path.join(arbDir, `intl_${locale}.arb`);
+    // Determine naming prefix from existing ARB files (e.g. "intl_" or "app_")
+    const existingArbs = fs.existsSync(arbDir) ? fs.readdirSync(arbDir).filter(f => f.endsWith('.arb')) : [];
+    let filePrefix = 'intl_';
+    let mainArbPath: string | null = null;
+
+    for (const f of existingArbs) {
+      const match = f.match(/^([a-zA-Z0-9_-]+[_-])([a-z]{2,3}(?:_[A-Z]{2})?)\.arb$/);
+      if (match) {
+        filePrefix = match[1];
+        if (match[2] === config.mainLocale) {
+          mainArbPath = path.join(arbDir, f);
+        }
+      }
+    }
+    if (!mainArbPath) {
+      const candidate = path.join(arbDir, `${filePrefix}${config.mainLocale}.arb`);
+      if (fs.existsSync(candidate)) {
+        mainArbPath = candidate;
+      }
+    }
+
+    const arbFilename = `${filePrefix}${locale}.arb`;
+    const arbFile = path.join(arbDir, arbFilename);
     if (fs.existsSync(arbFile)) {
-      throw new Error(`Locale "${locale}" already exists`);
+      throw new Error(`Locale "${locale}" already exists (${arbFilename})`);
     }
 
     // Create ARB with @@locale and copy keys from main locale (empty values)
-    const mainArbPath = path.join(arbDir, `intl_${config.mainLocale}.arb`);
     let newArbData: Record<string, any> = { '@@locale': locale };
 
-    if (fs.existsSync(mainArbPath)) {
+    if (mainArbPath && fs.existsSync(mainArbPath)) {
       try {
         const mainData = JSON.parse(fs.readFileSync(mainArbPath, 'utf-8'));
         for (const key of Object.keys(mainData)) {
@@ -154,7 +175,7 @@ export class IntlGenerator {
     fs.writeFileSync(arbFile, JSON.stringify(newArbData, null, 2), 'utf-8');
 
     const generated = this.generate();
-    return [`${config.arbDir}/intl_${locale}.arb`, ...generated];
+    return [`${config.arbDir}/${arbFilename}`, ...generated];
   }
 
   /**
@@ -167,7 +188,17 @@ export class IntlGenerator {
       throw new Error(`Cannot remove main locale "${locale}"`);
     }
 
-    const arbFile = path.join(this.projectRoot, config.arbDir, `intl_${locale}.arb`);
+    const arbDir = path.join(this.projectRoot, config.arbDir);
+    const existingArbs = fs.existsSync(arbDir) ? fs.readdirSync(arbDir).filter(f => f.endsWith('.arb')) : [];
+    let arbFile = path.join(arbDir, `intl_${locale}.arb`);
+    for (const f of existingArbs) {
+      const match = f.match(/^([a-zA-Z0-9_-]+[_-])?([a-z]{2,3}(?:_[A-Z]{2})?)\.arb$/);
+      if (match && match[2] === locale) {
+        arbFile = path.join(arbDir, f);
+        break;
+      }
+    }
+
     if (!fs.existsSync(arbFile)) {
       throw new Error(`Locale "${locale}" not found`);
     }
@@ -565,9 +596,9 @@ export class IntlGenerator {
         // Simple getter
         lines.push(`  String get ${entry.key} {`);
         lines.push('    return Intl.message(');
-        lines.push(`      '${this.escSQ(entry.value)}',`);
+        lines.push(`      '${this.formatDartSQ(entry.value, false)}',`);
         lines.push(`      name: '${entry.key}',`);
-        lines.push(`      desc: '${this.escSQ(entry.description)}',`);
+        lines.push(`      desc: '${this.formatDartSQ(entry.description, false)}',`);
         lines.push('      args: [],');
         lines.push('    );');
         lines.push('  }');
@@ -575,13 +606,12 @@ export class IntlGenerator {
         // Parameterized method
         const params = entry.placeholders.map(p => `${p.type} ${p.name}`).join(', ');
         const argNames = entry.placeholders.map(p => p.name).join(', ');
-        const dartValue = entry.value.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
 
         lines.push(`  String ${entry.key}(${params}) {`);
         lines.push('    return Intl.message(');
-        lines.push(`      '${this.escSQ(dartValue)}',`);
+        lines.push(`      '${this.formatDartSQ(entry.value, true)}',`);
         lines.push(`      name: '${entry.key}',`);
-        lines.push(`      desc: '${this.escSQ(entry.description)}',`);
+        lines.push(`      desc: '${this.formatDartSQ(entry.description, false)}',`);
         lines.push(`      args: [${argNames}],`);
         lines.push('    );');
         lines.push('  }');
@@ -649,24 +679,31 @@ export class IntlGenerator {
     if (icu.type === 'plural') {
       lines.push(`    return Intl.plural(`);
       lines.push(`      ${icu.variable},`);
+      const seenCases = new Set<string>();
+      let hasOther = false;
       for (const [caseName, caseValue] of icu.cases) {
-        const dartVal = caseValue.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
         const mappedCase = this.mapPluralCaseName(caseName);
-        lines.push(`      ${mappedCase}: '${this.escSQ(dartVal)}',`);
+        if (seenCases.has(mappedCase)) continue;
+        seenCases.add(mappedCase);
+        if (mappedCase === 'other') hasOther = true;
+        lines.push(`      ${mappedCase}: '${this.formatDartSQ(caseValue, true)}',`);
+      }
+      if (!hasOther) {
+        const fallback = icu.cases.get('other') || icu.cases.get('one') || '';
+        lines.push(`      other: '${this.formatDartSQ(fallback, true)}',`);
       }
       lines.push(`      name: '${entry.key}',`);
-      lines.push(`      desc: '${this.escSQ(entry.description)}',`);
+      lines.push(`      desc: '${this.formatDartSQ(entry.description, false)}',`);
       lines.push(`      args: [${allArgNames}],`);
       lines.push('    );');
     } else if (icu.type === 'gender') {
       lines.push(`    return Intl.gender(`);
       lines.push(`      ${icu.variable},`);
       for (const [caseName, caseValue] of icu.cases) {
-        const dartVal = caseValue.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
-        lines.push(`      ${caseName}: '${this.escSQ(dartVal)}',`);
+        lines.push(`      ${caseName}: '${this.formatDartSQ(caseValue, true)}',`);
       }
       lines.push(`      name: '${entry.key}',`);
-      lines.push(`      desc: '${this.escSQ(entry.description)}',`);
+      lines.push(`      desc: '${this.formatDartSQ(entry.description, false)}',`);
       lines.push(`      args: [${allArgNames}],`);
       lines.push('    );');
     } else {
@@ -675,12 +712,11 @@ export class IntlGenerator {
       lines.push(`      ${icu.variable},`);
       lines.push('      {');
       for (const [caseName, caseValue] of icu.cases) {
-        const dartVal = caseValue.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
-        lines.push(`        '${caseName}': '${this.escSQ(dartVal)}',`);
+        lines.push(`        '${caseName}': '${this.formatDartSQ(caseValue, true)}',`);
       }
       lines.push('      },');
       lines.push(`      name: '${entry.key}',`);
-      lines.push(`      desc: '${this.escSQ(entry.description)}',`);
+      lines.push(`      desc: '${this.formatDartSQ(entry.description, false)}',`);
       lines.push(`      args: [${allArgNames}],`);
       lines.push('    );');
     }
@@ -754,10 +790,18 @@ export class IntlGenerator {
           const otherPlaceholders = mainEntry.placeholders.filter(p => p.name !== icu.variable);
           const paramNames = [icu.variable, ...otherPlaceholders.map(p => p.name)].join(', ');
           const cases: string[] = [];
+          const seenCases = new Set<string>();
+          let hasOther = false;
           for (const [cn, cv] of localIcu.cases) {
-            const dartVal = cv.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
             const mappedCase = this.mapPluralCaseName(cn);
-            cases.push(`${mappedCase}: '${this.escSQ(dartVal)}'`);
+            if (seenCases.has(mappedCase)) continue;
+            seenCases.add(mappedCase);
+            if (mappedCase === 'other') hasOther = true;
+            cases.push(`${mappedCase}: '${this.formatDartSQ(cv, true)}'`);
+          }
+          if (!hasOther) {
+            const fallback = localIcu.cases.get('other') || localIcu.cases.get('one') || '';
+            cases.push(`other: '${this.formatDartSQ(fallback, true)}'`);
           }
           lines.push(`  static String m${i}(${paramNames}) => "\${Intl.plural(${icu.variable}, ${cases.join(', ')})}";`);
         } else if (icu.type === 'gender') {
@@ -765,8 +809,7 @@ export class IntlGenerator {
           const paramNames = [icu.variable, ...otherPlaceholders.map(p => p.name)].join(', ');
           const cases: string[] = [];
           for (const [cn, cv] of localIcu.cases) {
-            const dartVal = cv.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
-            cases.push(`${cn}: '${this.escSQ(dartVal)}'`);
+            cases.push(`${cn}: '${this.formatDartSQ(cv, true)}'`);
           }
           lines.push(`  static String m${i}(${paramNames}) => "\${Intl.gender(${icu.variable}, ${cases.join(', ')})}";`);
         } else {
@@ -775,16 +818,14 @@ export class IntlGenerator {
           const paramNames = [icu.variable, ...otherPlaceholders.map(p => p.name)].join(', ');
           const cases: string[] = [];
           for (const [cn, cv] of localIcu.cases) {
-            const dartVal = cv.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
-            cases.push(`'${cn}': '${this.escSQ(dartVal)}'`);
+            cases.push(`'${cn}': '${this.formatDartSQ(cv, true)}'`);
           }
           lines.push(`  static String m${i}(${paramNames}) => "\${Intl.select(${icu.variable}, {${cases.join(', ')}})}";`);
         }
       } else {
         // Simple parameterized message
         const paramNames = mainEntry.placeholders.map(p => p.name).join(', ');
-        const dartString = localEntry.value.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
-        lines.push(`  static String m${i}(${paramNames}) => "${this.escDQ(dartString)}";`);
+        lines.push(`  static String m${i}(${paramNames}) => "${this.formatDartDQ(localEntry.value, true)}";`);
       }
       lines.push('');
     }
@@ -806,7 +847,7 @@ export class IntlGenerator {
         lines.push(`        "${key}": m${methodIdx},`);
       } else {
         const localEntry = arb.entryMap.get(key)!;
-        lines.push(`        "${key}": MessageLookupByLibrary.simpleMessage("${this.escDQ(localEntry.value)}"),`);
+        lines.push(`        "${key}": MessageLookupByLibrary.simpleMessage("${this.formatDartDQ(localEntry.value, false)}"),`);
       }
     }
 
@@ -903,22 +944,32 @@ export class IntlGenerator {
 
   // ── String Helpers ────────────────────────────────────────────────────────
 
-  /** Escape for Dart single-quoted string */
-  private escSQ(s: string): string {
-    return s
+  /** Escape for Dart single-quoted string, optionally converting {placeholders} to ${placeholders} */
+  private formatDartSQ(s: string, interpolate: boolean = false): string {
+    let res = s
       .replace(/\\/g, '\\\\')
       .replace(/'/g, "\\'")
+      .replace(/\$/g, '\\$')
       .replace(/\n/g, '\\n')
       .replace(/\r/g, '');
+    if (interpolate) {
+      res = res.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
+    }
+    return res;
   }
 
-  /** Escape for Dart double-quoted string (keeps $ for interpolation) */
-  private escDQ(s: string): string {
-    return s
+  /** Escape for Dart double-quoted string, optionally converting {placeholders} to ${placeholders} */
+  private formatDartDQ(s: string, interpolate: boolean = false): string {
+    let res = s
       .replace(/\\/g, '\\\\')
       .replace(/"/g, '\\"')
+      .replace(/\$/g, '\\$')
       .replace(/\n/g, '\\n')
       .replace(/\r/g, '');
+    if (interpolate) {
+      res = res.replace(/\{(\w+)\}/g, (_, n) => `\${${n}}`);
+    }
+    return res;
   }
 
   /** Escape for doc comment */

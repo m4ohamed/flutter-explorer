@@ -105,12 +105,34 @@ export class PubspecProvider {
                 continue;
             }
 
+            const catalogDepMatch = trimmed.match(/^\s*(implementation|api|kapt|annotationProcessor|compileOnly)\s*\(?\s*libs\.([\w.]+)\s*\)?/);
+            if (catalogDepMatch) {
+                dependencies.push({
+                    name: `libs.${catalogDepMatch[2]}`,
+                    version: 'catalog',
+                    isPath: false,
+                    isGit: false
+                });
+                continue;
+            }
+
             const devMatch = trimmed.match(devDepRegex);
             if (devMatch) {
                 const parts = devMatch[2].split(':');
                 devDependencies.push({
                     name: parts[0] + (parts[1] ? ':' + parts[1] : ''),
                     version: parts[2] || 'any',
+                    isPath: false,
+                    isGit: false
+                });
+                continue;
+            }
+
+            const catalogDevMatch = trimmed.match(/^\s*(testImplementation|androidTestImplementation|testCompileOnly)\s*\(?\s*libs\.([\w.]+)\s*\)?/);
+            if (catalogDevMatch) {
+                devDependencies.push({
+                    name: `libs.${catalogDevMatch[2]}`,
+                    version: 'catalog',
                     isPath: false,
                     isGit: false
                 });

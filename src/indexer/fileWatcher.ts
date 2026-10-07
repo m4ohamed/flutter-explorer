@@ -43,7 +43,7 @@ export class FileWatcher implements vscode.Disposable {
             // Watch android/app/ files
             const config = vscode.workspace.getConfiguration('flutterExplorer');
             if (config.get<boolean>('watchAndroidApp', true)) {
-                const androidWatcher = vscode.workspace.createFileSystemWatcher('**/android/app/**/*.{dart,kt,java,xml,gradle}');
+                const androidWatcher = vscode.workspace.createFileSystemWatcher('**/android/app/**/*.{dart,kt,java,xml,gradle,gradle.kts}');
                 this.setupWatcher(androidWatcher);
                 this.watchers.push(androidWatcher);
             }
@@ -74,11 +74,25 @@ export class FileWatcher implements vscode.Disposable {
             analysisOptionsWatcher.onDidCreate(handleAnalysisOptionsChange);
             analysisOptionsWatcher.onDidDelete(handleAnalysisOptionsChange);
             this.watchers.push(analysisOptionsWatcher);
-            // Watch MCP Trigger file
-            const triggerWatcher = vscode.workspace.createFileSystemWatcher('**/.vscode/.flutter-explorer-trigger');
-            triggerWatcher.onDidChange(() => vscode.commands.executeCommand('flutterExplorer.reindex'));
-            triggerWatcher.onDidCreate(() => vscode.commands.executeCommand('flutterExplorer.reindex'));
-            this.watchers.push(triggerWatcher);
+        } else if (mode === 'android') {
+            // Watch Android source, layout, and config files
+            const androidWatcher = vscode.workspace.createFileSystemWatcher('**/*.{kt,java,xml,gradle,gradle.kts}');
+            this.setupWatcher(androidWatcher);
+            this.watchers.push(androidWatcher);
+
+            // Watch Gradle build configuration files
+            const gradleWatcher = vscode.workspace.createFileSystemWatcher('**/*.{gradle,gradle.kts}');
+            gradleWatcher.onDidChange(() => this.indexManager['onIndexChanged'].fire());
+            gradleWatcher.onDidCreate(() => this.indexManager['onIndexChanged'].fire());
+            gradleWatcher.onDidDelete(() => this.indexManager['onIndexChanged'].fire());
+            this.watchers.push(gradleWatcher);
+
+            // Watch AndroidManifest.xml
+            const manifestWatcher = vscode.workspace.createFileSystemWatcher('**/AndroidManifest.xml');
+            manifestWatcher.onDidChange(() => this.indexManager['onIndexChanged'].fire());
+            manifestWatcher.onDidCreate(() => this.indexManager['onIndexChanged'].fire());
+            manifestWatcher.onDidDelete(() => this.indexManager['onIndexChanged'].fire());
+            this.watchers.push(manifestWatcher);
         } else {
             // Watch TS/JS files
             const jsTsWatcher = vscode.workspace.createFileSystemWatcher('**/*.{ts,tsx,js,jsx}');
@@ -88,11 +102,18 @@ export class FileWatcher implements vscode.Disposable {
             const packageJsonWatcher = vscode.workspace.createFileSystemWatcher('**/package.json');
             packageJsonWatcher.onDidChange(() => this.indexManager['onIndexChanged'].fire());
             packageJsonWatcher.onDidCreate(() => this.indexManager['onIndexChanged'].fire());
+            packageJsonWatcher.onDidDelete(() => this.indexManager['onIndexChanged'].fire());
             this.watchers.push(packageJsonWatcher);
         }
+
+        // Watch MCP Trigger file across all project modes (Flutter, Android, Web)
+        const triggerWatcher = vscode.workspace.createFileSystemWatcher('**/{.vscode,.flutter-explorer}/.flutter-explorer-trigger');
+        triggerWatcher.onDidChange(() => vscode.commands.executeCommand('flutterExplorer.reindex'));
+        triggerWatcher.onDidCreate(() => vscode.commands.executeCommand('flutterExplorer.reindex'));
+        this.watchers.push(triggerWatcher);
     }
 
-    private static readonly EXCLUDED_DIRS = /[\/\\](node_modules|out|dist|build|\.git|\.next)[\/\\]/;
+    private static readonly EXCLUDED_DIRS = /[\/\\](node_modules|out|dist|build|\.git|\.next|\.gradle|\.idea)[\/\\]/;
     private shouldExclude(uri: vscode.Uri): boolean {
         return FileWatcher.EXCLUDED_DIRS.test(uri.fsPath) || this.indexManager.isFileExcluded(uri.fsPath);
     }

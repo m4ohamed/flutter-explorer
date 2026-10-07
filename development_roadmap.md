@@ -4,9 +4,51 @@
 
 ---
 
-## 📅 إنجازات اليوم (17 مايو 2026)
+## 📅 إنجازات اليوم (14 سبتمبر 2026)
 
-### 1. مراجعة وتأكيد الباتشات الشاملة في `dartParser.ts`
+### 1. ترقية تبويب Tree إلى شجرة كود هرمية تفاعلية بالكامل (Hierarchical Outline)
+- تم استبدال القوائم المسطحة الجامدة بنظام شجرة هرمية متداخلة وقابلة للطي (`Document Order` & `Folding`) تحاكي وتتفوق على شجرة IDE الأصلية:
+  - استدعاء `vscode.executeDocumentSymbolProvider` في [widgetTreeProvider.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/providers/widgetTreeProvider.ts) لتحويل رموز اللغة الأصلية من Language Server إلى شجرة `OutlineSymbolNode[]`.
+  - تحديث [sidebar.js](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/webview/media/sidebar.js) و [out/media/sidebar.js](file:///c:/Users/m4oha/OneDrive/Desktop/new/out/media/sidebar.js) لعرض الشجرة الهرمية بأسهم الطي `▼`/`▶` وشارات الأنواع الملونة، وتوجيه النقر مباشرة لرقم السطر في الملف عبر `targetFile`.
+  - دمج شجرة الودجتس (`UI Components`) بسلاسة لملفات Flutter/Dart في نفس التبويب.
+  - تصحيح تصنيف ملفات Markdown لتظهر كـ `Headings & Outline` متداخلة بدلاً من `Classes`.
+
+### 2. منع تسريب المتغيرات المحلية في محلل الرموز
+- تم تعديل [jsTsParser.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/indexer/jsTsParser.ts) بفرض شرط `braceDepth === 0 && scopeStack.length === 0` عند التقاط المتغيرات، مما منع تسريب مئات المتغيرات المحلية من داخل الدوال إلى قائمة متغيرات الملف العامة.
+
+### 3. القضاء على الإنذارات الخاطئة (False Positives) في `MockupAnalyzer`
+- تم إضافة استثناء ذاتي في [mockupAnalyzer.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/indexer/mockupAnalyzer.ts) للمحلل ومجلدات `scratch/`.
+- تم تحديث تعابير الـ Regex باستخدام Negative Lookaheads: `Mock(?!up)` و `temp(?!db)` لعدم الخلط بين اسم المحلل وقواعد البيانات المؤقتة مع بيانات الـ Mock الوهمية.
+
+### 4. تحديث وتطوير كافة مهارات الذكاء الاصطناعي (52+ MCP Tools)
+- تم تحديث كافة ملفات المهارات في مجلد المشروع `skills/` والمجلد العالمي `~/.gemini/config/skills/`:
+  - `flutter-explorer-mcp`: الدليل الشامل المحدث لكافة الأدوات الـ 52 وسير العمل وجدول المراجع الكامل.
+  - `debug-flutter-issue`: دعم أخطاء الانهيار الحية `flutter_get_runtime_errors`، فحص شجرة الودجت `flutter_inspect_live_widgets`، تسريبات الذاكرة `flutter_detect_memory_leaks`، ومحاكاة النقر `flutter_simulate_ui_action`.
+  - `explore-flutter-project`: دعم تصنيف الطبقات المعمارية ومقاييس لاكوس `flutter_get_architectural_layers`، وفحص الدورات والحدود.
+  - `impact-analysis`: دعم تحليل مساحة تأثير الـ Git Diff المباشر `flutter_get_git_blast_radius`.
+  - `localization-management`: دعم الترجمة المجمعة `flutter_auto_translate_missing` والتحقق من صيغ `flutter_validate_icu_translations`.
+  - `project-dependencies-management` & `advanced-code-search`: دعم أدوات البحث المباشر في `pub.dev` وتصفح كاش الحزم `.pub-cache`.
+- تم تحديث [skillsGenerator.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/utils/skillsGenerator.ts) ليقوم بمزامنة ونشر المهارات المحدثة تلقائياً عبر منصات Cursor و Claude/Roo و Antigravity.
+
+### 5. ترقية وإصلاح الملفات المحورية (UI, Cache, Intl, Setup)
+- **[sidebar.css](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/webview/media/sidebar.css) & [out/media/sidebar.css](file:///c:/Users/m4oha/OneDrive/Desktop/new/out/media/sidebar.css)**:
+  - إضافة شارات ملونة لنتائج البحث وشجرة الرموز: `.badge-extensionType` و `.badge-file` و `.badge-method`.
+  - إضافة شارات مصادر الحزم في تبويب المكتبات: `.badge-sdk`, `.badge-hosted`, `.badge-maven`, `.badge-gradle`, `.badge-npm`.
+- **[sqliteCache.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/indexer/sqliteCache.ts)**:
+  - دعم تحديد رموز `enums` و `mixins` و `typedefs` بدقة عند موضع المؤشر في `getNodeAtCursor`.
+  - توسيع شجرة تحليل الأثر المعماري `getImpactRadius` لتشمل الواجهات (`implements`)، والخلط (`mixins`)، ونوع تمثيل التوسعة (`representationType`)، وهدف التوسعة (`onType`)، وتتبع الدوال العلوية المستدعية.
+  - إصلاح دقة تقرير التشخيصات `getDiagnostics()` بربط مسار قاعدة البيانات الديناميكي.
+- **[intlGenerator.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/indexer/intlGenerator.ts)**:
+  - منع تكرار المعامِلات المسماة لصيغ الجمع ICU Plural (`=0` و `zero`) وضمان وجود معامل `other` الإلزامي.
+  - معالجة هروب الرمز `\$` الصريح في النصوص لتفادي خطأ `Undefined name` في Dart.
+  - اكتشاف نمط تسمية ملفات الترجمة ديناميكياً (`intl_` أو `app_`).
+- **[mcpSetup.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/utils/mcpSetup.ts)**:
+  - تحويل المسارات الصلبة إلى مسارات ديناميكية متوافقة مع كافة الأنظمة عبر `os.homedir()`.
+  - إضافة مسار خادم MCP لـ `antigravity-ide`.
+  - حماية ملفات إعدادات المستخدم JSON من مسح الخيارات العلوية (Data Loss Prevention) في دالة `updateJsonFile`.
+- **التحقق**: نجاح الفحص الشامل بنسبة 100% عبر `npx tsc --noEmit` دون أي أخطاء.
+
+---
 تم إجراء فحص دقيق وشامل لملف `dartParser.ts` ومقارنته بمتطلبات `FIX.md`، وتم تأكيد الآتي:
 - **Patch 1 (ReDoS)**: تم تطبيق حماية متقدمة ضد التراجع الكارثي مع دعم الأقواس المتداخلة في المعاملات `((?:[^)(]+|\([^)(]*\))*)`.
 - **Patch 2 & 4 (ScopeFrame & ExtensionTypes)**: تم دمج نوع `extensionType` وتخزين المرجع المباشر `ref` في إطار النطاق بشكل صحيح.
@@ -302,5 +344,103 @@ npx tsc --noEmit.
 - **اسم الحزمة**: [flutter-explorer-1.1.6.vsix](file:///c:/Users/m4oha/OneDrive/Desktop/new/flutter-explorer-1.1.6.vsix)
 - **حجم الملف**: 8.45 MB (يتضمن الاعتماديات والأنماط والأكواد الجديدة بالكامل).
 - **كود الخروج**: `exit code 0` (نجاح تام).
+
+---
+
+## 📅 إنجازات اليوم (11 سبتمبر 2026)
+
+### 1. الدعم الشامل والمتكامل لمشاريع Android الأصلية (Native Android Projects)
+- **التعرف على جذور مشاريع أندرويد**: تم تحديث `ProjectDetector.findProjectRoot` و `flutter_set_project_path` في `src/utils/projectDetector.ts` و `src/mcp-server.ts` للتعرف تلقائياً على علامات مشاريع أندرويد (`build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts`).
+- **تفعيل وضع Android في المفهرس (`indexManager.ts`)**:
+  - تم ترقية `getProjectMode()` لتعيد `'flutter' | 'android' | 'web'` بالاعتماد على كاشف المشاريع بدلاً من الاقتصار على فلاتر والويب فقط.
+  - تم تحديث `buildFullIndex()` للبحث التلقائي عن كافة ملفات أندرويد (`**/*.{kt,java,xml,gradle,gradle.kts}`) مع استبعاد مسارات البناء والـ cache (`build`, `.gradle`, `.idea`).
+  - تم تحديث `_loadProjectName()` لاستخراج اسم مشروع أندرويد من ملفات `settings.gradle` / `settings.gradle.kts` أو اسم المجلد الجذري.
+- **مراقبة التغييرات لملفات أندرويد (`fileWatcher.ts`)**:
+  - تم إضافة مراقبة ديناميكية لكافة ملفات الكود والموارد (`.kt`, `.java`, `.xml`, `.gradle`, `.gradle.kts`) عند تشغيل الإضافة في وضع `android`.
+  - إضافة مراقبة لملفات إعدادات Gradle والـ Manifest لتحديث الفهرس عند تعديلها.
+  - توسيع قائمة الاستبعاد `EXCLUDED_DIRS` لتشمل `.gradle` و `.idea` لتفادي معالجة آلاف الملفات المؤقتة.
+- **توجيه وقراءة ملفات أندرويد في خادم الـ MCP (`mcp-server.ts`)**:
+  - توجيه كافة صيغ أندرويد (`.kt`, `.java`, `.xml`, `.gradle`, `.gradle.kts`) إلى المحلل المتخصص `AndroidParser`.
+  - تمكين أداة `flutter_get_pubspec` من قراءة وتلخيص ملفات إعدادات Gradle (`build.gradle.kts` / `build.gradle`) عند غياب `pubspec.yaml`.
+  - دعم قراءة وفهرسة مشاريع Jetpack Compose و Kotlin الأصلية مثل `E:\ebda_pos` بنجاح واختبار استرجاع النتائج عبر `flutter_search` و `flutter_get_pubspec`.
+- **التحقق من التجميع والبناء**:
+  - اجتياز فحص الأنواع البرمجية بنجاح `npx tsc --noEmit` (exit code 0).
+  - بناء وتجميع حزم الإنتاج بنجاح عبر `npm run compile` ونسخها للإضافة المنصبة.
+
+### 2. تطوير وتوسيع كاشف واجهات الموك أب والأكواد التجريبية لمشاريع Android و Compose (`mockupAnalyzer.ts`)
+- **توسيع أنماط التحليل لتشمل Jetpack Compose و Android Views**:
+  - إضافة `COMPOSE_EMPTY_CALLBACK_REGEX` لاكتشاف ردود النداء الفارغة في Compose (`onClick = {}`, `onEdit = {}`, `onValueChange = {}`, `onCheckedChange = {}`, إلخ).
+  - إضافة `ANDROID_LISTENER_EMPTY_REGEX` لاكتشاف مستمعات أندرويد الفارغة (`setOnClickListener { }`, `setOnClickListener(null)`).
+  - إضافة `ANDROID_LOG_ONLY_CALLBACK_REGEX` لكشف الدوال التي تقتصر على الطباعة والتسجيل (`Log.d`, `println`, `Toast.makeText`).
+  - إضافة `KOTLIN_STUB_REGEX` لكشف الأكواد غير المكتملة في Kotlin و Java (`TODO()`, `throw NotImplementedError()`, `UnsupportedOperationException`).
+  - إضافة `MOCK_OBJECT_REGEX` و `MOCK_VAR_REGEX` لكشف الكائنات الأحادية ومتغيرات العينات التجريبية (`object MockStore`, `val mockUsers`, إلخ).
+  - إضافة `ANDROID_XML_SAMPLE_DATA_REGEX` لكشف سمات المعاينة في ملفات XML (`tools:text="@tools:sample/..."`, `tools:src="@tools:sample/..."`).
+  - تحديث `analyzeInputWidgets` لاكتشاف عناصر التحكم غير المربوطة في Compose (`Checkbox`, `Switch`, `RadioButton` ذات الحالة الثابتة والـ callback الفارغ).
+- **الدمج الشامل في المحللات (`androidParser.ts` و `jsTsParser.ts`)**:
+  - استدعاء `MockupAnalyzer.analyze()` في نهاية `parseKotlinJava()` و `parseXml()` داخل `AndroidParser`.
+  - استدعاء `MockupAnalyzer.analyze()` في نهاية `_parseInternal()` داخل `JsTsParser` لدعم مشاريع الويب و React.
+  - تعبئة تحذيرات `result.warnings` تلقائياً لتظهر فوراً في تبويب تحليل الكود (Code Analysis) في الـ Webview وعبر خادم الـ MCP.
+- **التحقق والتأكيد الميداني المباشر على مشروع `E:\ebda_pos`**:
+  - كشف `app/src/main/res/xml/data_extraction_rules.xml:L8` كـ Incomplete UI marker [TODO].
+  - كشف `InventoryScreen.kt:L196`, `AddProductScreen.kt:L242`, `PosScreen.kt:L445, L453, L461` كـ Empty callback 'onClick'.
+  - كشف `CategoriesAndBrandsScreen.kt:L263, L338` كـ Empty callback 'onEdit'.
+  - كشف `DataModels.kt:L102` كـ Mock/dummy singleton: 'MockStore'.
+  - اجتياز فحص التجميع الكامل `npx tsc --noEmit` بنجاح (exit code 0) والتجميع بـ `npm run compile`.
+
+---
+
+## 📅 إنجازات اليوم (14 سبتمبر 2026) — تحديث المزودات وإزالة الملفات القديمة (Providers Overhaul & Stale Code Cleanup)
+
+### 1. تحديث وترقية مزود الرسم البياني (`dependencyGraphProvider.ts`)
+- **توحيد ومطابقة الحواف (Edge Normalization)**: توفير كل من `{ source, target }` و `{ from, to }` لتوافق كامل مع مخططات Mermaid والواجهة الجانبية (D3 & Sidebar)، مما أصلح مشكلة تصفير عدادات الاستيراد `→0 / ←0` ومخطط العلاقات الفارغ.
+- **حساب الملف الأكثر استيراداً ديناميكياً (`mostImported`)**: استبدال القيمة الثابتة بحساب درجات العقد الداخلية (in-degrees) آلياً.
+- **تصحيح مسارات الملفات**: تنظيف بادئة `file:` في المزود وفي واجهة الويب فيو وأمر `openFile` لضمان الانتقال الفوري للسطر المطلوب.
+- **تجميع الملفات بحسب المجلدات الحقيقية**: تجميع عقد الملفات بمسار مجلداتها (`lib/core`, `lib/features/...`) بدلاً من تصنيفها كـ `file/`.
+
+### 2. ترقية وتوسيع مزود حزم القفل (`pubspecLockProvider.ts`)
+- **دعم حزم Flutter الرسمية (`source: 'sdk'`)**: التعرف على حزم Dart و Flutter الأساسية (`flutter`, `flutter_test`, `sky_engine`).
+- **دعم مشاريع Android الأصلية**: إضافة محلل اعتماديات Gradle (`build.gradle` و `build.gradle.kts`) لاستخراج حزم `implementation`, `api`, `kapt`.
+- **دعم Fallback لمشاريع الويب (`package.json`)**: قراءة الاعتماديات من `package.json` في حال غياب `package-lock.json`.
+
+### 3. ترقية محرك وخيارات مزود البحث (`searchProvider.ts`)
+- **مزامنة الأنواع والفلاتر**: إضافة `extensionType` و `file` إلى جميع واجهات البحث ومصفوفات التحقق.
+- **خوارزمية ترتيب الأهمية (Relevance Ranking)**: فرز النتائج ذكياً (المطابقة التامة أولاً، ثم البادئة، ثم الأكثر استخداماً `usageCount`).
+- **حماية الأداء وسلاسة الواجهة**: وضع سقف آمن لعدد النتائج المعروضة في الـ Webview (بحد أقصى 150 نتيجة) لتفادي تهنيج الـ DOM.
+
+### 4. مراجعة وتحديث الملفات القديمة وغير المتزامنة في المشروع
+- **تنظيف استيرادات خادم MCP والمحللات**: تحويل الاستيرادات في `mcp-server.ts`, `dartParser.ts`, `jsTsParser.ts`, `androidParser.ts` لتكون بدون امتداد `.js` لضمان الإشارة المباشرة إلى ملفات TypeScript المصدرية وتفادي تحميل ملفات JS قديمة أو مهملة.
+- **توسيع البحث المباشر (`mcp-direct-search.ts`) وخادم MCP**: إضافة التعرف على `extension type` (Dart 3.0+) وفلترتها عبر خادم MCP.
+- **تحديث واجهة التحليل (`sidebarProvider.ts` و `sidebar.js`)**: إضافة خيارات الفلترة والشارات الملونة للتحذيرات المتقدمة (`memory_leak`, `widget_depth`, `duplicate_widgets`).
+- **التحقق من التجميع**: اجتياز `npx tsc --noEmit` بنجاح بنسبة 100% وبدون أي أخطاء (exit code 0).
+
+---
+
+## 📅 إنجازات اليوم (7 أكتوبر 2026) — تطبيق حزمة Batch 1 والربط الشامل وحل التبعيات (Batch 1 Integration & Full Wiring)
+
+### 1. تطبيق حزمة الملفات والوحدات النمطية المتقدمة (Batch 1 Modules)
+- **`src/utils/configWriter.ts`**: محرر ملفات إعدادات آمن يدعم الكتابة الذرية (Atomic Writes)، وتدوير النسخ الاحتياطية (حفظ أحدث 10 نسخ في `~/.flutter-explorer/backups`)، وحماية ملفات JSON من التلف أو الكتابة فوقها في حال وجود أخطاء صياغة.
+- **`src/utils/mcpSetup.ts`**: تحديث إعدادات MCP لدعم الكتل المعلمة (`<!-- flutter-explorer:rules:begin/end -->`) في `GEMINI.md` دون مسح محتوى المستخدم، ودمج `mcpServers` و `servers` بأمان.
+- **`src/mcp-arb-editor.ts`**: إعادة كتابة شاملة لمحرر ARB مع دعم صياغة ICU ومحلل كامل للـ Plural/Select، وتوفير `ArbParseError` لحماية الملفات التالفة من التصفير، واستبعاد ملفات Dart المولدة من فحص المفاتيح غير المستخدمة، وحماية Prototype Pollution.
+- **`src/runtime/vmServiceBridge.ts`**: جسر متقدم للاتصال بـ Dart VM Service عبر WebSocket باستخدام حزمة `ws`، مع إعادة اكتشاف الـ Isolates بعد Hot Restart، وتأكيد حركات المحاكاة (UI simulation) عبر Flutter Driver مع إغلاق آمن عند الخمول (`idleDisconnect`).
+- **`src/utils/processRunner.ts`**: مشغل آمن للعمليات بدون Shell في POSIX، ومعالجة خاصة لنظام Windows عبر `cmd.exe /d /s /c` مع تنصيص المعاملات فقط للحفاظ على `%~dp0` في ملفات الباتش (`.cmd` / `.bat`)، وقائمة بيضاء صارمة للأوامر المسموحة.
+- **`src/utils/analysisRunner.ts`**: موحد تشغيل أدوات التحليل (`flutter analyze`, `tsc`, `gradle`) واستخراج التشخيصات ككائنات مهيكلة.
+- **`src/indexer/importResolver.ts`**: موحد حل مسارات الاستيرادات واستدعاءات الدوال عبر Dart و TypeScript و Kotlin، ومعالجة استيرادات ESM `.js` إلى `.ts` والمسارات المستعارة `paths`.
+
+### 2. الربط الشامل في بنية المشروع (Full Wiring & Edge-Case Hardening)
+- **إزالة `shell: true` من `src/mcp-server.ts`**: ربط أدوات `flutter_run_analyze` و `flutter_run_build_runner` بـ `runProjectAnalysis` و `runBuildRunner` لمنع ثغرات حقن الأوامر.
+- **توصيل `ImportResolver` في `src/mcp-code-analyzer.ts`**: استبدال البحث البسيط لحل الدورات الاعتمادية `detectCircularDependencies` وقواعد الطبقات المعمارية `validateArchitectureRules` وشجرة الاستدعاء العكسية `buildReverseCallGraph`.
+- **تصحيح استخراج الاستيرادات في `dartParser.ts` و `jsTsParser.ts`**: مطابقة regex الاستيرادات والتصديرات على السطر الحقيقي بدلاً من السطر المطموس بمسافات.
+- **تعبئة استيرادات محلل Dart SDK في `indexManager.ts`**: دمج `imports` و `exports` لضمان عدم وجود ملفات بدون روابط استيراد.
+- **حماية المسارات في `packageResolver.ts`**: منع هجمات Path Traversal والتحقق من بقاء الملفات داخل `lib/`.
+- **توحيد مراقب الملفات في `fileWatcher.ts`**: تشغيل `triggerWatcher` لكافة بيئات العمل (Flutter, Android, Web) لمراقبة `.vscode` و `.flutter-explorer`.
+- **الهروب الآمن للنصوص في `sidebar.js`**: معالجة علامات التنصيص في `escapeHtml` لحماية الواجهة من ثغرات XSS.
+- **منع تلوث مساحة العمل في `skillsGenerator.ts`**: حصر توليد المهارات والقواعد في الدليل العام `~/.gemini/config/skills/` افتراضياً دون تشتيت مساحة عمل المستخدم.
+
+### 3. منظومة الاختبارات الآلية والتحقق (Test Suite & Verification)
+- **إنشاء وتفعيل حزمة الاختبارات (`tests/`)**: 67 اختباراً وحدوياً دقيقاً يغطي معالج ARB، وكاتب الإعدادات، ومحلل الاستيرادات، ومشغل العمليات، وجسر VM Service.
+- **نتائج التحقق**:
+  - `npm test`: اجتياز 66 اختباراً بنجاح تام (واختبار وحيد تم تجاوزه لكونه خاصاً بالـ Symlinks على ويندوز).
+  - `npx tsc --noEmit`: اجتياز فحص الأنواع الصارم بنجاح تام (0 أخطاء).
+  - `npm run compile`: إنتاج ملفات الحزمة الإنتاجية بنجاح (`out/mcp-server.js`, `out/extension.js`, `out/webview-graph.js`).
 
 

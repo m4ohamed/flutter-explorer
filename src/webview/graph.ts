@@ -20,6 +20,7 @@ interface GraphNode {
   filePath: string;
   line?: number;
   group?: string;
+  layer?: string;
 }
 
 interface GraphEdge {
@@ -531,6 +532,23 @@ function showInspector(node: SimNode): void {
   nameEl.textContent = node.name;
   typeEl.textContent = node.kind.toUpperCase();
   typeEl.style.backgroundColor = NODE_COLOR[node.kind] || "#999";
+
+  const layerEl = document.getElementById("inspect-layer");
+  if (layerEl) {
+    if (node.layer) {
+      layerEl.style.display = "inline-block";
+      layerEl.textContent = node.layer.toUpperCase();
+      const layerColors: Record<string, string> = {
+        presentation: "#d2a8ff",
+        domain: "#3fb950",
+        data: "#f0883e",
+        core: "#58a6ff"
+      };
+      layerEl.style.backgroundColor = layerColors[node.layer.toLowerCase()] || "#666";
+    } else {
+      layerEl.style.display = "none";
+    }
+  }
   
   pathEl.textContent = `${node.filePath}:${node.line || 1}`;
   

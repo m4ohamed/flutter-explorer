@@ -11,781 +11,516 @@ interface SkillDef {
 const SKILLS: Record<string, SkillDef> = {
     'mcp': {
         name: 'flutter-explorer-mcp',
-        description: 'استخدم الـ MCP tools الخاصة بـ Flutter Explorer للتحليل العميق لمشاريع Flutter/Dart. يجب استخدام هذه السكيل في أي وقت يطلب فيه المستخدم: تحليل الكود، البحث عن كلاس أو دالة، معرفة مَن يستخدم مكوناً معيناً، فهم بنية المشروع، البحث عن translations، إصلاح أخطاء، مراجعة التبعيات، تتبع التأثير (blast radius)، تشغيل analyze أو build_runner، أو أي مهمة تتطلب قراءة أو فهم كود Flutter. الأدوات متاحة كـ deferred tools تحت flutter-explorer-mcp:flutter_* — استخدمها مباشرة ولا تكتب الكود يدوياً. تشمل: البحث، قراءة الكود، تحليل المنطق، الـ graph، الترجمات، الـ diagnostics، وأكثر.',
-        body: `# Flutter Explorer MCP — دليل الاستخدام
+        description: "How to use the flutter-explorer-mcp MCP server's 50+ tools to explore, search, analyze, and safely modify Flutter/Dart projects (also JS/TS and Android modules in the same repo) instead of guessing from memory, grepping by hand, or reading whole files. ALWAYS consult this skill whenever flutter-explorer-mcp tools are connected and the task involves finding a class, function, widget, enum, mixin, or extension; reading or explaining Dart code; figuring out what a change would break (impact/blast-radius); hunting mockup/placeholder/TODO/hardcoded-string-or-color code; checking Clean Architecture layer violations or circular dependencies; undisposed controllers or memory leaks; ARB translation gaps; running flutter analyze or build_runner; or driving a live running Flutter app (hot reload/restart, runtime errors, widget inspection, simulated taps) via the VM service. Prefer these tools over raw bash/grep/view on Dart files whenever the project is indexed.",
+        body: `# Flutter Explorer MCP
 
-## نظرة عامة
+\`flutter-explorer-mcp\` is a VS Code extension + MCP server that keeps a SQLite-backed
+index (BM25 search, Flutter-aware camelCase tokenization) of a Dart/Flutter project
+(and, for mixed repos, JS/TS and Android/Gradle files too). It exposes ~50 tools for
+searching, reading, analyzing, refactoring-safety-checking, localizing, and
+live-debugging the project — almost always faster and more precise than reading
+whole files or shelling out to \`grep\`.
 
-هذه السكيل تمنحك وصولاً كاملاً لـ 30 أداة MCP مدمجة تُحلّل مشروع Flutter/Dart مباشرةً.
-الأدوات تعمل على SQLite index تبنيه امتداد VS Code، مع JSON fallback إذا كان SQLite غير متاح.
+**Use these tools instead of:** \`bash grep\`/\`find\` on the repo, opening whole files
+with \`view\` just to locate one function, manually re-deriving what a symbol is used
+by, or guessing whether \`flutter analyze\` currently passes.
 
-**قبل أي شيء**: استخدم \`tool_search\` بـ \`"flutter"\` لتحميل الأدوات.
+## 0. Before anything else: is the project set and indexed?
 
----
+1. Call \`flutter_get_project_path\` (or just try a tool — errors will say if the path
+   is wrong). If the wrong project is active, call \`flutter_set_project_path\` with
+   the **absolute** path to the project root (must contain \`pubspec.yaml\`,
+   \`package.json\`, a Gradle file, or \`.git\`). This is persisted across restarts, so
+   you usually only need to do this once per conversation/project switch.
+2. Call \`flutter_get_index_status\` to confirm the index is populated (\`indexedFiles\`
+   count, \`source\`: SQLite vs JSON fallback vs empty). If it's empty or stale after
+   you or the user just created/renamed files, call \`flutter_rebuild_index\` — this
+   only *triggers* the VS Code extension to reindex; it isn't instant, so re-check
+   \`flutter_get_index_status\` a moment later rather than assuming it's done.
+3. If a tool returns an "Index not found" style error, that error already contains
+   the specific diagnosis (missing DB file vs 0 indexed files vs access error) —
+   act on it directly rather than re-asking the user what's wrong.
+4. Most read tools silently fall back to a slower direct filesystem search
+   (\`flutter_search\` with \`useDirectSearch\`, or the direct-search path when the
+   index is missing) so they still work with no index — just expect it to be
+   slower and less precise. Don't treat a working-but-slow tool call as broken.
 
-## الخطوات الأساسية
+## 1. Core exploration loop
 
-\`\`\`
-1. tool_search(query="flutter") → يحمّل كل أدوات flutter-explorer-mcp
-2. اختر الأداة المناسبة من الجدول أدناه
-3. نفّذها مباشرة — لا تكتب كوداً بديلاً
-\`\`\`
+For "find/explain/understand X":
+\`flutter_search\` (or \`flutter_search_text\` for arbitrary strings/comments) →
+\`flutter_get_code_block\` or \`flutter_read_fragment\` (full body with comments) →
+\`flutter_analyze_logic_flow\` (summarized steps) or \`flutter_get_dependencies\`
+(constructor-injected collaborators).
 
----
+For "what happens if I change/delete X" (**always run before editing shared code**):
+\`flutter_get_impact_analysis\` (blast radius to entry points), \`flutter_find_references\`
+/ \`flutter_get_reverse_deps\` (who calls/uses it now). Skipping this step on a widely-used
+symbol is the most common way this skill gets misused.
 
-## دليل الأدوات السريع
+Useful shortcuts:
+- \`flutter_get_node_at_cursor\` — "what's defined at file:line" instead of reading the
+  whole file to figure out context.
+- \`flutter_read_lines\` — precise line-range reads (cheap, avoids token bloat) for
+  inspecting around an error instead of \`flutter_get_file_info\`'s full JSON dump.
+- \`flutter_get_hints\` — pass the last tool you called and its result to get a
+  suggested next tool; useful when you're not sure what to do after a search hit.
+- Parameter names are forgiving: most file-path tools accept \`filePath\`,
+  \`relativePath\`, or \`path\` interchangeably, and \`flutter_search\`'s \`filter\` accepts
+  shorthand aliases (\`ext\`→extension, \`type\`→typedef, \`vars\`→variable, \`call\`→function).
 
-### 🔍 البحث والاستكشاف
+## 2. Before calling a task "done": quality sweeps
 
-| الأداة | الاستخدام | متى تستخدمها |
-|--------|-----------|--------------|
-| \`flutter_search\` | البحث عن كلاس/دالة/widget/enum | أول خطوة عند البحث عن أي عنصر |
-| \`flutter_search_text\` | بحث نصي/regex في كل الملفات | البحث عن string literal أو comment |
-| \`flutter_get_project_structure\` | عرض شجرة المشروع | فهم البنية، إيجاد الملفات |
-| \`flutter_get_stats\` | إحصائيات المشروع | نظرة سريعة على حجم المشروع |
-| \`flutter_get_file_info\` | تفاصيل ملف dart | قراءة كل عناصر ملف معين |
+Mohamed's own standard is complete, non-placeholder implementations — these tools
+check that mechanically instead of relying on a manual re-read:
 
-### 📖 قراءة الكود
+- \`flutter_detect_mockups\` — finds empty callbacks, hardcoded/fake mock data, stub
+  widgets, unbound inputs, fake delays, and leftover TODO comments. Run this on any
+  file or feature before considering it finished.
+- \`flutter_get_code_warnings\` — hardcoded text/colors (should be going through
+  intl/theme instead) and duplicated logic.
+- \`flutter_detect_memory_leaks\` — undisposed \`TextEditingController\`,
+  \`AnimationController\`, \`ScrollController\`, \`StreamSubscription\`, \`FocusNode\`, etc.
+  in \`State\` classes.
+- \`flutter_run_analyze\` — runs the right linter/compiler for the detected project
+  type (Flutter/TS/Android) and returns structured diagnostics; check this instead
+  of assuming code compiles.
 
-| الأداة | الاستخدام | متى تستخدمها |
-|--------|-----------|--------------|
-| \`flutter_get_code_block\` | قراءة body كاملة لكلاس/دالة/method | بعد flutter_search، لقراءة الكود الكامل |
-| \`flutter_read_fragment\` | قراءة بـ اسم العنصر + سياق اختياري | بديل أسرع لـ get_code_block |
-| \`flutter_analyze_logic_flow\` | تحليل منطق دالة بـ steps | فهم ماذا تفعل دالة معقدة |
-| \`flutter_get_pubspec\` | قراءة pubspec.yaml | فهم dependencies والإعدادات |
-| \`flutter_get_index_status\` | حالة الـ index | تشخيص مشاكل الـ index |
+\`flutter_analyze_logic_flow\` and \`flutter_get_dependencies\` are keyword/regex
+heuristics, not real control-flow or type analysis — treat their output as a
+starting-point summary to verify against \`flutter_get_code_block\`'s actual body,
+not as ground truth. Likewise \`flutter_detect_memory_leaks\` only flags a class as
+"safe" if it finds a literal \`field.dispose()/.cancel()/.close()\` call in the same
+file's text — disposal routed through a helper method or a mixin won't be
+recognized, so a clean report there isn't a guarantee.
 
-### 🔗 التحليل والعلاقات
+## 3. Architecture & structure checks (Clean Architecture stacks)
 
-| الأداة | الاستخدام | متى تستخدمها |
-|--------|-----------|--------------|
-| \`flutter_find_references\` | كل مكان يُستخدم فيه عنصر | refactoring، تتبع الاستخدام |
-| \`flutter_get_reverse_deps\` | مَن يعتمد على هذا العنصر | قبل تعديل كلاس أو دالة |
-| \`flutter_get_impact_analysis\` | blast radius لملف | قبل تعديل ملف حيوي |
-| \`flutter_get_dependencies\` | dependencies الـ constructor | فهم DI لكلاس معين |
-| \`flutter_get_detailed_graph\` | رسم بياني للعلاقات | فهم معمارية جزء من المشروع |
-| \`flutter_get_node_at_cursor\` | العنصر في سطر معين | التنقل في كود محدد |
+- \`flutter_get_architectural_layers\` — classifies files into
+  Presentation/Domain/Data/Core and reports Lakos coupling metrics (Ca/Ce/Instability).
+- \`flutter_validate_architecture_rules\` — flags layer-boundary violations (e.g.
+  Domain depending on Data/UI); pass \`customRules\` if the project's rules differ
+  from the standard Clean Architecture defaults.
+- \`flutter_detect_circular_dependencies\` — A→B→C→A cycles across files.
+- \`flutter_analyze_widget_depth\` / \`flutter_detect_duplicate_widgets\` — excessive
+  widget nesting and copy-pasted widget subtrees worth extracting.
+- \`flutter_detect_unused_assets\` — assets declared in \`pubspec.yaml\` but never
+  referenced.
+- \`flutter_get_git_blast_radius\` — impact analysis scoped to the current git diff,
+  useful right before a commit/PR (empty result if the project isn't a git repo, or
+  has no HEAD yet).
 
-### ⚠️ التحقق والتشخيص
+Layer classification and boundary rules match on path *substrings* (e.g. a file
+containing \`/data/\` anywhere in its path counts as Data layer), not a real module
+system — a file like \`lib/core/data_formatter.dart\` can be misclassified. Treat a
+reported violation as "worth a look", and double-check the actual import before
+treating it as confirmed. \`flutter_get_impact_analysis\` / \`flutter_get_git_blast_radius\`
+have the same caveat one level up: they only reach an "entry point" as heuristically
+defined (top-level \`main\`/\`render\`, or a method named \`build\`/\`initState\`/\`dispose\`/
+\`on*\`/etc. on a class whose hierarchy mentions Widget/State/Activity/Component/...).
+Code that's only reached through, say, a background isolate or a testing harness
+may legitimately show "no affected flows" even though it's very much in use.
 
-| الأداة | الاستخدام | متى تستخدمها |
-|--------|-----------|--------------|
-| \`flutter_get_diagnostics\` | أخطاء VS Code كلها | أول خطوة عند تشخيص مشكلة |
-| \`flutter_get_code_warnings\` | تحذيرات hardcoded text/color | تحسين جودة الكود |
-| \`flutter_run_analyze\` | تشغيل flutter analyze | التحقق من errors قبل deploy |
-| \`flutter_get_hints\` | اقتراحات بناءً على آخر tool | الخطوة التالية المنطقية |
+## 4. Localization (ARB) workflow
 
-### 🌍 الترجمات (ARB)
+\`flutter_get_missing_translations\` / \`flutter_list_translations\` (audit) →
+\`flutter_auto_translate_missing\` with \`action: "generate_payload"\` (get the keys
+needing translation) → translate → \`flutter_auto_translate_missing\` with
+\`action: "batch_apply"\`, or \`flutter_update_translation\` for a single key →
+\`flutter_run_intl_generate\` (regenerate \`l10n.dart\`/\`messages_*.dart\`) →
+\`flutter_validate_icu_translations\` (ICU syntax/placeholder/plural consistency) and
+\`flutter_find_unused_translations\` (dead keys) as a final sweep. \`flutter_delete_translation\`
+removes a key from every ARB file at once.
 
-| الأداة | الاستخدام | متى تستخدمها |
-|--------|-----------|--------------|
-| \`flutter_list_translations\` | كل translation keys | استعراض الترجمات |
-| \`flutter_get_missing_translations\` | مفاتيح مفقودة | قبل release |
-| \`flutter_update_translation\` | إضافة/تعديل ترجمة (AR + EN) | إضافة string جديد |
-| \`flutter_delete_translation\` | حذف مفتاح ترجمة | تنظيف مفاتيح قديمة |
-| \`flutter_run_intl_generate\` | توليد ملفات l10n | بعد تعديل ARB files |
+## 5. Codegen & build
 
-### ⚙️ الإعدادات والبناء
+- \`flutter_run_build_runner\` — \`dart run build_runner build --delete-conflicting-outputs\`,
+  needed after editing anything annotated for Freezed/Riverpod/json_serializable
+  codegen. Only one instance runs at a time; if it's already running you'll get told
+  to wait rather than getting silently queued.
 
-| الأداة | الاستخدام | متى تستخدمها |
-|--------|-----------|--------------|
-| \`flutter_get_project_path\` | المسار الحالي للمشروع | التحقق من المشروع النشط |
-| \`flutter_set_project_path\` | تغيير المشروع | التبديل بين مشاريع |
-| \`flutter_list_packages\` | packages من pubspec.lock | فهم الإصدارات المثبتة |
-| \`flutter_run_build_runner\` | توليد كود Freezed/Riverpod | بعد تعديل models |
-| \`flutter_rebuild_index\` | إعادة بناء الـ index | إذا كان الـ index قديم |
+## 6. Live app debugging (requires a running Flutter app, VM service)
 
----
+\`flutter_get_runtime_errors\` (uncaught exceptions/stderr) and
+\`flutter_inspect_live_widgets\` (live widget/render tree) for diagnosis;
+\`flutter_hot_reload\` / \`flutter_hot_restart\` to apply a fix; \`flutter_simulate_ui_action\`
+(tap/enterText/scroll by key or text) to drive the UI. All accept an optional
+\`vmServiceUri\` — omit it to let the bridge auto-discover the running instance.
 
-## سير العمل الشائع
+Caveats worth knowing before you rely on these:
+- Auto-discovery only checks the \`DART_VM_SERVICE_URI\` env var and a few files under
+  \`.dart_tool/\` (\`dart_tooling_daemon.json\`, \`flutter_service.json\`,
+  \`vm_service_uri.txt\`). If the app was launched in a way that doesn't populate one
+  of those, discovery fails and you must pass \`vmServiceUri\` explicitly (copy it
+  from the \`flutter run\` console output).
+- \`flutter_get_runtime_errors\` only returns errors that occurred **after** this
+  bridge connected — a rolling buffer of the last 50, not app history. A fresh
+  connection reporting "0 errors" doesn't mean the app never crashed.
+- \`flutter_simulate_ui_action\` tries the Flutter Driver extension first; most apps
+  outside a driver/integration-test harness don't expose it, so it silently falls
+  back to an inspector "select by id" call — which is not a real tap/text-entry/scroll.
+  A "success" response doesn't guarantee the UI actually reacted; verify with
+  \`flutter_inspect_live_widgets\` or \`flutter_get_runtime_errors\` afterward.
 
-### 📌 "أريد أن أفهم كلاس معين"
-\`\`\`
-1. flutter_search(query="ClassName", filter="class")
-2. flutter_get_code_block(className="ClassName", elementType="class")
-3. flutter_get_dependencies(className="ClassName")  ← مَن يحتاجه في constructor
-4. flutter_get_reverse_deps(name="ClassName", type="class")  ← مَن يستخدمه
-\`\`\`
+## 7. Third-party package research
 
-### 📌 "ما الذي سيتأثر إذا عدّلت هذا الملف؟"
-\`\`\`
-1. flutter_get_impact_analysis(relativePath="lib/path/to/file.dart")
-2. flutter_get_reverse_deps(name="ClassName", type="class")
-\`\`\`
+\`flutter_search_packages\` (regex/text search inside cached pub packages or the
+Flutter SDK) and \`flutter_read_package_source\` (read a package/SDK file by
+\`package:\` URI, e.g. \`package:flutter/material.dart\`) — use these instead of
+guessing a package's API from training data, since versions drift.
+\`flutter_pub_dev_search\` and \`flutter_get_pub_package_info\` hit pub.dev live for
+discovering/vetting packages before adding a dependency (pub points, popularity,
+likes).
 
-### 📌 "أريد إضافة ترجمة جديدة"
-\`\`\`
-1. flutter_list_translations()  ← تحقق أن المفتاح غير موجود
-2. flutter_update_translation(key="myKey", arValue="النص", enValue="Text")
-3. flutter_run_intl_generate()  ← لتوليد ملفات Dart
-\`\`\`
+Both \`flutter_search_packages\` and \`flutter_read_package_source\` resolve packages
+via \`.dart_tool/package_config.json\` — if \`dart pub get\` / \`flutter pub get\` hasn't
+been run yet, that file won't exist and both tools will report the package as not
+found rather than something being wrong with the tool.
 
-### 📌 "هناك أخطاء في المشروع"
-\`\`\`
-1. flutter_get_diagnostics()  ← أخطاء VS Code
-2. flutter_run_analyze()  ← تشغيل flutter analyze
-3. flutter_get_code_warnings()  ← تحذيرات إضافية
-\`\`\`
+## Known quirks
 
-### 📌 "ابحث عن كل أماكن استخدام دالة"
-\`\`\`
-1. flutter_find_references(name="functionName", type="function")
-\`\`\`
-
----
-
-## نصائح للاستخدام الفعال
-
-**ابدأ بـ flutter_search دائماً** — يعطيك الـ \`file\` و \`line\` اللي تحتاجهم للأدوات الأخرى.
-
-**استخدم filter في flutter_search** لنتائج أدق:
-\`\`\`
-filter: "class" | "function" | "widget" | "enum" | "mixin" | 
-        "extension" | "typedef" | "variable" | "translation" | "file"
-\`\`\`
-
-**إذا كان الـ index غير متاح** (Index not found):
-- نفّذ \`flutter_rebuild_index()\` أولاً
-- أو تحقق بـ \`flutter_get_index_status()\`
-- الـ \`flutter_search\` يستخدم direct search تلقائياً كـ fallback
-
-**للأدوات التي تحتاج \`parentClass\`** (مثل get_code_block للـ methods):
-\`\`\`
-flutter_search(query="methodName") → يعطيك parent class من حقل "parent"
-\`\`\`
-
-**تسلسل منطقي**: استخدم \`flutter_get_hints()\` بعد أي tool لتقترح الخطوة التالية.
-
----
-
-## معالجة الأخطاء الشائعة
-
-| الخطأ | السبب | الحل |
-|-------|-------|------|
-| "Index not found" | SQLite غير جاهز | \`flutter_rebuild_index()\` أو \`flutter_get_index_status()\` |
-| "File not found in index" | مسار خاطئ | استخدم \`flutter_search(filter="file")\` للمسار الصحيح |
-| "Function not found" | اسم خاطئ أو تغيّر | \`flutter_search(query="partialName")\` |
-| "No Flutter project found" | مسار خاطئ | \`flutter_set_project_path(projectPath="...")\` |
-
----
-
-للتفاصيل المتقدمة عن كل tool والـ parameters الكاملة:
-→ اقرأ \`references/tool-reference.md\`
-
-# Flutter Explorer MCP — Tool Reference المرجع الكامل
-
-## flutter_search
-
-**البحث في الـ index عن أي عنصر Dart**
-
-\`\`\`typescript
-flutter_search({
-  query: string,              // اسم العنصر أو جزء منه
-  filter?: string,            // "class"|"function"|"widget"|"enum"|"mixin"|"extension"
-                              // "typedef"|"variable"|"constructor"|"property"
-                              // "annotation"|"file"|"call"|"translation"
-  searchMode?: string,        // "definitions"|"calls"|"both" (default: "both")
-  useDirectSearch?: boolean   // true = تجاهل الـ index، ابحث مباشرة في الملفات
-})
-\`\`\`
-
-**نموذج النتيجة:**
-\`\`\`json
-{
-  "results": [
-    {
-      "name": "AuthService",
-      "type": "class_definition",
-      "subtype": "plain",
-      "file": "lib/services/auth_service.dart",
-      "line": 12,
-      "lineEnd": 89
-    }
-  ],
-  "source": "index"
-}
-\`\`\`
+- The SQLite cache uses \`node-sqlite3-wasm\`; WAL journal mode is unreliable with the
+  WASM VFS, so the extension uses \`DELETE\` journal mode. If the index looks stale or
+  locked, that's the usual cause — a rebuild (\`flutter_rebuild_index\`) fixes it, not
+  a manual DB edit.
+- The active project path persists to \`~/.gemini/active-project.txt\` regardless of
+  which client is using this server — this is expected, not a bug.
+- Search results are BM25-ranked but only when there are index hits; if \`flutter_search\`
+  falls back to direct search (no index, or \`useDirectSearch: true\`), ranking is
+  simpler substring matching, and results are capped at 50 (100 for \`flutter_search_text\`).
+- The direct-search fallback scans \`lib/\`, \`android/app/src/main/\`, \`src/\`, \`app/\`,
+  plus top-level \`App.tsx\`/\`index.*\`/\`main.*\` files — and, unlike the ARB/asset
+  scanners, does **not** skip \`node_modules\`/\`build\`/\`.git\`. If one of those scan
+  roots contains a vendored dependency tree, expect noisier/slower direct-search
+  results until the real index is available again.
+- ARB tooling (\`flutter_get_missing_translations\`, \`flutter_update_translation\`,
+  etc.) only looks for \`.arb\` files under \`lib/\`, \`assets/\`, and the project root.
+  Locale is read from the file's \`@@locale\` key first, falling back to a pattern
+  match on the filename (e.g. \`app_ar.arb\` → \`ar\`) — an unconventionally-named ARB
+  file with no \`@@locale\` key may be misidentified.
+- \`flutter_find_unused_translations\` and \`flutter_detect_unused_assets\` both work
+  by substring/whole-word matching against merged source text, so a key/asset only
+  referenced through string concatenation or a generated indirection can show up as
+  a false positive "unused".
 
 ---
-
-## flutter_get_code_block
-
-**قراءة body كاملة لكلاس أو دالة**
-
-\`\`\`typescript
-flutter_get_code_block({
-  className?: string,    // اسم الكلاس (لو elementType="class" أو "method")
-  functionName?: string, // اسم الدالة أو الـ method
-  elementType?: string,  // "class"|"function"|"method" (auto-detected إذا لم يُذكر)
-  filePath?: string,     // مسار نسبي (اختياري، يبحث تلقائياً)
-})
-\`\`\`
-
----
-
-## flutter_read_fragment
-
-**قراءة كود بالاسم مع سياق اختياري**
-
-\`\`\`typescript
-flutter_read_fragment({
-  name: string,              // اسم العنصر
-  elementType?: string,      // "class"|"function"|"method"
-  filePath?: string,         // مسار نسبي (اختياري)
-  parentClass?: string,      // للـ methods
-  includeContext?: boolean,  // إضافة سطور قبل وبعد (default: false)
-  contextLines?: number,     // عدد السطور الإضافية (default: 3)
-})
-\`\`\`
-
----
-
-## flutter_analyze_logic_flow
-
-**تحليل منطق دالة وتقسيمه لـ steps**
-
-\`\`\`typescript
-flutter_analyze_logic_flow({
-  functionName: string,  // اسم الدالة
-  parentClass?: string,  // الكلاس المحتوي (للـ methods)
-  filePath?: string,     // مسار نسبي (اختياري)
-})
-\`\`\`
-
-**نموذج النتيجة:**
-\`\`\`json
-{
-  "functionName": "exportVideo",
-  "logicSteps": [
-    { "type": "validation", "description": "Check outputPath not null" },
-    { "type": "async_call", "description": "Call VideoEngine.process()" }
-  ]
-}
-\`\`\`
-
----
-
-## flutter_find_references
-
-**إيجاد كل أماكن استخدام عنصر معين**
-
-\`\`\`typescript
-flutter_find_references({
-  name: string,  // اسم العنصر
-  type: string   // "class"|"function"|"variable"|"enum"|"mixin"|"extension"|"typedef"
-})
-\`\`\`
-
-**نموذج النتيجة:**
-\`\`\`json
-{
-  "references": [
-    {
-      "file": "lib/screens/home_screen.dart",
-      "line": 45,
-      "context": "final auth = AuthService();",
-      "kind": "instantiation_or_access"
-    }
-  ],
-  "referencesCount": 7
-}
-\`\`\`
-
----
-
-## flutter_get_impact_analysis
-
-**تحليل blast radius لملف — مَن يصل إليه من entry points**
-
-\`\`\`typescript
-flutter_get_impact_analysis({
-  relativePath: string,  // مثال: "lib/core/utils.dart"
-  maxDepth?: number,     // عمق البحث (default: 25)
-})
-\`\`\`
-
-**نموذج النتيجة:**
-\`\`\`json
-{
-  "targetFile": "lib/core/utils.dart",
-  "affectedFlows": [
-    {
-      "entryPoint": "HomeScreen.build",
-      "path": ["HomeScreen", "HomeController", "AuthService", "utils"]
-    }
-  ],
-  "summary": "Found 3 execution flows from entry points reaching this file."
-}
-\`\`\`
-
----
-
-## flutter_get_reverse_deps
-
-**مَن يعتمد على عنصر معين**
-
-\`\`\`typescript
-flutter_get_reverse_deps({
-  name: string,          // اسم العنصر
-  type: string,          // "class"|"function"|"extension"|"typedef"|"variable"
-                         // "constructor"|"property"|"annotation"|"enum"|"mixin"
-  parentClass?: string,  // مطلوب للـ properties و functions داخل كلاس
-})
-\`\`\`
-
----
-
-## flutter_get_dependencies
-
-**dependencies الـ constructor لكلاس معين**
-
-\`\`\`typescript
-flutter_get_dependencies({
-  className: string,   // اسم الكلاس
-  filePath?: string,   // مسار نسبي (اختياري)
-})
-\`\`\`
-
----
-
-## flutter_get_detailed_graph
-
-**رسم بياني للعلاقات (inheritance, calls, imports)**
-
-\`\`\`typescript
-flutter_get_detailed_graph({
-  focusFile?: string,  // ملف محوري (اختياري)
-  depth?: number,      // عمق الـ graph (default: 1)
-})
-\`\`\`
-
----
-
-## flutter_get_node_at_cursor
-
-**العنصر الموجود في سطر معين**
-
-\`\`\`typescript
-flutter_get_node_at_cursor({
-  relativePath: string,  // مسار الملف
-  line: number,          // رقم السطر (1-indexed)
-})
-\`\`\`
-
----
-
-## flutter_get_project_structure
-
-**شجرة مجلدات المشروع**
-
-\`\`\`typescript
-flutter_get_project_structure({
-  targetPath?: string  // مجلد فرعي (default: "lib")
-})
-\`\`\`
-
----
-
-## flutter_get_file_info
-
-**كل عناصر ملف dart**
-
-\`\`\`typescript
-flutter_get_file_info({
-  relativePath: string  // مثال: "lib/main.dart"
-})
-\`\`\`
-
----
-
-## flutter_get_stats
-
-**إحصائيات المشروع الكاملة**
-\`\`\`typescript
-flutter_get_stats({})
-// → "Files: 142, Classes: 89, Functions: 234, Widgets: 45, ..."
-\`\`\`
-
----
-
-## flutter_get_pubspec
-
-**محتوى pubspec.yaml كاملاً**
-\`\`\`typescript
-flutter_get_pubspec({})
-\`\`\`
-
----
-
-## flutter_list_packages
-
-**packages من pubspec.lock بإصداراتها**
-\`\`\`typescript
-flutter_list_packages({})
-\`\`\`
-
----
-
-## flutter_get_code_warnings
-
-**تحذيرات الكود (hardcoded text/color/logic)**
-
-\`\`\`typescript
-flutter_get_code_warnings({
-  typeFilter?: string,   // "all"|"text"|"color"|"duplicated_logic"
-  searchQuery?: string,  // بحث داخل نص التحذير
-  fileQuery?: string,    // بحث داخل مسار الملف
-})
-\`\`\`
-
----
-
-## flutter_get_diagnostics
-
-**أخطاء VS Code المحفوظة في الـ index**
-\`\`\`typescript
-flutter_get_diagnostics({})
-\`\`\`
-
----
-
-## flutter_run_analyze
-
-**تشغيل flutter analyze / tsc / gradle lint**
-\`\`\`typescript
-flutter_run_analyze({})
-// مهلة: 5 دقائق — لا تنتظر أكثر
-\`\`\`
-
----
-
-## flutter_get_index_status
-
-**حالة الـ index: SQLite vs JSON fallback**
-\`\`\`typescript
-flutter_get_index_status({})
-\`\`\`
-
----
-
-## flutter_get_hints
-
-**اقتراح الأداة التالية بناءً على آخر استخدام**
-
-\`\`\`typescript
-flutter_get_hints({
-  lastTool: string  // اسم آخر أداة استخدمتها
-})
-\`\`\`
-
----
-
-## flutter_search_text
-
-**بحث نصي/regex عبر كل الملفات**
-
-\`\`\`typescript
-flutter_search_text({
-  query: string,
-  isRegex?: boolean,           // (default: auto-detected for regex tokens like '|' or false)
-  caseInsensitive?: boolean,   // (default: true)
-  includeComments?: boolean,   // (default: true)
-  includeStrings?: boolean,    // (default: true)
-})
-\`\`\`
-
----
-
-## flutter_update_translation
-
-**إضافة أو تعديل مفتاح ترجمة**
-
-\`\`\`typescript
-flutter_update_translation({
-  key: string,           // مثال: "loginButton"
-  arValue: string,       // النص بالعربية
-  enValue: string,       // النص بالإنجليزية
-  description?: string,  // وصف اختياري
-})
-\`\`\`
-
----
-
-## flutter_delete_translation
-
-**حذف مفتاح ترجمة من كل ARB files**
-\`\`\`typescript
-flutter_delete_translation({ key: string })
-\`\`\`
-
----
-
-## flutter_list_translations
-
-**قائمة كل مفاتيح الترجمة**
-\`\`\`typescript
-flutter_list_translations({})
-\`\`\`
-
----
-
-## flutter_get_missing_translations
-
-**مفاتيح موجودة في ملف وغير موجودة في ملفات أخرى**
-\`\`\`typescript
-flutter_get_missing_translations({})
-\`\`\`
-
----
-
-## flutter_run_intl_generate
-
-**توليد ملفات l10n.dart و messages_*.dart**
-\`\`\`typescript
-flutter_run_intl_generate({})
-\`\`\`
-
----
-
-## flutter_run_build_runner
-
-**تشغيل dart run build_runner build**
-\`\`\`typescript
-flutter_run_build_runner({})
-// مهلة: 3 دقائق
-\`\`\`
-
----
-
-## flutter_rebuild_index
-
-**إعادة بناء الـ index من VS Code extension**
-\`\`\`typescript
-flutter_rebuild_index({})
-\`\`\`
-
----
-
-## flutter_set_project_path
-
-**تعيين مسار المشروع**
-
-\`\`\`typescript
-flutter_set_project_path({
-  projectPath: string  // مسار مطلق يحتوي على pubspec.yaml أو .git
-})
-\`\`\`
-
----
-
-## flutter_get_project_path
-
-**المسار الحالي النشط**
-\`\`\`typescript
-flutter_get_project_path({})
-\`\`\`
-`
+# flutter-explorer-mcp — full tool reference
+
+All ~52 tools, grouped by purpose. Consult this when the SKILL.md workflows don't
+already point you at the right tool. Parameter names shown are the primary ones;
+most file-path parameters also accept \`filePath\`/\`relativePath\`/\`path\` aliases.
+
+## Project setup & index status
+| Tool | Purpose |
+|---|---|
+| \`flutter_set_project_path\` | Set active project root (must contain pubspec.yaml / package.json / build.gradle(.kts) / .git). Persists to \`~/.gemini/active-project.txt\`. |
+| \`flutter_get_project_path\` | Read the currently active project root. |
+| \`flutter_get_index_status\` | Index source (SQLite/JSON/empty), file count, DB path & size. |
+| \`flutter_rebuild_index\` | Trigger a full re-index via the VS Code extension (async — poll status after). |
+| \`flutter_get_stats\` | Summary counts: files, classes, functions, methods, widgets, enums, mixins, extensions, typedefs, variables, constructors, properties, annotations, translations. |
+| \`flutter_get_project_structure\` | Directory tree (defaults to \`lib/\`, \`src/\`, or \`app/src/main\`). |
+| \`flutter_get_pubspec\` | Contents of pubspec.yaml / package.json / build.gradle(.kts), whichever applies. |
+| \`flutter_list_packages\` | Dependencies from pubspec.lock; filter by \`direct\`/\`dev\`/\`transitive\` and \`hosted\`/\`git\`/\`path\`. |
+
+## Search & discovery
+| Tool | Purpose |
+|---|---|
+| \`flutter_search\` | Search classes/functions/widgets/enums/mixins/extensions/typedefs/variables/constructors/properties/annotations/files/calls/translations by name. \`searchMode\`: definitions/calls/both. BM25-ranked when index available. |
+| \`flutter_search_text\` | Regex/plain-text search across file contents (comments, strings) — for things \`flutter_search\` doesn't model as a symbol. |
+| \`flutter_find_references\` | All usages of a class/function/variable/enum/mixin/extension/typedef, index-based plus regex-verified. |
+| \`flutter_get_reverse_deps\` | What depends on a given element (needs \`type\`; \`parentClass\` for members). |
+| \`flutter_get_node_at_cursor\` | Resolve the Dart element at a specific \`relativePath\` + \`line\`. |
+
+## Reading code
+| Tool | Purpose |
+|---|---|
+| \`flutter_get_code_block\` | Full body + comments of a class/function/method/enum/mixin/extension. Auto-searches all files if \`filePath\` omitted. |
+| \`flutter_read_fragment\` | Like above but auto-detects element type, with optional surrounding context lines. |
+| \`flutter_read_lines\` | Raw line-range read of any file (\`startLine\`/\`endLine\`/\`maxLines\`, capped at 800). Cheapest way to inspect around an error. |
+| \`flutter_get_file_info\` | Full parsed JSON for one file (classes, functions, imports, etc.) from the index. |
+
+## Impact / dependency analysis
+| Tool | Purpose |
+|---|---|
+| \`flutter_get_impact_analysis\` | Blast radius forward to app entry points (main/build/events) from a given file. |
+| \`flutter_get_dependencies\` | Constructor-injected dependencies of a class (repositories/services/etc.) plus matching imports. |
+| \`flutter_analyze_logic_flow\` | Summarized logical steps inside a function/method body. |
+| \`flutter_get_detailed_graph\` | Full/partial (via \`focusFile\` + \`depth\`) relationship graph: imports, inheritance, calls, contains. |
+| \`flutter_get_git_blast_radius\` | Impact analysis scoped to the current uncommitted git diff. |
+
+## Code quality & architecture
+| Tool | Purpose |
+|---|---|
+| \`flutter_get_code_warnings\` | Hardcoded text/colors, duplicated logic (filterable by type/search/file). |
+| \`flutter_detect_mockups\` | Empty callbacks, fake/mock data, stub widgets, unbound inputs, fake delays, TODO comments. Category filter: callback/data/widget/input/async/comment. |
+| \`flutter_detect_memory_leaks\` | Undisposed controllers/subscriptions/focus nodes in State classes. |
+| \`flutter_detect_circular_dependencies\` | A→B→C→A file-level cycles. |
+| \`flutter_validate_architecture_rules\` | Layer-boundary violations; accepts \`customRules\` to override Clean Architecture defaults. |
+| \`flutter_get_architectural_layers\` | Classifies files into Presentation/Domain/Data/Core + Lakos Ca/Ce/Instability metrics. |
+| \`flutter_analyze_widget_depth\` | Excessive widget nesting vs \`maxDepthThreshold\` (default 5). |
+| \`flutter_detect_duplicate_widgets\` | Near-identical widget subtrees, with extraction proposals (\`minNodeCount\` default 3). |
+| \`flutter_detect_unused_assets\` | Declared-but-unreferenced assets from pubspec.yaml asset dirs. |
+| \`flutter_get_diagnostics\` | VS Code diagnostics from the index, filterable by file/severity. |
+| \`flutter_run_analyze\` | Actually runs \`flutter analyze\` / \`tsc --noEmit\` / gradle lint (auto-detected), returns structured + raw output. One run at a time. |
+
+## Codegen
+| Tool | Purpose |
+|---|---|
+| \`flutter_run_build_runner\` | \`dart run build_runner build --delete-conflicting-outputs\` (Freezed/Riverpod/json_serializable). One run at a time. |
+
+## Localization (ARB / intl)
+| Tool | Purpose |
+|---|---|
+| \`flutter_get_missing_translations\` / \`flutter_list_translations\` | Audit keys across locales. |
+| \`flutter_update_translation\` | Add/update one key; accepts \`arValue\`/\`enValue\` or a dynamic \`translations\` map for any locale set. |
+| \`flutter_delete_translation\` | Remove a key from all ARB files. |
+| \`flutter_find_unused_translations\` | Keys defined in ARB but never referenced in \`lib/\`. |
+| \`flutter_validate_icu_translations\` | ICU syntax, \`{placeholder}\` consistency, plural balance across files. |
+| \`flutter_auto_translate_missing\` | \`action: generate_payload\` to get missing-key payload, or \`batch_apply\` to write a batch of translations at once. |
+| \`flutter_run_intl_generate\` | Regenerate \`l10n.dart\`/\`messages_*.dart\` from ARB (only if Flutter Intl is enabled). |
+
+## Live runtime (Dart VM service — app must be running)
+| Tool | Purpose |
+|---|---|
+| \`flutter_hot_reload\` / \`flutter_hot_restart\` | Apply code changes to the running app. |
+| \`flutter_get_runtime_errors\` | Uncaught exceptions / stderr from the live app. |
+| \`flutter_inspect_live_widgets\` | Live widget/render-object tree. |
+| \`flutter_simulate_ui_action\` | \`tap\`/\`enterText\`/\`scroll\` a widget by key/text identifier. |
+
+All five accept optional \`vmServiceUri\`; omit it for auto-discovery.
+
+## Third-party packages & SDK
+| Tool | Purpose |
+|---|---|
+| \`flutter_search_packages\` | Regex/text search inside cached pub packages or the Flutter SDK. |
+| \`flutter_read_package_source\` | Read source by \`package:\` URI (e.g. \`package:dio/dio.dart\`) with line offset/count. |
+| \`flutter_pub_dev_search\` | Live pub.dev search (paginated). |
+| \`flutter_get_pub_package_info\` | pub points, popularity, likes, description, repo for one package. |
+
+## Misc
+| Tool | Purpose |
+|---|---|
+| \`flutter_get_hints\` | Suggests likely next tool given the last tool used and its result. |`
     },
     'explore-flutter-project': {
         name: 'Explore Flutter Project',
-        description: 'Navigate and understand Flutter codebase structure, widget trees, and dependencies',
-        body: `## Explore Flutter Project
+        description: 'Navigate and understand Flutter codebase structure, Clean Architecture layers, Lakos coupling metrics, widget trees, and external dependencies',
+        body: `# Explore Flutter Project
 
-Use the flutter-explorer-mcp tools to explore and understand the codebase.
+Deeply understand the architecture, layer boundaries, dependencies, and UI structure of any Flutter or Dart project.
 
-### Steps
+## Workflow
 
-1. Run \`flutter_get_stats\` to see overall codebase metrics (classes, functions, widgets).
-2. Check if the index is up-to-date using \`flutter_get_index_status\`. If needed, run \`flutter_rebuild_index\`.
-3. Run \`flutter_get_project_structure\` to explore the directory layout and key files.
-4. Use \`flutter_get_detailed_graph\` to visualize inheritance, calls, and imports.
-5. Use \`flutter_search\` to find specific widgets, classes, or functions by name.
-6. Use \`flutter_get_file_info\` for a deep dive into a specific file.
+### 1. High-Level Metrics & Architecture
+1. **Overview Metrics**: Call \`flutter_get_stats\` to inspect counts of files, classes, methods, widgets, enums, mixins, extensions, and variables.
+2. **Architecture & Coupling**: Run \`flutter_get_architectural_layers\` to classify files into \`Presentation\`, \`Domain\`, \`Data\`, and \`Core\` layers, compute Lakos Ca/Ce metrics, and evaluate package instability.
+3. **Layer Boundary Violations**: Run \`flutter_validate_architecture_rules\` to ensure domain isolation from data/presentation.
+4. **Circular Dependencies**: Run \`flutter_detect_circular_dependencies\` to catch circular import loops (A → B → C → A).
 
-### Tips
+### 2. UI & Widget Architecture
+1. **Widget Nesting Depth**: Call \`flutter_analyze_widget_depth\` to audit deeply nested widget trees (> 5 levels) and get extraction suggestions.
+2. **Duplicate Widgets**: Call \`flutter_detect_duplicate_widgets\` to find structural duplicates and propose reusable components.
+3. **Directory Structure**: Call \`flutter_get_project_structure\` to inspect project organization (\`lib/\`, \`android/\`, \`src/\`).
 
-- Start with \`flutter_get_stats\` to understand the scale of the project.
-- Use \`flutter_get_detailed_graph\` with \`focusFile\` to understand the context of a specific component.
-- The widget tree is a great way to understand the UI structure. Use \`flutter_get_project_structure\` to find UI-related files.
-`
+### 3. Detailed Component & Dependency Exploration
+1. **Visual Graph**: Call \`flutter_get_detailed_graph\` with \`focusFile\` and \`depth: 2\` to trace imports, calls, and inheritance.
+2. **Symbol Search**: Use \`flutter_search\` with filters (\`class\`, \`function\`, \`widget\`, \`enum\`, \`mixin\`) for targeted lookups.
+3. **External Packages**: Use \`flutter_search_packages\` and \`flutter_read_package_source\` to read implementation details directly from \`.pub-cache\` or the Flutter SDK.`
     },
     'debug-flutter-issue': {
         name: 'Debug Flutter Issue',
-        description: 'Systematically debug Flutter issues using diagnostics, logs, and logic analysis',
-        body: `## Debug Flutter Issue
+        description: 'Systematically debug Flutter issues using diagnostics, compiler checks, live VM runtime errors, memory leak detection, widget inspection, and UI simulation',
+        body: `# Debug Flutter Issue
 
-Use the flutter-explorer-mcp tools to systematically trace and debug Flutter issues.
+Systematically trace, diagnose, and fix Flutter and Dart issues using \`flutter-explorer-mcp\` tools across static analysis and live VM runtime.
 
-### Steps
+## Workflow
 
-1. Run \`flutter_get_diagnostics\` to see all current VS Code errors and warnings.
-2. Run \`flutter_run_analyze\` for a fresh, comprehensive compiler check on the whole project.
-3. Use \`flutter_get_code_warnings\` to find potential issues like hardcoded colors or text.
-4. If a specific function is suspected, use \`flutter_analyze_logic_flow\` to get a summary of its behavior.
-5. Use \`flutter_get_node_at_cursor\` or \`flutter_search\` to find the relevant code blocks.
-6. Use \`flutter_get_code_block\` to read the full implementation including comments.
+### 1. Static Analysis & Diagnostics
+1. **VS Code Diagnostics**: Call \`flutter_get_diagnostics\` to inspect all active compiler errors, warnings, and hints.
+2. **Fresh Compiler Pass**: Run \`flutter_run_analyze\` for a real-time \`flutter analyze\` / \`tsc --noEmit\` check.
+3. **Memory Leaks**: Run \`flutter_detect_memory_leaks\` to find undisposed \`TextEditingController\`, \`AnimationController\`, \`ScrollController\`, \`StreamSubscription\`, and \`FocusNode\` instances in \`State\` classes.
+4. **Mockups & Incomplete Logic**: Run \`flutter_detect_mockups\` to catch no-op callbacks (\`onPressed: () {}\`), stub widgets (\`Placeholder\`), and fake async delays.
 
-### Tips
+### 2. Live Runtime Debugging (VM Service)
+1. **Uncaught Crashes**: Call \`flutter_get_runtime_errors\` to view live uncaught exceptions and stack traces directly from the running app.
+2. **Inspect Widget Hierarchy**: Call \`flutter_inspect_live_widgets\` to inspect live widget properties, layout boundaries, and state objects.
+3. **Reproduce Issues**: Call \`flutter_simulate_ui_action\` with \`action: "tap"\` | \`"enterText"\` | \`"scroll"\` to drive the live UI and trigger edge cases.
+4. **Apply Fixes**: Use \`flutter_hot_reload\` (or \`flutter_hot_restart\` for structural/state changes) to immediately verify fixes without restarting the app.
 
-- Check \`flutter_get_diagnostics\` first to see if the compiler is already pointing at the problem.
-- Hardcoded values often cause UI inconsistencies; use \`flutter_get_code_warnings\` to find them.
-- \`flutter_analyze_logic_flow\` is perfect for understanding complex business logic without reading every line.
-`
+### 3. Deep Code Investigation
+1. **Logic Analysis**: Run \`flutter_analyze_logic_flow\` to summarize branch conditions and state mutations inside complex methods.
+2. **Read Code Blocks**: Use \`flutter_get_code_block\` or \`flutter_read_fragment\` to inspect the exact implementation with comments.
+3. **Inspect Line Range**: Use \`flutter_read_lines\` to inspect surrounding context around stack trace line numbers without token waste.`
     },
     'impact-analysis': {
         name: 'Impact Analysis',
-        description: 'Analyze the blast radius of changes to prevent regressions in Flutter apps',
-        body: `## Impact Analysis
+        description: 'Analyze the blast radius of changes, uncommitted git diff impact, reverse dependencies, and architectural regressions in Flutter apps',
+        body: `# Impact Analysis
 
-Analyze the 'blast radius' of your changes to ensure you don't break distant parts of the application.
+Safely refactor Flutter/Dart code by determining the exact blast radius to UI entry points, callers, and architectural boundaries before committing changes.
 
-### Steps
+## Workflow
 
-1. Before modifying a file, run \`flutter_get_impact_analysis\` to see which entry points (main, widgets) eventually call this file.
-2. Use \`flutter_get_reverse_deps\` for a specific class or function to see exactly what depends on it.
-3. Use \`flutter_find_references\` to find all exact usages/references of a specific variable, class, or function across the project.
-4. Check the \`flutter_get_detailed_graph\` to see visual connections.
-5. If refactoring, use \`flutter_get_hints\` to get suggestions on related areas that might need updates.
+### 1. Pre-Change Blast Radius
+1. **Forward Impact**: Before editing a shared file, call \`flutter_get_impact_analysis\` with \`filePath\` to trace all UI entry points (main, widgets, events) that depend on this file.
+2. **Reverse Dependencies**: Call \`flutter_get_reverse_deps\` for specific classes or methods to identify direct callers.
+3. **Exact Usages**: Call \`flutter_find_references\` to locate exact line numbers and code snippets across the codebase where a symbol is referenced.
 
-### Safety Checks
-
-- Always check the blast radius before major refactors.
-- If a file is used by many entry points, be extra careful with changes to its public API.
-- Use \`flutter_get_reverse_deps\` to find all call sites that need to be updated after a signature change.
-`
+### 2. Post-Change Git Blast Radius
+1. **Uncommitted Git Diff Impact**: Call \`flutter_get_git_blast_radius\` right before committing to audit all uncommitted changes across the git staging tree and verify which app flows are affected.
+2. **Layer Regressions**: Run \`flutter_validate_architecture_rules\` to ensure changes didn't violate Clean Architecture layers (e.g., Domain importing Presentation).
+3. **Cycle Check**: Run \`flutter_detect_circular_dependencies\` to ensure no circular dependency loops were created.`
     },
     'localization-management': {
         name: 'Localization Management',
-        description: 'Manage ARB translations, find missing keys, and update localizations',
-        body: `## Localization Management
+        description: 'Manage ARB translations, batch auto-translation, ICU syntax validation, unused key cleanup, and intl code generation in Flutter',
+        body: `# Localization Management
 
-Efficiently manage Flutter localization (ARB files) and ensure all keys are translated.
+Efficiently audit, translate, validate, and generate code for Flutter localization (ARB files).
 
-### Steps
+## Workflow
 
-1. Run \`flutter_get_missing_translations\` to identify keys present in some languages but missing in others.
-2. Use \`flutter_list_translations\` to get a full overview of all translation keys.
-3. Use \`flutter_update_translation\` to add or update translations for multiple languages at once.
-4. If a feature is removed, use \`flutter_delete_translation\` to clean up the ARB files.
+### 1. Audit & Gap Detection
+1. **Find Missing Keys**: Call \`flutter_get_missing_translations\` or \`flutter_list_translations\` to identify untranslated keys across locales.
+2. **Batch Payload Generation**: Call \`flutter_auto_translate_missing\` with \`action: "generate_payload"\` to extract all missing keys formatted for translation.
 
-### Best Practices
+### 2. Updating & Batch Translation
+1. **Batch Apply**: Call \`flutter_auto_translate_missing\` with \`action: "batch_apply"\` and \`translations\` map to write translated keys across all ARB files simultaneously.
+2. **Single Key Update**: Use \`flutter_update_translation\` to add/modify an individual key with \`arValue\`, \`enValue\`, or custom locale maps.
+3. **Delete Obsolete Keys**: Use \`flutter_delete_translation\` to remove deprecated keys from all ARB files at once.
 
-- Always run \`flutter_get_missing_translations\` before a release.
-- Use descriptive keys for translations to make them easier to find via \`flutter_search\`.
-`
+### 3. Validation & Code Generation
+1. **Validate ICU Formats**: Run \`flutter_validate_icu_translations\` to verify ICU plural syntax (\`zero\`, \`one\`, \`other\`), variable placeholders (\`{name}\`), and curly brace balancing across all languages.
+2. **Detect Dead Keys**: Run \`flutter_find_unused_translations\` to flag keys declared in ARB but never referenced in \`lib/\`.
+3. **Regenerate Code**: Run \`flutter_run_intl_generate\` to generate fresh \`l10n.dart\` and \`messages_*.dart\` files.`
     },
     'project-dependencies-management': {
         name: 'Project Dependencies Management',
-        description: 'Manage pubspec dependencies, analyze package usage, and run code generation',
-        body: `## Project Dependencies Management
+        description: 'Manage pubspec dependencies, live pub.dev research, cached package source inspection, asset cleanup, and code generation in Flutter',
+        body: `# Project Dependencies Management
 
-Analyze and manage the project's external packages and internal architectural dependencies.
+Analyze, research, manage, and audit external packages, cached SDK sources, declared assets, and code generation in Flutter projects.
 
-### Steps
+## Workflow
 
-1. Run \`flutter_get_project_path\` to verify the current workspace root, or \`flutter_set_project_path\` if working in a monorepo.
-2. Use \`flutter_get_pubspec\` to read and analyze the project's pubspec.yaml file.
-3. Run \`flutter_list_packages\` to list all resolved dependencies from pubspec.lock.
-4. If a class relies on specific services/repositories, use \`flutter_get_dependencies\` to extract its constructor dependencies.
-5. If you modify generated files (Freezed, Riverpod, etc.), use \`flutter_run_build_runner\` to safely regenerate the conflicting outputs.
+### 1. Research & Vetting Packages
+1. **Explore pub.dev**: Call \`flutter_pub_dev_search\` to find high-quality packages matching your use case.
+2. **Package Health & Metrics**: Call \`flutter_get_pub_package_info\` with \`packageName\` to inspect pub points, popularity score, likes, repository URL, and license before adding a dependency.
 
-### Tips
-- Use \`flutter_list_packages\` to quickly verify the exact version of a package installed.
-- \`flutter_run_build_runner\` is essential after updating models or states that rely on code generation.
-`
+### 2. Inspecting Installed & Cached Dependencies
+1. **List Resolved Dependencies**: Call \`flutter_list_packages\` (with optional \`dependencyType: "direct" | "dev" | "transitive"\`) to inspect versions locked in \`pubspec.lock\`.
+2. **Search Inside Package Sources**: Call \`flutter_search_packages\` to grep for classes, functions, or patterns directly inside \`.pub-cache\` and the official Flutter SDK.
+3. **Read Package Implementation**: Call \`flutter_read_package_source\` with a \`package:\` URI (e.g. \`package:flutter/material.dart\`) to inspect official library source code without guessing.
+
+### 3. Pubspec & Asset Auditing
+1. **Pubspec Inspection**: Call \`flutter_get_pubspec\` to review dependencies, environment SDK constraints, and assets.
+2. **Unused Asset Cleanup**: Call \`flutter_detect_unused_assets\` to detect images, fonts, or assets declared in \`pubspec.yaml\` that are never referenced in Dart code.
+3. **Run Code Generation**: Call \`flutter_run_build_runner\` to run \`dart run build_runner build --delete-conflicting-outputs\` after editing Freezed, Riverpod, or json_serializable models.`
     },
     'advanced-code-search': {
         name: 'Advanced Code Search',
-        description: 'Deep dive into the codebase using semantic search, text search, and references',
-        body: `## Advanced Code Search
+        description: 'Deep dive into the codebase using BM25 ranked symbol search, full-text regex, index-backed references, code fragments, and external package search',
+        body: `# Advanced Code Search
 
-Perform precise codebase searches to find hard-to-reach implementations and usages.
+Perform ultra-precise, token-efficient searches across Flutter, Dart, TypeScript, and Android source code without reading entire files.
 
-### Steps
+## Workflow
 
-1. Use \`flutter_search\` for general symbol lookups (classes, functions, widgets).
-2. For specific strings, URLs, or comments, use \`flutter_search_text\` to scan all Dart files globally.
-3. Need to see how a specific function/class is implemented? Use \`flutter_read_fragment\` to extract just that fragment with its surrounding comments.
-4. Want to know everywhere a specific enum or typedef is used? Use \`flutter_find_references\`.
+### 1. Symbol Search & Full-Text Search
+1. **BM25 Symbol Search**: Call \`flutter_search\` with \`query\` and optional \`filter\` (\`class\`, \`function\`, \`widget\`, \`enum\`, \`mixin\`, \`extension\`, \`typedef\`, \`variable\`, \`constructor\`, \`property\`, \`annotation\`, \`call\`, \`translation\`).
+   - Use \`searchMode: "definitions"\` (default), \`"calls"\` (find call-sites), or \`"both"\`.
+2. **Regex & Content Search**: Call \`flutter_search_text\` for raw regex patterns, string literals, API endpoints, or comment tags across the repository.
+3. **Resolve Node at Line**: Call \`flutter_get_node_at_cursor\` with \`filePath\` and \`line\` to instantly identify the symbol at a cursor position.
 
-### Tips
-- \`flutter_search_text\` is perfect for finding hidden API endpoints, hardcoded strings, or specific comment tags like TODOs.
-- \`flutter_read_fragment\` is much faster and cleaner than reading an entire 1000-line file when you only need one specific method.
-`
+### 2. Reading Targeted Code
+1. **Full Body with Comments**: Call \`flutter_get_code_block\` or \`flutter_read_fragment\` to retrieve only the relevant class, function, or method implementation without loading the full file into context.
+2. **Precise Line Slicing**: Call \`flutter_read_lines\` (\`startLine\`, \`endLine\`) to inspect error zones cheaply without token bloat.
+
+### 3. Usages & Package Code
+1. **Symbol Usages**: Call \`flutter_find_references\` to retrieve all verified usages, line numbers, and context snippets across importing files.
+2. **External Packages**: Call \`flutter_search_packages\` to grep for classes or methods directly inside cached pub dependencies or Flutter framework internals.`
     }
 };
 
-export async function generateSkills(workspaceRoot: string): Promise<void> {
+export async function generateSkills(workspaceRoot: string, options?: { writeWorkspace?: boolean }): Promise<void> {
     try {
         const homedir = os.homedir();
+        const writeWorkspace = options?.writeWorkspace ?? false;
 
-        // 1. Generic workspace fallback (skills/ folder)
-        const genericSkillsDir = path.join(workspaceRoot, 'skills');
-        ensureDir(genericSkillsDir);
-
-        // 2. Cursor AI (.cursor/rules/)
-        const cursorRulesDir = path.join(workspaceRoot, '.cursor', 'rules');
-        ensureDir(cursorRulesDir);
-
-        // 3. Claude/Roo (cline_docs/)
-        const clineDocsDir = path.join(workspaceRoot, 'cline_docs');
-        ensureDir(clineDocsDir);
-
-        // 4. Antigravity Global Config (~/.gemini/config/skills/)
+        // Antigravity Global Config (~/.gemini/config/skills/)
         const antigravitySkillsDir = path.join(homedir, '.gemini', 'config', 'skills');
         ensureDir(antigravitySkillsDir);
 
+        let genericSkillsDir = '';
+        let cursorRulesDir = '';
+        let clineDocsDir = '';
+
+        if (writeWorkspace) {
+            genericSkillsDir = path.join(workspaceRoot, 'skills');
+            ensureDir(genericSkillsDir);
+            cursorRulesDir = path.join(workspaceRoot, '.cursor', 'rules');
+            ensureDir(cursorRulesDir);
+            clineDocsDir = path.join(workspaceRoot, 'cline_docs');
+            ensureDir(clineDocsDir);
+        }
+
         for (const [id, skill] of Object.entries(SKILLS)) {
-            // --- A. Generate for Generic/Workspace (Standard Markdown) ---
-            const genericSkillSubdir = path.join(genericSkillsDir, id);
-            ensureDir(genericSkillSubdir);
+            // Generate standard frontmatter + body
             const standardContent = [
                 '---',
                 `name: ${skill.name}`,
-                `description: ${skill.description}`,
+                `description: "${skill.description.replace(/"/g, '\\"')}"`,
                 '---',
                 '',
                 skill.body
             ].join('\n');
-            try {
-                fs.writeFileSync(path.join(genericSkillSubdir, 'SKILL.md'), standardContent, 'utf8');
-            } catch (e) {
-                console.error(`[Skills] Failed to write generic skill ${id}:`, e);
-            }
 
-            // --- B. Generate for Cursor (.mdc format) ---
-            const cursorContent = [
-                '---',
-                `description: ${skill.description}`,
-                'globs: *.dart, *.kt, *.java, *.ts, *.tsx, *.js, *.jsx',
-                '---',
-                '',
-                `# ${skill.name}`,
-                '',
-                skill.body
-            ].join('\n');
-            try {
-                fs.writeFileSync(path.join(cursorRulesDir, `${id}.mdc`), cursorContent, 'utf8');
-            } catch (e) {
-                console.error(`[Skills] Failed to write cursor skill ${id}:`, e);
-            }
+            if (writeWorkspace) {
+                // --- A. Generate for Generic/Workspace (Standard Markdown) ---
+                const genericSkillSubdir = path.join(genericSkillsDir, id);
+                ensureDir(genericSkillSubdir);
+                const genericSkillFile = path.join(genericSkillSubdir, 'SKILL.md');
+                try {
+                    fs.writeFileSync(genericSkillFile, standardContent, 'utf8');
+                } catch (e) {
+                    console.error(`[Skills] Failed to write generic skill ${id}:`, e);
+                }
 
-            // --- C. Generate for Claude/Roo (cline_docs folder) ---
-            const clineContent = [
-                `# ${skill.name}`,
-                '',
-                `*Description: ${skill.description}*`,
-                '',
-                skill.body
-            ].join('\n');
-            try {
-                fs.writeFileSync(path.join(clineDocsDir, `${id}.md`), clineContent, 'utf8');
-            } catch (e) {
-                console.error(`[Skills] Failed to write cline skill ${id}:`, e);
+                // --- B. Generate for Cursor (.mdc format) ---
+                const cursorContent = [
+                    '---',
+                    `description: "${skill.description.replace(/"/g, '\\"')}"`,
+                    'globs: *.dart, *.kt, *.java, *.ts, *.tsx, *.js, *.jsx',
+                    '---',
+                    '',
+                    `# ${skill.name}`,
+                    '',
+                    skill.body
+                ].join('\n');
+                try {
+                    fs.writeFileSync(path.join(cursorRulesDir, `${id}.mdc`), cursorContent, 'utf8');
+                } catch (e) {
+                    console.error(`[Skills] Failed to write cursor skill ${id}:`, e);
+                }
+
+                // --- C. Generate for Claude/Roo (cline_docs folder) ---
+                const clineContent = [
+                    `# ${skill.name}`,
+                    '',
+                    `*Description: ${skill.description}*`,
+                    '',
+                    skill.body
+                ].join('\n');
+                try {
+                    fs.writeFileSync(path.join(clineDocsDir, `${id}.md`), clineContent, 'utf8');
+                } catch (e) {
+                    console.error(`[Skills] Failed to write cline skill ${id}:`, e);
+                }
             }
 
             // --- D. Generate for Antigravity (Global SKILL.md) ---
-            const agSkillSubdir = path.join(antigravitySkillsDir, `flutter-explorer-${id}`);
+            const agSkillSubdir = path.join(antigravitySkillsDir, id === 'mcp' ? 'flutter-explorer-mcp' : `flutter-explorer-${id}`);
             ensureDir(agSkillSubdir);
             try {
                 fs.writeFileSync(path.join(agSkillSubdir, 'SKILL.md'), standardContent, 'utf8');

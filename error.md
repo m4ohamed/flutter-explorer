@@ -186,3 +186,108 @@
 - **الحل الفعلي (The Fix):**
   1. إلزام نوع المتغير المستهدف في صيغ الجمع ICU (`icu.variable`) بأن يكون دائماً `num` (أو `int`).
   2. في الرسائل المعتمدة على ICU، قصر المعاملات المستخرجة على متغير الـ ICU الأساسي والبيانات الوصفية المعرفة صراحة في `@key.placeholders`، وعدم اعتبار الكلمات داخل نصوص الحالات كمعاملات إضافية.
+
+## 38. عدم التعرف على مشاريع Android الأصلية وفشلها في الفهرسة ورفضها في MCP Server
+- **الخطأ (The Bug):** عند محاولة استخدام الإضافة أو خادم MCP على مشروع Android أصلي (مثل `E:\ebda_pos`)، تُرجع أداة `flutter_set_project_path` خطأ `Error: No Flutter project (pubspec.yaml), JS/TS project (package.json), or repository root (.git) found` ويتم رفض المشروع. كما يتم العثور على 0 ملفات أثناء الفهرسة لأن `indexManager` و `fileWatcher` يعتبران أي مشروع غير فلاتر كمشروع `web` ويبحثان عن `.ts/.js` فقط، مما يترك قاعدة بيانات SQLite فارغة.
+- **السبب الجذري (Root Cause):** 
+  1. قصر فحص جذر المشروع في `mcp-server.ts` و `projectDetector.ts` على `pubspec.yaml`, `package.json`, `.git` دون فحص ملفات إعدادات Gradle (`build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts`).
+  2. قصر أوضاع المشروع في `indexManager.ts` على `'flutter' | 'web'` وافتراض وضع الويب افتراضياً عند غياب `pubspec.yaml`.
+  3. قصر دالة `getParserForFile` في MCP على إرسال `.kt` و `.java` فقط لـ `AndroidParser` وترك `.xml` و `.gradle` لـ `DartParser`.
+- **الحل الفعلي (The Fix):**
+  1. توسيع `ProjectDetector.findProjectRoot` و `flutter_set_project_path` لدعم واكتشاف علامات مشاريع Android وإعدادات Gradle.
+  2. إضافة وضع `'android'` في `indexManager.getProjectMode()` وتحديث `buildFullIndex()` لفهرسة ملفات `**/*.{kt,java,xml,gradle,gradle.kts}` باستبعاد مجلدات البناء (`build`, `.gradle`, `.idea`).
+  3. تحديث `fileWatcher.ts` لمراقبة ملفات أندرويد وإعدادات Gradle، واستبعاد مجلدات `.gradle` و `.idea`.
+  4. تحديث `getParserForFile` في `mcp-server.ts` ليوجه جميع ملفات أندرويد (`.kt`, `.java`, `.xml`, `.gradle`, `.gradle.kts`) إلى `AndroidParser`.
+  5. دعم قراءة إعدادات Gradle في `flutter_get_pubspec` عند غياب `pubspec.yaml`.
+
+## 39. غياب كشف واجهات الـ Mockup والأكواد الوهمية في مشاريع Android الأصلية (Jetpack Compose, Kotlin, XML)
+- **الخطأ (The Bug):** عند فحص شاشات مشروع Android الأصلي (مثل شاشات Jetpack Compose في `E:\ebda_pos`) لا يتم كشف دوال الاستدعاء الفارغة مثل `onClick = {}` أو `onEdit = {}`، ولا يتم كشف كائنات ومصادر البيانات الوهمية مثل `object MockStore`، ولا علامات `TODO` في ملفات تخطيطات وموارد XML.
+- **السبب الجذري (Root Cause):**
+  1. صُمم `MockupAnalyzer` في البداية لدعم بيئة Dart/Flutter حصراً معتمداً على تراكيب مثل `onPressed: () {}` و `Placeholder()`.
+  2. لم يكن `AndroidParser` ولا `JsTsParser` يستدعيان `MockupAnalyzer.analyze()` مطلقاً عند تحليل الملفات، مما جعل `warnings` فارغة دوماً من تحذيرات الموك أب.
+  3. اختلاف تراكيب اللغات البرمجية؛ ففي Jetpack Compose تُمرر الدوال بعلامة المساواة (`onClick = {}`) بدلاً من النقطتين الرأسيتين (`onPressed: () {}`)، وفي Kotlin تُعرف البيانات الوهمية بـ `val/var` وكائنات أحادية `object Mock...`، وفي XML تُستخدم تعليقات `<!-- TODO -->` وسمات `tools:sample/...`.
+- **الحل الفعلي (The Fix):**
+  1. توسيع `mockupAnalyzer.ts` بإضافة أنماط regex متخصصة لـ Compose (`COMPOSE_EMPTY_CALLBACK_REGEX`)، ومستمعات Android Views التقليدية (`ANDROID_LISTENER_EMPTY_REGEX`)، ودوال Log/Toast فقط (`ANDROID_LOG_ONLY_CALLBACK_REGEX`)، وكائنات ومتغيرات Kotlin (`MOCK_VAR_REGEX` و `MOCK_OBJECT_REGEX`)، وعينات XML (`ANDROID_XML_SAMPLE_DATA_REGEX`)، وحالات Compose غير المربوطة (`Checkbox(checked = true, onCheckedChange = {})`).
+  2. دمج استدعاء `MockupAnalyzer.analyze(filePath, content, masked)` في كل من `parseKotlinJava()` و `parseXml()` داخل `AndroidParser`، وفي `_parseInternal()` داخل `JsTsParser`.
+  3. تحديث دالة فحص التعليقات `isInComment` لدعم تعليقات XML (`<!-- -->`) وقوالب النصوص الخلفية (` ` `).
+
+## 40. تباين مفاتيح الحواف في `DependencyGraphProvider` وتعطل مخطط Mermaid وتصفير عدادات الواجهة
+- **الخطأ (The Bug):** عند تصدير مخطط Mermaid عبر `getMermaidDiagram()` يتم رسم العقد دون أي روابط بينها (Zero Edges)، كما تظهر عدادات الأسهم `→` و `←` في الشريط الجانبي دائماً بصفر `0`، وتفشل محاولة فتح الملفات عند النقر على العقد برسالة `Could not open: file:lib/main.dart`.
+- **السبب الجذري (Root Cause):** دالة `indexManager.getDetailedGraph()` ترجع الحواف بصيغة `{ source, target, type }`، بينما `dependencyGraphProvider.ts` يعتمد على الواجهة القديمة `{ from, to, type }` مما جعل `from` و `to` قيم غير معرفة `undefined`. كما أن معرّفات عقد الملفات تحتوي على بادئة `file:` التي لم تُزل عند تمريرها لأمر `openFile`.
+- **الحل الفعلي (The Fix):**
+  1. توحيد `GraphEdge` ليحمل الحقول الأربعة معاً (`source`, `target`, `from`, `to`).
+  2. حساب `mostImported` ديناميكياً من خلال تتبع درجات العقد الداخلية (In-degrees).
+  3. تنظيف معرّف المسار وحذف بادئة `file:` في المزود وفي واجهة الويب فيو وأمر `openFile` في `extension.ts`.
+  4. تجميع عقد الملفات بحسب مسار المجلد الحقيقي بدلاً من النوع العام `file`.
+
+## 41. تصنيف حزم فلاتر الرسمية كـ `'unknown'` وغياب دعم أندرويد في `PubspecLockProvider`
+- **الخطأ (The Bug):** تظهر حزم Flutter الرسمية (مثل `flutter`, `flutter_test`, `sky_engine`) في تبويب المكتبات بشارة `unknown`. وفي مشاريع أندرويد الأصلية يظهر التبويب فارغاً مع رسالة تطلب تشغيل `flutter pub get`.
+- **السبب الجذري (Root Cause):**
+  1. قصر أنواع المصدر `source` في `PackageInfo` على `'hosted' | 'git' | 'path' | 'unknown'` وتجاهل نوع `'sdk'`.
+  2. قصر فحص الحزم على `pubspec.lock` و `package-lock.json` دون فحص ملفات `build.gradle` لمشاريع أندرويد أو الـ Fallback لـ `package.json`.
+- **الحل الفعلي (The Fix):**
+  1. إضافة نوع `'sdk'` ودعم استخراجه من `pubspec.lock`.
+  2. دعم قراءة السلاسل النصية الفردية لـ `description: flutter`.
+  3. إضافة محلل اعتماديات Gradle لمشاريع Android (`build.gradle`, `build.gradle.kts`) لاستخراج حزم `implementation`, `api`, `kapt` وتصنيفها كـ `direct` أو `dev`.
+  4. إضافة Fallback لقراءة الاعتماديات من `package.json` في مشاريع الويب عند غياب ملف القفل.
+
+## 42. غياب فلاتر `extensionType` وترتيب الأهمية في `SearchProvider` و `flutter_search`
+- **الخطأ (The Bug):** عند البحث عن الـ Extension Types (من ميزات Dart 3.0+) أو فلترة البحث بها، يتم تجاهل الفلتر أو سقوطه للبحث العام، وتظهر النتائج بترتيب عشوائي غير مرتب بالأهمية حيث تُدفن النتائج المطابقة تماماً أسفل عشرات النتائج الجزئية.
+- **السبب الجذري (Root Cause):**
+  1. إسقاط `extensionType` و `file` من مصفوفة التحقق `VALID_FILTERS` في `searchProvider.ts` ومن خيارات الـ enum في خادم MCP.
+  2. عدم فرز النتائج حسب التطابق التام أو بداية الكلمة أو معدل الاستخدام (`usageCount`).
+- **الحل الفعلي (The Fix):**
+  1. إضافة `extensionType` و `file` إلى جميع الواجهات ومصفوفات التحقق في `searchProvider.ts` و `mcp-server.ts` و `mcp-direct-search.ts`.
+  2. تطبيق خوارزمية ترتيب الأهمية: التطابق التام (Exact match) أولاً، ثم المطابقة البادئة (Starts with)، ثم الأكثر استخداماً (`usageCount`)، ثم الاسم الأقصر.
+
+## 43. قصور التعرف على الرموز المعمارية في SQLite وتحليل الأثر الناقص
+- **الخطأ (The Bug):** عند استدعاء `flutter_get_node_at_cursor` أثناء وقوف المؤشر داخل `enum` أو `mixin` أو `typedef`، تُرجع الأداة `null` وكأنه لا يوجد رمز. كما أن أداة `flutter_get_impact_analysis` تفشل في رصد تأثر الكلاسات التي تطبق واجهات (`implements`) أو تخلط ميكسينز (`with/mixins`) أو التوسعات (`extension onType`)، وتتجاهل الدوال العلوية التي تستدعي الرمز المعدل.
+- **السبب الجذري (Root Cause):**
+  1. قصر الفحص في `sqliteCache.getNodeAtCursor` على الكلاسات والتوسعات والدوال فقط، وإغفال `enums`, `mixins`, `typedefs`.
+  2. قصر بذور التغيير `seeds` في `getImpactRadius` على الكلاسات والدوال دون إضافة الميكسينز والتوسعات وأنواع التوسعة والتايب ديفس.
+  3. حلقة انتشار التأثير المعماري كانت تفحص فقط `extendsClass` وتتجاهل `c.implements` و `c.mixins` و `et.representationType` و `ext.onType`.
+  4. فحص التشخيصات في `getDiagnostics()` كان يستدعي مسار قاعدة البيانات الافتراضي الثابت ويتجاهل الاسم المخصص عبر `options.dbName`.
+- **الحل الفعلي (The Fix):**
+  1. دعم فحص `enums`, `mixins`, `typedefs` في `getNodeAtCursor`.
+  2. جمع كافة أنواع الرموز كبذور أولية في `getImpactRadius`.
+  3. توسيع انتشار التأثير ليشمل الواجهات (`implements`)، والميكسينز (`mixins`)، ونوع تمثيل التوسعة (`representationType`)، وهدف التوسعة (`onType`)، وتتبع الدوال العلوية المستدعية للرمز وليس الكلاسات فقط.
+  4. تخزين `dbPath` كخاصية فئة ديناميكية واستخدامها في `getDiagnostics()`.
+
+## 44. أخطاء توليد كود Dart في Intl وتكرار معامِلات ICU Plural ومسح الإعدادات في MCP Setup
+- **الخطأ (The Bug):** 
+  1. عند وجود صيغ جمع ICU تحتوي على كلاً من `=0` و `zero` يفشل كود Dart المولّد بخطأ تجميع `The named parameter 'zero' is already specified`.
+  2. عند وجود علامة دولار صريحة مثل `"$100"` في ملف ARB، يولد الكود كـ `"$100"` مما يدفع Dart لاعتباره متغير مجهول ويُسقط خطأ `Undefined name '100'`.
+  3. في `mcpSetup.ts`، مسار إعدادات المستخدم كان صلباً `C:/Users/${username}/...` مما يُعطل الأنظمة الأخرى، ودالة `updateJsonFile` كانت تُعيد إنشاء الملف بـ `mcpServers` فقط مما يمسح أي إعدادات علوية أخرى في ملفات الـ JSON للمستخدم (Data Loss).
+- **السبب الجذري (Root Cause):**
+  1. دالة `mapPluralCaseName` كانت تُحوّل `=0` إلى `zero` دون منع التكرار في حلقة المعامِلات المسماة، ودون ضمان معامل `other` الإلزامي في `Intl.plural`.
+  2. دوال الهروب لم تكن تُجري Escape لعلامة `\$` المنفصلة عن `{param}`.
+  3. مسارات مجلد المستخدم لم تكن تستخدم `os.homedir()`، و `updateJsonFile` لم تكن تحافظ على كائن `parsed` الأصلي بكامل مفاتيحه الأخرى.
+- **الحل الفعلي (The Fix):**
+  1. فحص عدم تكرار المعامِلات المسماة في صيغ الجمع ICU وتوفير قيمة احتياطية لمعامل `other` الإلزامي.
+  2. إنشاء دوال `formatDartSQ` و `formatDartDQ` التي تُجري Escape للـ `\$` الصريح وتُحوّل `{param}` إلى `${param}` بأمان تام.
+  3. اعتماد نمط اكتشاف البادئة الديناميكية لملفات ARB (`app_` أو `intl_`) في `addLocale` و `removeLocale`.
+  4. استبدال المسارات الصلبة بـ `os.homedir()` وإضافة مسار `antigravity-ide`.
+  5. تعديل `updateJsonFile` لتحافظ بنسبة 100% على كافة المفاتيح والإعدادات الأخرى في ملف JSON دون أي مسح أو تعديل غير مقصود.
+
+## 45. مشكلة تنصيص اسم الأمر في `cmd.exe /c` وفساد مسار `%~dp0` في ملفات Batch (Windows Batch Traversal Bug)
+- **الخطأ (The Bug):** عند تشغيل أوامر أدوات مثل `npx` أو `flutter` على نظام Windows داخل `processRunner.ts`، يفشل الأمر برسالة خطأ مثل: `Cannot find module '.../npm-prefix.js'` أو `The Flutter directory is not a clone of the GitHub project`.
+- **السبب الجذري (Root Cause):** عند تمرير الأمر إلى `cmd.exe /d /s /c` مع إحاطة اسم البرنامج بعلامات تنصيص مثل `cmd.exe /d /s /c "\"\npx.cmd\" \"tsc\"\""`، يقوم مفسر الأوامر `cmd.exe` في ويندوز بتخريب المتغير البيئي `%~dp0` داخل سكربت الباتش (`.cmd` / `.bat`)، مما يجعله يشير إلى مسار العمل الحالي `process.cwd()` بدلاً من المسار الحقيقي الذي يتواجد فيه ملف الباتش.
+- **الحل الفعلي (The Fix):** بما أن أوامر `ALLOWED_COMMANDS` مفحوصة بقائمة بيضاء صارمة ومجرد معرفات آمنة، يجب عدم إحاطة اسم الأمر نفسه بعلامات تنصيص، وتنصيص الوسائط فقط:
+  ```typescript
+  const cmdLine = args.length > 0
+    ? `${command} ${args.map(a => `"${a}"`).join(' ')}`
+    : command;
+  child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${cmdLine}"`], { ... });
+  ```
+  بالإضافة إلى التحقق من كود الخروج `9009` كرمز لعدم وجود الأمر في ويندوز بجانب `1`.
+
+## 46. فقدان الاستيرادات والتصديرات بسبب مطابقة الـ Regex على السطور المطموسة في `dartParser` و `jsTsParser`
+- **الخطأ (The Bug):** عند استخراج الاعتماديات أو فحص الدورات الاعتمادية (`detectCircularDependencies`)، كانت الاستيرادات والتصديرات ترجع فارغة تماماً للملفات المفهرسة.
+- **السبب الجذري (Root Cause):** تقوم دالتا `preprocessSource` بطمس النصوص والتعليقات واستبدالها بمسافات خالية (` `). كانت دالتا التحليل تطبقان تعبيرات الاستيراد مثل `P.import_` و `P.importes6` على السطر المطموس `maskedLine.trim()`، وبما أن مسارات الملفات وعلامات الاقتباس طُمست بمسافات، فشلت الأنماط في استخراج المسار تماماً.
+- **الحل الفعلي (The Fix):** تطبيق regex الاستيرادات والتصديرات على السطر الأصلي `line.trim()` مع استخدام `maskedLine` فقط للتحقق من أن بداية السطر لا تقع داخل تعليق.
+
+## 47. خطر تعطيل بيئة Node الأصلية لـ SQLite عند تنفيذ `npm audit fix --force`
+- **الخطأ (The Bug):** اقتراح أداة `npm audit` تشغيل `npm audit fix --force` الذي يُرقي حزمة `sqlite3` من `5.1.7` إلى `6.0.1` لكسر تبعية `@tootallnate/once`.
+- **السبب الجذري (Root Cause):** ترقية `sqlite3` إلى `6.0.1` هي ترقية رئيسية (Breaking Change) تتطلب أدوات بناء C++ وتكسر توافق الـ ABI الخاص بـ Node.js داخل VS Code Extension Host (Electron).
+- **الحل الفعلي (The Fix):** الامتناع التام عن تشغيل `npm audit fix --force` واستخدام ميزة `overrides` في `package.json` لتحديث الحزم الفرعية الآمنة مثل `braces` دون لمس `sqlite3`.
+

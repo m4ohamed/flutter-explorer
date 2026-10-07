@@ -336,8 +336,11 @@ body {
 .badge-constructor { background: rgba(202, 138, 4, 0.3);   color: #fef08a; border-color: rgba(254, 240, 138, 0.3); }
 .badge-property    { background: rgba(13, 148, 136, 0.3);  color: #99f6e4; border-color: rgba(153, 246, 228, 0.3); }
 .badge-annotation  { background: rgba(225, 29, 72, 0.3);   color: #fecdd3; border-color: rgba(254, 205, 211, 0.3); }
-.badge-call        { background: rgba(147, 51, 234, 0.3);  color: #e9d5ff; border-color: rgba(233, 213, 255, 0.3); }
-.badge-translation { background: rgba(16, 185, 129, 0.3);  color: #a7f3d0; border-color: rgba(167, 243, 208, 0.3); }
+.badge-call          { background: rgba(147, 51, 234, 0.3);  color: #e9d5ff; border-color: rgba(233, 213, 255, 0.3); }
+.badge-translation   { background: rgba(16, 185, 129, 0.3);  color: #a7f3d0; border-color: rgba(167, 243, 208, 0.3); }
+.badge-extensionType { background: rgba(168, 85, 247, 0.3);  color: #d8b4fe; border-color: rgba(216, 180, 254, 0.3); }
+.badge-file          { background: rgba(100, 116, 139, 0.3); color: #cbd5e1; border-color: rgba(203, 213, 225, 0.3); }
+.badge-method        { background: rgba(34, 197, 94, 0.3);   color: #86efac; border-color: rgba(134, 239, 172, 0.3); }
 
 /* ─── Headers & Action Buttons ────────────────────────── */
 .tree-header, .graph-header, .pubspec-header, .libraries-header {
@@ -678,6 +681,11 @@ body {
 .badge-pub\.dev   { background: rgba(16, 185, 129, 0.25); color: #a7f3d0; }
 .badge-path       { background: rgba(217, 119, 6, 0.25); color: #fde68a; }
 .badge-git        { background: rgba(192, 38, 211, 0.25); color: #f5d0fe; }
+.badge-sdk        { background: rgba(14, 165, 233, 0.25); color: #38bdf8; }
+.badge-hosted     { background: rgba(16, 185, 129, 0.25); color: #a7f3d0; }
+.badge-maven      { background: rgba(245, 158, 11, 0.25); color: #fcd34d; }
+.badge-gradle     { background: rgba(245, 158, 11, 0.25); color: #fcd34d; }
+.badge-npm        { background: rgba(239, 68, 68, 0.25);  color: #fca5a5; }
 
 /* ─── Empty & Loading States ───────────────────────────── */
 .empty-state {

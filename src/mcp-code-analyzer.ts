@@ -1,11 +1,119 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { execSync } from 'child_process';
+import { ImportResolver, CallResolver } from './indexer/importResolver';
 
 export interface LogicStep {
   step: number;
   description: string;
   type: 'validation' | 'data_fetch' | 'conditional' | 'state_update' | 'notification' | 'api_call' | 'error_handling' | 'other';
   line?: number;
+}
+
+export interface CircularDependencyCycle {
+  length: number;
+  cycle: string[];
+  formatted: string;
+}
+
+export interface LayerBoundaryRule {
+  name: string;
+  fromLayer: string; // pattern e.g. "domain" or "lib/domain/"
+  forbiddenLayers: string[]; // patterns e.g. ["data", "presentation"]
+  description: string;
+}
+
+export interface LayerViolation {
+  fromFile: string;
+  toFile: string;
+  ruleName: string;
+  description: string;
+  line?: number;
+}
+
+export interface UnusedAsset {
+  path: string;
+  fileName: string;
+  sizeBytes: number;
+  extension: string;
+}
+
+export interface GitBlastRadiusResult {
+  modifiedFiles: string[];
+  totalAffectedFlows: number;
+  affectedFlows: any[];
+  summary: string;
+}
+
+export interface WidgetDepthViolation {
+  file: string;
+  rootWidget: string;
+  maxDepth: number;
+  deepestPath: string;
+  deepestLine?: number;
+  recommendation: string;
+}
+
+export interface WidgetDepthAnalysisResult {
+  totalWidgetsAnalyzed: number;
+  maxObservedDepth: number;
+  violationsCount: number;
+  violations: WidgetDepthViolation[];
+}
+
+export interface DuplicateWidgetCluster {
+  nodeCount: number;
+  structureSignature: string;
+  occurrences: Array<{ file: string; rootWidget: string; line: number }>;
+  suggestedName: string;
+  proposal: string;
+}
+
+export interface DuplicateWidgetsResult {
+  analyzedSubtreesCount: number;
+  clustersCount: number;
+  clusters: DuplicateWidgetCluster[];
+}
+
+export interface MemoryLeakWarning {
+  file: string;
+  className: string;
+  field: string;
+  fieldType: string;
+  line?: number;
+  hasDisposeMethod: boolean;
+  message: string;
+  fixSuggestion: string;
+}
+
+export interface MemoryLeakDetectionResult {
+  analyzedClassesCount: number;
+  warningsCount: number;
+  warnings: MemoryLeakWarning[];
+}
+
+export interface ArchitecturalLayerInfo {
+  layer: 'presentation' | 'domain' | 'data' | 'core' | 'other';
+  file: string;
+  classesCount: number;
+  afferentCoupling: number;
+  efferentCoupling: number;
+  instability: number;
+}
+
+export interface LayerCouplingSummary {
+  presentation: { filesCount: number; avgInstability: number };
+  domain: { filesCount: number; avgInstability: number };
+  data: { filesCount: number; avgInstability: number };
+  core: { filesCount: number; avgInstability: number };
+}
+
+export interface ArchitecturalLayersResult {
+  totalFiles: number;
+  layerBreakdown: Record<string, number>;
+  layerCouplingSummary: LayerCouplingSummary;
+  files: ArchitecturalLayerInfo[];
+  detectedCrossLayerViolations: Array<{ from: string; to: string; violation: string }>;
 }
 
 export class CodeAnalyzer {
@@ -424,18 +532,39 @@ export class CodeAnalyzer {
     return null;
   }
 
+  private getProjectName(): string | null {
+    try {
+      const pubspecPath = path.join(this.projectRoot, 'pubspec.yaml');
+      if (fs.existsSync(pubspecPath)) {
+        const content = fs.readFileSync(pubspecPath, 'utf8');
+        const match = /^name:\s*([a-zA-Z0-9_-]+)/m.exec(content);
+        if (match) return match[1];
+      }
+      const pkgPath = path.join(this.projectRoot, 'package.json');
+      if (fs.existsSync(pkgPath)) {
+        const parsed = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        if (parsed.name) return parsed.name;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
   /**
    * Build a reverse call graph: target -> Set of callers
    */
   private buildReverseCallGraph(index: any): Map<string, Set<string>> {
     const reverseGraph = new Map<string, Set<string>>();
     const combinedIndex = this.getCombinedIndex(index);
+    const resolver = new ImportResolver(Object.keys(combinedIndex), this.getProjectName());
+    const callResolver = new CallResolver(combinedIndex, resolver);
 
     for (const [filePath, info] of Object.entries(combinedIndex)) {
       const calls = info.functionCalls || [];
       for (const call of calls) {
-        const callerQName = this.getQName(filePath, call.callerClass, call.callerFunction);
-        const targetNode = this.resolveCall(index, call.name, call.receiver);
+        const callerQName = callResolver.callerQName(filePath, call);
+        const targetNode = callResolver.resolve(filePath, call);
         
         if (targetNode) {
           const targetQName = targetNode.qname;
@@ -511,5 +640,694 @@ export class CodeAnalyzer {
     }
 
     return affectedFlows;
+  }
+
+  // ─── Advanced Feature 11: Circular Dependency Cycle Detection ─────────────
+
+  /**
+   * Detects circular dependency cycles across project files
+   */
+  detectCircularDependencies(index: any): {
+    totalFilesAnalyzed: number;
+    cyclesCount: number;
+    cycles: CircularDependencyCycle[];
+  } {
+    const combinedIndex = this.getCombinedIndex(index);
+    const graph = new Map<string, string[]>();
+    const resolver = new ImportResolver(Object.keys(combinedIndex), this.getProjectName());
+
+    // Build directed import graph
+    for (const [filePath, info] of Object.entries(combinedIndex)) {
+      const neighbors: string[] = [];
+      for (const imp of info.imports || []) {
+        const impPath = typeof imp === 'string' ? imp : imp.path;
+        if (!impPath) continue;
+        const resolved = resolver.resolve(filePath, impPath);
+        if (resolved && resolved !== filePath) {
+          neighbors.push(resolved);
+        }
+      }
+      graph.set(filePath, neighbors);
+    }
+
+    const cycles: CircularDependencyCycle[] = [];
+    const seenCycleKeys = new Set<string>();
+
+    const visited = new Set<string>();
+    const inStack = new Set<string>();
+    const currentPath: string[] = [];
+
+    const dfs = (node: string) => {
+      visited.add(node);
+      inStack.add(node);
+      currentPath.push(node);
+
+      const neighbors = graph.get(node) || [];
+      for (const neighbor of neighbors) {
+        if (!visited.has(neighbor)) {
+          dfs(neighbor);
+        } else if (inStack.has(neighbor)) {
+          // Cycle found!
+          const cycleStartIdx = currentPath.indexOf(neighbor);
+          if (cycleStartIdx !== -1) {
+            const cycleNodes = currentPath.slice(cycleStartIdx);
+            // Canonical rotation to avoid duplicate permutations
+            const minIndex = cycleNodes.indexOf([...cycleNodes].sort()[0]);
+            const rotated = [...cycleNodes.slice(minIndex), ...cycleNodes.slice(0, minIndex)];
+            const key = rotated.join('->');
+
+            if (!seenCycleKeys.has(key)) {
+              seenCycleKeys.add(key);
+              cycles.push({
+                length: cycleNodes.length,
+                cycle: cycleNodes,
+                formatted: [...cycleNodes, neighbor].join(' -> ')
+              });
+            }
+          }
+        }
+      }
+
+      currentPath.pop();
+      inStack.delete(node);
+    };
+
+    for (const node of graph.keys()) {
+      if (!visited.has(node)) {
+        dfs(node);
+      }
+    }
+
+    // Sort by cycle length
+    cycles.sort((a, b) => a.length - b.length);
+
+    return {
+      totalFilesAnalyzed: graph.size,
+      cyclesCount: cycles.length,
+      cycles
+    };
+  }
+
+  // ─── Advanced Feature 12: Architectural Layer Boundary Validation ──────────
+
+  /**
+   * Validates layer boundary rules (Clean Architecture / Feature-First)
+   */
+  validateLayerBoundaries(index: any, customRules?: LayerBoundaryRule[]): {
+    totalViolations: number;
+    violations: LayerViolation[];
+    rulesApplied: number;
+  } {
+    const combinedIndex = this.getCombinedIndex(index);
+
+    const defaultRules: LayerBoundaryRule[] = [
+      {
+        name: 'Domain Layer Isolation',
+        fromLayer: 'domain',
+        forbiddenLayers: ['data', 'presentation', 'ui'],
+        description: 'Domain layer (entities/usecases) must be independent of Data and Presentation layers'
+      },
+      {
+        name: 'Core Isolation',
+        fromLayer: 'core',
+        forbiddenLayers: ['features', 'modules', 'pages', 'screens'],
+        description: 'Core infrastructure must not depend on higher-level Feature modules'
+      },
+      {
+        name: 'Clean Presentation',
+        fromLayer: 'presentation',
+        forbiddenLayers: ['data/datasources', 'data/models'],
+        description: 'Presentation/UI layer should interact with Domain repositories, not direct Data sources or models'
+      }
+    ];
+
+    const rules = customRules && customRules.length > 0 ? customRules : defaultRules;
+    const violations: LayerViolation[] = [];
+    const resolver = new ImportResolver(Object.keys(combinedIndex), this.getProjectName());
+
+    const matchesLayer = (filePath: string, layerPattern: string): boolean => {
+      const norm = filePath.replace(/\\/g, '/').toLowerCase();
+      const pattern = layerPattern.toLowerCase();
+      return norm.includes(`/${pattern}/`) || norm.startsWith(`${pattern}/`) || norm.includes(pattern);
+    };
+
+    for (const [fromFile, info] of Object.entries(combinedIndex)) {
+      for (const rule of rules) {
+        if (matchesLayer(fromFile, rule.fromLayer)) {
+          for (const imp of info.imports || []) {
+            const impPath = typeof imp === 'string' ? imp : imp.path;
+            if (!impPath) continue;
+
+            const targetPath = resolver.resolve(fromFile, impPath) ?? impPath;
+
+            for (const forbidden of rule.forbiddenLayers) {
+              if (matchesLayer(targetPath, forbidden)) {
+                violations.push({
+                  fromFile,
+                  toFile: impPath,
+                  ruleName: rule.name,
+                  description: rule.description,
+                  line: typeof imp === 'object' ? imp.line : undefined
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return {
+      totalViolations: violations.length,
+      violations,
+      rulesApplied: rules.length
+    };
+  }
+
+  // ─── Advanced Feature 13: Unused Assets Scanner ────────────────────────────
+
+  /**
+   * Scans pubspec.yaml assets and compares against references in code
+   */
+  detectUnusedAssets(): {
+    totalAssetsFound: number;
+    unusedCount: number;
+    unusedAssets: UnusedAsset[];
+    totalUnusedSizeBytes: number;
+  } {
+    const pubspecPath = path.join(this.projectRoot, 'pubspec.yaml');
+    if (!fs.existsSync(pubspecPath)) {
+      return { totalAssetsFound: 0, unusedCount: 0, unusedAssets: [], totalUnusedSizeBytes: 0 };
+    }
+
+    // 1. Parse assets from pubspec.yaml
+    const pubspec = fs.readFileSync(pubspecPath, 'utf-8');
+    const assetSectionMatch = pubspec.match(/assets:\s*([\s\S]*?)(?=\n\s*[a-zA-Z0-9_\-]+:|$)/);
+    const declaredPaths: string[] = [];
+
+    if (assetSectionMatch) {
+      const lines = assetSectionMatch[1].split('\n');
+      for (const l of lines) {
+        const itemMatch = l.match(/^\s*-\s*([^\s#]+)/);
+        if (itemMatch) {
+          declaredPaths.push(itemMatch[1].trim());
+        }
+      }
+    }
+
+    // 2. Discover physical asset files on disk
+    const physicalAssets: { fullPath: string; relPath: string; fileName: string; size: number }[] = [];
+    const visitedFiles = new Set<string>();
+
+    const checkAndAddFile = (fp: string) => {
+      if (visitedFiles.has(fp)) return;
+      visitedFiles.add(fp);
+      try {
+        const stat = fs.statSync(fp);
+        if (stat.isFile()) {
+          const rel = path.relative(this.projectRoot, fp).replace(/\\/g, '/');
+          physicalAssets.push({
+            fullPath: fp,
+            relPath: rel,
+            fileName: path.basename(fp),
+            size: stat.size
+          });
+        }
+      } catch {}
+    };
+
+    const scanAssetDir = (dir: string) => {
+      if (!fs.existsSync(dir)) return;
+      try {
+        const entries = fs.readdirSync(dir);
+        for (const e of entries) {
+          const full = path.join(dir, e);
+          const stat = fs.statSync(full);
+          if (stat.isDirectory()) {
+            scanAssetDir(full);
+          } else if (/\.(png|jpg|jpeg|svg|webp|gif|json|riv|ttf|otf|mp3|wav|flac)$/i.test(e)) {
+            checkAndAddFile(full);
+          }
+        }
+      } catch {}
+    };
+
+    for (const d of declaredPaths) {
+      const target = path.join(this.projectRoot, d);
+      if (fs.existsSync(target)) {
+        const s = fs.statSync(target);
+        if (s.isDirectory()) {
+          scanAssetDir(target);
+        } else {
+          checkAndAddFile(target);
+        }
+      }
+    }
+
+    // Also scan common assets directory if declaredPaths was empty
+    if (physicalAssets.length === 0) {
+      scanAssetDir(path.join(this.projectRoot, 'assets'));
+    }
+
+    if (physicalAssets.length === 0) {
+      return { totalAssetsFound: 0, unusedCount: 0, unusedAssets: [], totalUnusedSizeBytes: 0 };
+    }
+
+    // 3. Scan code files for asset references
+    let mergedCode = '';
+    const scanCode = (dir: string) => {
+      if (!fs.existsSync(dir)) return;
+      try {
+        const items = fs.readdirSync(dir);
+        for (const item of items) {
+          if (item === '.git' || item === 'build' || item === '.dart_tool' || item === 'node_modules') continue;
+          const full = path.join(dir, item);
+          const stat = fs.statSync(full);
+          if (stat.isDirectory()) {
+            scanCode(full);
+          } else if (/\.(dart|ts|tsx|js|jsx|kt|java)$/i.test(item)) {
+            mergedCode += ' ' + fs.readFileSync(full, 'utf-8');
+          }
+        }
+      } catch {}
+    };
+
+    scanCode(path.join(this.projectRoot, 'lib'));
+    scanCode(path.join(this.projectRoot, 'src'));
+
+    const unusedAssets: UnusedAsset[] = [];
+    let totalUnusedSize = 0;
+
+    for (const asset of physicalAssets) {
+      // Check full relative path or filename or camelCase/PascalCase name
+      const nameWithoutExt = path.parse(asset.fileName).name;
+      const isReferenced =
+        mergedCode.includes(asset.relPath) ||
+        mergedCode.includes(asset.fileName) ||
+        (nameWithoutExt.length > 4 && mergedCode.includes(nameWithoutExt));
+
+      if (!isReferenced) {
+        unusedAssets.push({
+          path: asset.relPath,
+          fileName: asset.fileName,
+          sizeBytes: asset.size,
+          extension: path.extname(asset.fileName).toLowerCase()
+        });
+        totalUnusedSize += asset.size;
+      }
+    }
+
+    return {
+      totalAssetsFound: physicalAssets.length,
+      unusedCount: unusedAssets.length,
+      unusedAssets,
+      totalUnusedSizeBytes: totalUnusedSize
+    };
+  }
+
+  // ─── Advanced Feature 14: Git Diff Blast Radius Analysis ───────────────────
+
+  /**
+   * Determines blast radius automatically from current uncommitted or staged Git changes
+   */
+  getGitDiffImpactAnalysis(index: any, maxDepth = 25): GitBlastRadiusResult {
+    const modifiedFiles: string[] = [];
+
+    try {
+      // 1. Check staged and unstaged diffs
+      const diffOutput = execSync('git diff --name-only HEAD', {
+        cwd: this.projectRoot,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+      for (const line of diffOutput.split('\n')) {
+        const f = line.trim().replace(/\\/g, '/');
+        if (f) modifiedFiles.push(f);
+      }
+    } catch {
+      // Fallback to git status --porcelain
+      try {
+        const statusOutput = execSync('git status --porcelain', {
+          cwd: this.projectRoot,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        });
+        for (const line of statusOutput.split('\n')) {
+          const match = line.match(/^..\s+(.*)$/);
+          if (match) {
+            const f = match[1].trim().replace(/\\/g, '/');
+            if (f) modifiedFiles.push(f);
+          }
+        }
+      } catch {
+        // Git not available
+      }
+    }
+
+    const uniqueModified = [...new Set(modifiedFiles)];
+    const combinedIndex = this.getCombinedIndex(index);
+    const affectedFlowsMap = new Map<string, any>();
+
+    for (const file of uniqueModified) {
+      if (combinedIndex[file]) {
+        const flows = this.findImpactBackwards(index, file, maxDepth);
+        for (const flow of flows) {
+          const key = `${flow.entryFile}:${flow.entryPoint}:${flow.flowPath}`;
+          if (!affectedFlowsMap.has(key)) {
+            affectedFlowsMap.set(key, { ...flow, triggeredByModifiedFile: file });
+          }
+        }
+      }
+    }
+
+    const affectedFlows = Array.from(affectedFlowsMap.values());
+    const summary = `Analyzed ${uniqueModified.length} modified files from Git diff. Found ${affectedFlows.length} affected entry points and execution paths.`;
+
+    return {
+      modifiedFiles: uniqueModified,
+      totalAffectedFlows: affectedFlows.length,
+      affectedFlows,
+      summary
+    };
+  }
+
+  /**
+   * Analyzes widget nesting depth across project files.
+   * Flags deeply nested widget trees that should be refactored into modular sub-widgets.
+   * Inspired by DCM widget-nesting-depth.
+   */
+  analyzeWidgetDepth(index: any, maxDepthThreshold = 5): WidgetDepthAnalysisResult {
+    const combinedIndex = this.getCombinedIndex(index);
+    const violations: WidgetDepthViolation[] = [];
+    let totalWidgetsAnalyzed = 0;
+    let maxObservedDepth = 0;
+
+    const computeDepth = (widget: any, currentPath: string[]): { depth: number; path: string[]; deepestLine?: number } => {
+      totalWidgetsAnalyzed++;
+      const wName = widget.name || 'Widget';
+      const newPath = [...currentPath, wName];
+      if (!widget.children || widget.children.length === 0) {
+        return { depth: newPath.length, path: newPath, deepestLine: widget.line };
+      }
+      let deepest: { depth: number; path: string[]; deepestLine?: number } = {
+        depth: newPath.length,
+        path: newPath,
+        deepestLine: widget.line
+      };
+      for (const child of widget.children) {
+        const res = computeDepth(child, newPath);
+        if (res.depth > deepest.depth) {
+          deepest = res;
+        }
+      }
+      return deepest;
+    };
+
+    for (const [filePath, fileInfo] of Object.entries(combinedIndex)) {
+      const widgets = (fileInfo as any).widgets || [];
+      for (const rootWidget of widgets) {
+        const res = computeDepth(rootWidget, []);
+        if (res.depth > maxObservedDepth) {
+          maxObservedDepth = res.depth;
+        }
+        if (res.depth > maxDepthThreshold) {
+          const midIdx = Math.floor(res.path.length / 2);
+          const midWidget = res.path[midIdx] || 'sub-tree';
+          violations.push({
+            file: filePath,
+            rootWidget: rootWidget.name || 'Widget',
+            maxDepth: res.depth,
+            deepestPath: res.path.join(' -> '),
+            deepestLine: res.deepestLine,
+            recommendation: `Extract intermediate subtree '${midWidget}' around depth ${midIdx + 1} into a dedicated StatelessWidget or helper method to improve readability and prevent unnecessary rebuilds.`
+          });
+        }
+      }
+    }
+
+    return {
+      totalWidgetsAnalyzed,
+      maxObservedDepth,
+      violationsCount: violations.length,
+      violations
+    };
+  }
+
+  /**
+   * Detects duplicate or near-identical widget subtrees across project files.
+   * Inspired by DCM Duplicate Widget Analyzer.
+   */
+  detectDuplicateWidgets(index: any, minNodeCount = 3): DuplicateWidgetsResult {
+    const combinedIndex = this.getCombinedIndex(index);
+    const signatureMap = new Map<string, Array<{ file: string; rootWidget: string; line: number }>>();
+    let analyzedSubtreesCount = 0;
+
+    const getSignature = (w: any): { sig: string; count: number } => {
+      analyzedSubtreesCount++;
+      const name = w.name || 'Widget';
+      if (!w.children || w.children.length === 0) {
+        return { sig: name, count: 1 };
+      }
+      const childSigs = (w.children || []).map((c: any) => getSignature(c));
+      const totalNodes = 1 + childSigs.reduce((sum: number, c: any) => sum + c.count, 0);
+      const combinedChildren = childSigs.map((c: any) => c.sig).sort().join(',');
+      return {
+        sig: `${name}(${combinedChildren})`,
+        count: totalNodes
+      };
+    };
+
+    for (const [filePath, fileInfo] of Object.entries(combinedIndex)) {
+      const widgets = (fileInfo as any).widgets || [];
+      for (const w of widgets) {
+        const { sig, count } = getSignature(w);
+        if (count >= minNodeCount) {
+          if (!signatureMap.has(sig)) {
+            signatureMap.set(sig, []);
+          }
+          signatureMap.get(sig)!.push({
+            file: filePath,
+            rootWidget: w.name || 'Widget',
+            line: w.line || 1
+          });
+        }
+      }
+    }
+
+    const clusters: DuplicateWidgetCluster[] = [];
+    for (const [sig, occurrences] of signatureMap.entries()) {
+      if (occurrences.length >= 2) {
+        const parenIdx = sig.indexOf('(');
+        const rootName = parenIdx !== -1 ? sig.substring(0, parenIdx) : 'Custom';
+        const suggestedName = `Custom${rootName}Widget`;
+        clusters.push({
+          nodeCount: sig.split(/[(),]/).filter(Boolean).length,
+          structureSignature: sig,
+          occurrences,
+          suggestedName,
+          proposal: `Found ${occurrences.length} duplicate occurrences of '${sig}'. Consider consolidating into a reusable widget named '${suggestedName}'.`
+        });
+      }
+    }
+
+    clusters.sort((a, b) => (b.nodeCount * b.occurrences.length) - (a.nodeCount * a.occurrences.length));
+
+    return {
+      analyzedSubtreesCount,
+      clustersCount: clusters.length,
+      clusters
+    };
+  }
+
+  /**
+   * Scans State and Controller classes for undisposed resources (TextEditingController, AnimationController, etc.)
+   * Inspired by leak_tracker and saropa_lints.
+   */
+  detectMemoryLeaks(index: any): MemoryLeakDetectionResult {
+    const combinedIndex = this.getCombinedIndex(index);
+    const warnings: MemoryLeakWarning[] = [];
+    let analyzedClassesCount = 0;
+
+    const DISPOSABLE_PATTERN = /(?:TextEditingController|AnimationController|ScrollController|TabController|PageController|StreamSubscription|FocusNode|ChangeNotifier|Timer)/i;
+
+    for (const [filePath, fileInfo] of Object.entries(combinedIndex)) {
+      const classes = (fileInfo as any).classes || [];
+      for (const cls of classes) {
+        analyzedClassesCount++;
+        const properties = cls.properties || [];
+        const disposableFields: Array<{ name: string; type: string; line?: number }> = [];
+
+        for (const prop of properties) {
+          const typeMatch = prop.type && DISPOSABLE_PATTERN.test(prop.type);
+          const nameMatch = DISPOSABLE_PATTERN.test(prop.name) || prop.name.toLowerCase().includes('controller') || prop.name.toLowerCase().includes('subscription');
+          if (typeMatch || nameMatch) {
+            disposableFields.push({
+              name: prop.name,
+              type: prop.type || 'Controller',
+              line: prop.line
+            });
+          }
+        }
+
+        if (disposableFields.length === 0) continue;
+
+        const methods = cls.methods || [];
+        const disposeMethod = methods.find((m: any) => m.name === 'dispose' || m.name === 'close' || m.name === 'cancel');
+
+        let fileContent = '';
+        try {
+          const abs = path.isAbsolute(filePath) ? filePath : path.join(this.projectRoot, filePath);
+          if (fs.existsSync(abs)) {
+            fileContent = fs.readFileSync(abs, 'utf-8');
+          }
+        } catch {}
+
+        for (const field of disposableFields) {
+          if (!disposeMethod) {
+            warnings.push({
+              file: filePath,
+              className: cls.name,
+              field: field.name,
+              fieldType: field.type,
+              line: field.line,
+              hasDisposeMethod: false,
+              message: `Class '${cls.name}' defines disposable resource '${field.name}' (${field.type}) but has NO dispose() method! This causes permanent memory leaks.`,
+              fixSuggestion: `@override\nvoid dispose() {\n  ${field.name}.dispose();\n  super.dispose();\n}`
+            });
+          } else if (fileContent) {
+            const disposeCallsPattern = new RegExp(`\\b${field.name}\\s*\\.\\s*(?:dispose|cancel|close)\\s*\\(`);
+            if (!disposeCallsPattern.test(fileContent)) {
+              warnings.push({
+                file: filePath,
+                className: cls.name,
+                field: field.name,
+                fieldType: field.type,
+                line: field.line,
+                hasDisposeMethod: true,
+                message: `Class '${cls.name}' defines disposable resource '${field.name}' (${field.type}), but '${field.name}.dispose()' is never called inside dispose().`,
+                fixSuggestion: `Add '${field.name}.dispose();' before 'super.dispose();' in '${cls.name}.dispose()'.`
+              });
+            }
+          }
+        }
+      }
+    }
+
+    return {
+      analyzedClassesCount,
+      warningsCount: warnings.length,
+      warnings
+    };
+  }
+
+  /**
+   * Classifies project files into Clean Architecture layers and computes Lakos coupling metrics.
+   * Inspired by Lakos Software Architecture Visualizer.
+   */
+  getArchitecturalLayers(index: any): ArchitecturalLayersResult {
+    const combinedIndex = this.getCombinedIndex(index);
+    const files: ArchitecturalLayerInfo[] = [];
+    const layerBreakdown: Record<string, number> = {
+      presentation: 0,
+      domain: 0,
+      data: 0,
+      core: 0,
+      other: 0
+    };
+
+    const determineLayer = (fp: string, info: any): 'presentation' | 'domain' | 'data' | 'core' | 'other' => {
+      const lower = fp.toLowerCase().replace(/\\/g, '/');
+      if (lower.includes('/presentation/') || lower.includes('/views/') || lower.includes('/pages/') || lower.includes('/screens/') || lower.includes('/ui/') || lower.includes('/widgets/')) {
+        return 'presentation';
+      }
+      if (lower.includes('/domain/') || lower.includes('/usecases/') || lower.includes('/entities/') || lower.includes('/bloc/') || lower.includes('/cubit/')) {
+        return 'domain';
+      }
+      if (lower.includes('/data/') || lower.includes('/models/') || lower.includes('/datasources/') || lower.includes('/network/') || lower.includes('/services/') || lower.includes('/repositories/')) {
+        return 'data';
+      }
+      if (lower.includes('/core/') || lower.includes('/utils/') || lower.includes('/common/') || lower.includes('/constants/') || lower.includes('/theme/')) {
+        return 'core';
+      }
+      if (info.widgets && info.widgets.length > 0) return 'presentation';
+      return 'other';
+    };
+
+    const fileToLayer = new Map<string, 'presentation' | 'domain' | 'data' | 'core' | 'other'>();
+    const fileImports = new Map<string, Set<string>>();
+    const fileImportedBy = new Map<string, Set<string>>();
+
+    for (const [fp, info] of Object.entries(combinedIndex)) {
+      const layer = determineLayer(fp, info);
+      fileToLayer.set(fp, layer);
+      layerBreakdown[layer]++;
+      fileImports.set(fp, new Set());
+      if (!fileImportedBy.has(fp)) fileImportedBy.set(fp, new Set());
+    }
+
+    for (const [fp, info] of Object.entries(combinedIndex)) {
+      const imps = (info as any).imports || [];
+      for (const imp of imps) {
+        if (imp.path) {
+          for (const targetFp of fileToLayer.keys()) {
+            if (targetFp !== fp && (targetFp.endsWith(imp.path) || imp.path.includes(path.basename(targetFp, path.extname(targetFp))))) {
+              fileImports.get(fp)!.add(targetFp);
+              fileImportedBy.get(targetFp)!.add(fp);
+            }
+          }
+        }
+      }
+    }
+
+    const detectedCrossLayerViolations: Array<{ from: string; to: string; violation: string }> = [];
+
+    for (const [fp, info] of Object.entries(combinedIndex)) {
+      const layer = fileToLayer.get(fp) || 'other';
+      const ce = fileImports.get(fp)?.size ?? 0;
+      const ca = fileImportedBy.get(fp)?.size ?? 0;
+      const instability = (ce + ca) > 0 ? Number((ce / (ca + ce)).toFixed(3)) : 0;
+
+      files.push({
+        layer,
+        file: fp,
+        classesCount: ((info as any).classes || []).length,
+        afferentCoupling: ca,
+        efferentCoupling: ce,
+        instability
+      });
+
+      for (const target of fileImports.get(fp) || []) {
+        const targetLayer = fileToLayer.get(target);
+        if (layer === 'domain' && (targetLayer === 'presentation' || targetLayer === 'data')) {
+          detectedCrossLayerViolations.push({
+            from: fp,
+            to: target,
+            violation: `Domain layer file '${fp}' directly imports '${targetLayer}' file '${target}'. Domain must remain decoupled.`
+          });
+        }
+      }
+    }
+
+    const getLayerSummary = (lName: string) => {
+      const lFiles = files.filter(f => f.layer === lName);
+      const avgInstability = lFiles.length > 0
+        ? Number((lFiles.reduce((s, f) => s + f.instability, 0) / lFiles.length).toFixed(3))
+        : 0;
+      return { filesCount: lFiles.length, avgInstability };
+    };
+
+    const layerCouplingSummary: LayerCouplingSummary = {
+      presentation: getLayerSummary('presentation'),
+      domain: getLayerSummary('domain'),
+      data: getLayerSummary('data'),
+      core: getLayerSummary('core')
+    };
+
+    return {
+      totalFiles: files.length,
+      layerBreakdown,
+      layerCouplingSummary,
+      files,
+      detectedCrossLayerViolations
+    };
   }
 }

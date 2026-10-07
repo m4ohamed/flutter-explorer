@@ -20,6 +20,8 @@ export class SqliteCache {
     private available = false;
     private readonlyMode = false;
     private workspaceRoot: string;
+    private dbPath: string = '';
+    private dbFilename: string = 'flutter-explorer.db';
     private jsonPath: string | null = null;
     // We still keep the JSON fallback just in case of file system permission issues.
     private jsonCache: {
@@ -31,12 +33,13 @@ export class SqliteCache {
     constructor(workspaceRoot: string, options: { readonly?: boolean; dbName?: string } = {}) {
         this.workspaceRoot = workspaceRoot;
         this.readonlyMode = !!options.readonly;
+        this.dbFilename = options.dbName || 'flutter-explorer.db';
 
         try {
             const dataDir = ProjectDetector.getDataDir(workspaceRoot);
-            const dbFilename = options.dbName || 'flutter-explorer.db';
-            this.jsonPath = path.join(dataDir, dbFilename.replace('.db', '.json'));
-            const dbPath = path.join(dataDir, dbFilename);
+            this.dbPath = path.join(dataDir, this.dbFilename);
+            this.jsonPath = path.join(dataDir, this.dbFilename.replace('.db', '.json'));
+            const dbPath = this.dbPath;
 
             // Legacy check: Move from .vscode if exists
             const legacyDir = path.join(workspaceRoot, '.vscode');
@@ -127,7 +130,7 @@ export class SqliteCache {
      * Returns granular diagnostic information about the cache status.
      */
     async getDiagnostics(): Promise<any> {
-        const dbPath = ProjectDetector.getDbPath(this.workspaceRoot);
+        const dbPath = this.dbPath || ProjectDetector.getDbPath(this.workspaceRoot);
         const stats = {
             available: this.available,
             readonly: this.readonlyMode,
@@ -504,6 +507,27 @@ export class SqliteCache {
             checkCandidate(func.line, func.lineEnd ?? (func.line + 80), { type: 'function', name: func.name });
         }
 
+        // Enums
+        if (fileInfo.info.enums) {
+            for (const en of fileInfo.info.enums) {
+                checkCandidate(en.line, en.line + 30, { type: 'enum', name: en.name });
+            }
+        }
+
+        // Mixins
+        if (fileInfo.info.mixins) {
+            for (const mx of fileInfo.info.mixins) {
+                checkCandidate(mx.line, (mx as any).lineEnd ?? (mx.line + 60), { type: 'mixin', name: mx.name });
+            }
+        }
+
+        // Typedefs
+        if (fileInfo.info.typedefs) {
+            for (const td of fileInfo.info.typedefs) {
+                checkCandidate(td.line, td.line + 5, { type: 'typedef', name: td.name });
+            }
+        }
+
         return bestNode;
     }
 
@@ -519,6 +543,10 @@ export class SqliteCache {
             if (file) {
                 file.info.classes.forEach(c => seeds.add(c.name));
                 file.info.functions.forEach(f => seeds.add(f.name));
+                file.info.mixins?.forEach(m => seeds.add(m.name));
+                file.info.extensionTypes?.forEach(et => seeds.add(et.name));
+                file.info.extensions?.forEach(ext => seeds.add(ext.name));
+                file.info.typedefs?.forEach(td => seeds.add(td.name));
             }
         }
 
@@ -539,13 +567,41 @@ export class SqliteCache {
                                 impacted.add(c.name);
                             }
                         });
+                        file.info.functions.forEach(f => {
+                            if (!visited.has(f.name)) {
+                                nextFrontier.add(f.name);
+                                visited.add(f.name);
+                                impacted.add(f.name);
+                            }
+                        });
                     }
 
                     file.info.classes.forEach(c => {
-                        if (c.extendsClass === name && !visited.has(c.name)) {
+                        const isDerived = c.extendsClass === name ||
+                            (c.implements && c.implements.includes(name)) ||
+                            (c.mixins && c.mixins.includes(name));
+                        if (isDerived && !visited.has(c.name)) {
                             nextFrontier.add(c.name);
                             visited.add(c.name);
                             impacted.add(c.name);
+                        }
+                    });
+
+                    file.info.extensionTypes?.forEach(et => {
+                        const isRelated = et.representationType === name ||
+                            (et.implements && et.implements.includes(name));
+                        if (isRelated && !visited.has(et.name)) {
+                            nextFrontier.add(et.name);
+                            visited.add(et.name);
+                            impacted.add(et.name);
+                        }
+                    });
+
+                    file.info.extensions?.forEach(ext => {
+                        if (ext.onType === name && !visited.has(ext.name)) {
+                            nextFrontier.add(ext.name);
+                            visited.add(ext.name);
+                            impacted.add(ext.name);
                         }
                     });
                 }

@@ -21,12 +21,27 @@ export class ProjectDetector {
     const root = path.parse(current).root;
 
     while (current !== root) {
-      // Priority: pubspec.yaml (definitely a Flutter project)
+      // Priority 1: pubspec.yaml (Flutter project)
       if (fs.existsSync(path.join(current, 'pubspec.yaml'))) {
         return current;
       }
-      
-      // Secondary: .git (repository root)
+
+      // Priority 2: Android project markers
+      if (
+        fs.existsSync(path.join(current, 'build.gradle')) ||
+        fs.existsSync(path.join(current, 'build.gradle.kts')) ||
+        fs.existsSync(path.join(current, 'settings.gradle')) ||
+        fs.existsSync(path.join(current, 'settings.gradle.kts'))
+      ) {
+        return current;
+      }
+
+      // Priority 3: JS/TS project markers
+      if (fs.existsSync(path.join(current, 'package.json'))) {
+        return current;
+      }
+
+      // Priority 4: .git (repository root)
       if (fs.existsSync(path.join(current, '.git'))) {
         return current;
       }

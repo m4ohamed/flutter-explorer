@@ -1,6 +1,6 @@
 import * as crypto from 'crypto';
-import { BaseParser } from './baseParser.js';
-import { MockupAnalyzer, MockupWarningType } from './mockupAnalyzer.js';
+import { BaseParser } from './baseParser';
+import { MockupAnalyzer, MockupWarningType } from './mockupAnalyzer';
 export interface ClassInfo {
   name: string;
   type: string;
@@ -441,24 +441,29 @@ export class DartParser extends BaseParser<DartFileInfo> {
         syncBraces(i);
         continue;
       }
-      const imp = trimmed.match(P.import_);
-      if (imp) {
-        result.imports.push({
-          path: imp[1], alias: imp[2] || null,
-          showNames: imp[3] ? imp[3].split(',').map(s => s.trim()) : [],
-          hideNames: imp[4] ? imp[4].split(',').map(s => s.trim()) : [],
-          line: lineNum,
-        });
+      const rawTrimmed = line.trim();
+      if (trimmed.startsWith('import ') || (rawTrimmed.startsWith('import ') && !trimmed.startsWith('//'))) {
+        const imp = rawTrimmed.match(P.import_);
+        if (imp) {
+          result.imports.push({
+            path: imp[1], alias: imp[2] || null,
+            showNames: imp[3] ? imp[3].split(',').map(s => s.trim()) : [],
+            hideNames: imp[4] ? imp[4].split(',').map(s => s.trim()) : [],
+            line: lineNum,
+          });
+        }
         syncBraces(i);
         continue;
       }
-      const exp = trimmed.match(P.export_);
-      if (exp) {
-        result.exports.push(exp[1]);
+      if (trimmed.startsWith('export ') || (rawTrimmed.startsWith('export ') && !trimmed.startsWith('//'))) {
+        const exp = rawTrimmed.match(P.export_);
+        if (exp) {
+          result.exports.push(exp[1]);
+        }
         syncBraces(i);
         continue;
       }
-      if (trimmed.startsWith('import ') || trimmed.startsWith('export ') || trimmed.startsWith('show ') || trimmed.startsWith('hide ')) {
+      if (trimmed.startsWith('show ') || trimmed.startsWith('hide ') || trimmed.startsWith('part ')) {
         syncBraces(i);
         continue;
       }

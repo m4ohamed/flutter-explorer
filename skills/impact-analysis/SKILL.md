@@ -1,22 +1,20 @@
 ---
 name: Impact Analysis
-description: Analyze the blast radius of changes to prevent regressions in Flutter apps
+description: "Analyze the blast radius of changes, uncommitted git diff impact, reverse dependencies, and architectural regressions in Flutter apps"
 ---
 
-## Impact Analysis
+# Impact Analysis
 
-Analyze the 'blast radius' of your changes to ensure you don't break distant parts of the application.
+Safely refactor Flutter/Dart code by determining the exact blast radius to UI entry points, callers, and architectural boundaries before committing changes.
 
-### Steps
+## Workflow
 
-1. Before modifying a file, run `flutter_get_impact_analysis` to see which entry points (main, widgets) eventually call this file.
-2. Use `flutter_get_reverse_deps` for a specific class or function to see exactly what depends on it.
-3. Use `flutter_find_references` to find all exact usages/references of a specific variable, class, or function across the project.
-4. Check the `flutter_get_detailed_graph` to see visual connections.
-5. If refactoring, use `flutter_get_hints` to get suggestions on related areas that might need updates.
+### 1. Pre-Change Blast Radius
+1. **Forward Impact**: Before editing a shared file, call `flutter_get_impact_analysis` with `filePath` to trace all UI entry points (main, widgets, events) that depend on this file.
+2. **Reverse Dependencies**: Call `flutter_get_reverse_deps` for specific classes or methods to identify direct callers.
+3. **Exact Usages**: Call `flutter_find_references` to locate exact line numbers and code snippets across the codebase where a symbol is referenced.
 
-### Safety Checks
-
-- Always check the blast radius before major refactors.
-- If a file is used by many entry points, be extra careful with changes to its public API.
-- Use `flutter_get_reverse_deps` to find all call sites that need to be updated after a signature change.
+### 2. Post-Change Git Blast Radius
+1. **Uncommitted Git Diff Impact**: Call `flutter_get_git_blast_radius` right before committing to audit all uncommitted changes across the git staging tree and verify which app flows are affected.
+2. **Layer Regressions**: Run `flutter_validate_architecture_rules` to ensure changes didn't violate Clean Architecture layers (e.g., Domain importing Presentation).
+3. **Cycle Check**: Run `flutter_detect_circular_dependencies` to ensure no circular dependency loops were created.

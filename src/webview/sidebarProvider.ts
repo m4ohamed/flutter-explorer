@@ -230,6 +230,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           <option value="hardcoded_text">Text Only</option>
           <option value="hardcoded_color">Color Only</option>
           <option value="duplicated_logic">Duplicates Only</option>
+          <option value="memory_leak">💧 Memory Leaks</option>
+          <option value="widget_depth">📏 Deep Widget Nesting</option>
+          <option value="duplicate_widgets">👥 Duplicate Widgets</option>
           <option value="mockup">🎨 All Mockups</option>
           <option value="mockup_empty_callback">🔇 Empty Callbacks</option>
           <option value="mockup_fake_data">📦 Fake Data</option>

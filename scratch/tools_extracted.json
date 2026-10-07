@@ -1,0 +1,408 @@
+[
+  {
+    "name": "flutter_search",
+    "desc": "Search for classes, functions, widgets, and other Dart elements. Use flutter_get_code_block to get full function/class bodies.",
+    "params": [
+      "query",
+      "useDirectSearch?"
+    ],
+    "args": "{ query, filter, searchMode = \"both\", useDirectSearch = false }: {\r\n    query: string;\r\n    filter?: \"class\" | \"function\" | \"widget\" | \"enum\" | \"mixin\" | \"extension\" | \"ext\" | \"typedef\" | \"type\" | \"variable\" | \"vars\" | \"constructor\" | \"property\" | \"annotation\" | \"file\" | \"call\" | \"translation\";\r\n    searchMode?: \"definitions\" | \"calls\" | \"both\";\r\n    useDirectSearch?: boolean;\r\n  }"
+  },
+  {
+    "name": "flutter_get_stats",
+    "desc": "Get summary statistics of the Flutter project index",
+    "params": [],
+    "args": ""
+  },
+  {
+    "name": "flutter_get_project_structure",
+    "desc": "Get the structure of the project (folders and files), specifically focusing on the lib/ directory.",
+    "params": [
+      "targetPath?"
+    ],
+    "args": "{ targetPath }"
+  },
+  {
+    "name": "flutter_get_file_info",
+    "desc": "Get detailed information about a specific Dart file",
+    "params": [
+      "relativePath?",
+      "filePath?",
+      "path?"
+    ],
+    "args": "args: { relativePath?: string; filePath?: string; path?: string }"
+  },
+  {
+    "name": "flutter_get_pubspec",
+    "desc": "Get code warnings (like hardcoded text, colors, duplicated code/logic, and mockups) from the Dart project with optional filtering",
+    "params": [
+      "searchQuery?",
+      "fileQuery?"
+    ],
+    "args": "{ typeFilter, searchQuery, fileQuery }: { typeFilter?: string; searchQuery?: string; fileQuery?: string }"
+  },
+  {
+    "name": "flutter_detect_mockups",
+    "desc": "Scan Flutter project to detect mockup, dummy, placeholder, and unimplemented UI code (empty callbacks, hardcoded mock data, stub widgets, unbound inputs, fake delays, TODO comments)",
+    "params": [
+      "filePath?"
+    ],
+    "args": "{ category, filePath }: { category?: string; filePath?: string }"
+  },
+  {
+    "name": "flutter_get_diagnostics",
+    "desc": "Get VS Code diagnostics (errors and warnings) for the project, optionally filtered by file or severity",
+    "params": [
+      "filePath?",
+      "relativePath?",
+      "path?"
+    ],
+    "args": "args: { filePath?: string; relativePath?: string; path?: string; severity?: \"error\" | \"warning\" | \"info\" }"
+  },
+  {
+    "name": "flutter_get_missing_translations",
+    "desc": "Find missing translation keys across all ARB files",
+    "params": [],
+    "args": ""
+  },
+  {
+    "name": "flutter_update_translation",
+    "desc": "Update or add a translation key across all ARB files, supporting dynamic multi-locale maps or Arabic/English values",
+    "params": [
+      "key",
+      "arValue?",
+      "enValue?",
+      "description?"
+    ],
+    "args": "{ key, arValue, enValue, translations, description, placeholders }"
+  },
+  {
+    "name": "flutter_delete_translation",
+    "desc": "Delete a translation key from all ARB files",
+    "params": [
+      "key"
+    ],
+    "args": "{ key }"
+  },
+  {
+    "name": "flutter_list_translations",
+    "desc": "List all translation keys and check for missing keys across ARB files",
+    "params": [],
+    "args": ""
+  },
+  {
+    "name": "flutter_get_impact_analysis",
+    "desc": "Get reverse dependencies for a class or function (what depends on this element)",
+    "params": [
+      "name",
+      "parentClass?"
+    ],
+    "args": "{ name, type, parentClass }: {\r\n    name: string;\r\n    type: \"class\" | \"function\" | \"extension\" | \"typedef\" | \"variable\" | \"constructor\" | \"property\" | \"annotation\" | \"enum\" | \"mixin\";\r\n    parentClass?: string;\r\n  }"
+  },
+  {
+    "name": "flutter_set_project_path",
+    "desc": "Set the Flutter project root path for the MCP server",
+    "params": [
+      "projectPath?",
+      "path?"
+    ],
+    "args": "args: { projectPath?: string; path?: string }"
+  },
+  {
+    "name": "flutter_get_project_path",
+    "desc": "Get the current Flutter project root path",
+    "params": [],
+    "args": ""
+  },
+  {
+    "name": "flutter_get_node_at_cursor",
+    "desc": "Find the Dart element (class/function) at a specific cursor position in a file.",
+    "params": [
+      "relativePath",
+      "line"
+    ],
+    "args": "{ relativePath, line }"
+  },
+  {
+    "name": "flutter_list_packages",
+    "desc": "List all project dependencies from pubspec.lock",
+    "params": [],
+    "args": "{ filter = \"all\", source = \"all\" }"
+  },
+  {
+    "name": "flutter_get_code_block",
+    "desc": "Get the full body of a class, function, or method including comments",
+    "params": [
+      "name",
+      "filePath?",
+      "relativePath?",
+      "path?",
+      "parentClass?"
+    ],
+    "args": "args: {\r\n    elementType: \"class\" | \"function\" | \"method\" | \"enum\" | \"mixin\" | \"extension\";\r\n    name: string;\r\n    filePath?: string;\r\n    relativePath?: string;\r\n    path?: string;\r\n    parentClass?: string;\r\n  }"
+  },
+  {
+    "name": "flutter_analyze_logic_flow",
+    "desc": "Get the dependencies (repositories, services, etc.) that a class depends on from its constructor",
+    "params": [
+      "className",
+      "filePath?"
+    ],
+    "args": "{ className, filePath }: { className: string; filePath?: string }"
+  },
+  {
+    "name": "flutter_read_fragment",
+    "desc": "Read a code fragment by element name (class, function, method) with surrounding comments",
+    "params": [
+      "name",
+      "filePath?",
+      "relativePath?",
+      "path?",
+      "parentClass?",
+      "includeContext?",
+      "contextLines?"
+    ],
+    "args": "args: {\r\n    name: string;\r\n    elementType?: \"class\" | \"function\" | \"method\";\r\n    filePath?: string;\r\n    relativePath?: string;\r\n    path?: string;\r\n    parentClass?: string;\r\n    includeContext?: boolean;\r\n    contextLines?: number;\r\n  }"
+  },
+  {
+    "name": "flutter_search_text",
+    "desc": "Search for specific text, strings, or comments across all Dart files",
+    "params": [
+      "query",
+      "isRegex?",
+      "caseInsensitive?",
+      "includeComments?",
+      "includeStrings?"
+    ],
+    "args": "options: { query: string; isRegex?: boolean; caseInsensitive?: boolean; includeComments?: boolean; includeStrings?: boolean }"
+  },
+  {
+    "name": "flutter_get_index_status",
+    "desc": "Check the status and last update time of the project index",
+    "params": [],
+    "args": ""
+  },
+  {
+    "name": "flutter_get_detailed_graph",
+    "desc": "Get a detailed relationship graph (inheritance, calls, imports) for the project or a specific file",
+    "params": [
+      "focusFile?",
+      "depth?"
+    ],
+    "args": "{ focusFile, depth = 1 }"
+  },
+  {
+    "name": "flutter_get_hints",
+    "desc": "Get context-aware suggestions for the next steps based on recent analysis",
+    "params": [
+      "lastToolUsed",
+      "lastResult?"
+    ],
+    "args": "{ lastToolUsed, lastResult }"
+  },
+  {
+    "name": "flutter_read_lines",
+    "desc": "Read a specific range of lines from any file in the project with 1-based line numbers. Highly recommended for inspecting code around errors or reviewing large files without token bloat.",
+    "params": [
+      "filePath?",
+      "relativePath?",
+      "path?",
+      "startLine?",
+      "endLine?",
+      "maxLines?"
+    ],
+    "args": "args: {\r\n    filePath?: string;\r\n    relativePath?: string;\r\n    path?: string;\r\n    startLine?: number;\r\n    endLine?: number;\r\n    maxLines?: number;\r\n  }"
+  },
+  {
+    "name": "flutter_run_analyze",
+    "desc": "Run compiler checks or linters on the current project based on its detected type (Flutter, TS/JS, Android), optionally targeting a specific file or directory.",
+    "params": [
+      "targetPath?",
+      "filePath?",
+      "path?"
+    ],
+    "args": "analyzeArgs?: { targetPath?: string; filePath?: string; path?: string }"
+  },
+  {
+    "name": "flutter_run_build_runner",
+    "desc": "Find all usages/references of a class, function, variable, enum, mixin, extension, or typedef in the project.",
+    "params": [
+      "name"
+    ],
+    "args": "{ name, type }: { name: string; type: \"class\" | \"function\" | \"variable\" | \"enum\" | \"mixin\" | \"extension\" | \"typedef\" }"
+  },
+  {
+    "name": "flutter_run_intl_generate",
+    "desc": "Manually trigger Intl generation (l10n.dart, messages_*.dart) via the built-in IntlGenerator. This will read the ARB files and write the generated Dart files.",
+    "params": [],
+    "args": ""
+  },
+  {
+    "name": "flutter_rebuild_index",
+    "desc": "Manually trigger a full re-index of the Flutter project by the VS Code extension.",
+    "params": [],
+    "args": ""
+  },
+  {
+    "name": "flutter_search_packages",
+    "desc": "Search across all cached third-party Dart/Flutter package dependencies in .pub-cache or Flutter SDK (similar to rip_grep_packages).",
+    "params": [
+      "query",
+      "packageName?",
+      "isRegex?",
+      "caseSensitive?",
+      "maxResults?"
+    ],
+    "args": "{ query, packageName, isRegex, caseSensitive, maxResults }"
+  },
+  {
+    "name": "flutter_read_package_source",
+    "desc": "Read the source code of any cached third-party package or Flutter SDK library by package URI (e.g. package:flutter/material.dart or package:dio/dio.dart).",
+    "params": [
+      "uri",
+      "startLine?",
+      "lineCount?"
+    ],
+    "args": "{ uri, startLine, lineCount }"
+  },
+  {
+    "name": "flutter_pub_dev_search",
+    "desc": "Live search for packages on pub.dev to discover libraries, popularity, descriptions, and latest versions.",
+    "params": [
+      "query",
+      "page?"
+    ],
+    "args": "{ query, page }"
+  },
+  {
+    "name": "flutter_get_pub_package_info",
+    "desc": "Get detailed metrics for a package from pub.dev, including pub points, popularity score, likes, description, and repository.",
+    "params": [
+      "packageName"
+    ],
+    "args": "{ packageName }"
+  },
+  {
+    "name": "flutter_hot_reload",
+    "desc": "Trigger Hot Reload (ext.flutter.reassemble) on the running Flutter app via the Dart VM Service.",
+    "params": [
+      "vmServiceUri?"
+    ],
+    "args": "{ vmServiceUri }"
+  },
+  {
+    "name": "flutter_hot_restart",
+    "desc": "Trigger a full Hot Restart on the running Flutter application via the Dart VM Service.",
+    "params": [
+      "vmServiceUri?"
+    ],
+    "args": "{ vmServiceUri }"
+  },
+  {
+    "name": "flutter_get_runtime_errors",
+    "desc": "Fetch real-time Flutter runtime errors, uncaught exceptions, and stderr logs from the running application.",
+    "params": [
+      "vmServiceUri?"
+    ],
+    "args": "{ vmServiceUri }"
+  },
+  {
+    "name": "flutter_inspect_live_widgets",
+    "desc": "Inspect the live running widget tree and render objects of the active Flutter application.",
+    "params": [
+      "vmServiceUri?",
+      "objectGroup?"
+    ],
+    "args": "{ vmServiceUri, objectGroup }"
+  },
+  {
+    "name": "flutter_find_unused_translations",
+    "desc": "Scan all ARB translation keys and compare with lib/ code to find unused/dead translation keys.",
+    "params": [],
+    "args": ""
+  },
+  {
+    "name": "flutter_validate_icu_translations",
+    "desc": "Validate ICU syntax, placeholder consistency ({name}), and plural balance across all ARB translation files.",
+    "params": [],
+    "args": ""
+  },
+  {
+    "name": "flutter_auto_translate_missing",
+    "desc": "Generate structured translation payload for missing keys across locales, or batch apply translated keys.",
+    "params": [
+      "sourceLocale?",
+      "key",
+      "description?"
+    ],
+    "args": "{ action, sourceLocale, translationsToApply }"
+  },
+  {
+    "name": "flutter_detect_circular_dependencies",
+    "desc": "Detect circular dependency cycles across project files (A -> B -> C -> A) to prevent architectural degradation.",
+    "params": [],
+    "args": ""
+  },
+  {
+    "name": "flutter_validate_architecture_rules",
+    "desc": "Validate layer boundary rules (e.g. Domain must not depend on Data/UI, Core must not depend on Features).",
+    "params": [
+      "name",
+      "fromLayer",
+      "description"
+    ],
+    "args": "{ customRules }"
+  },
+  {
+    "name": "flutter_detect_unused_assets",
+    "desc": "Scan pubspec.yaml asset directories and detect unused/unreferenced image, icon, or data assets.",
+    "params": [],
+    "args": ""
+  },
+  {
+    "name": "flutter_get_git_blast_radius",
+    "desc": "Automatically calculate blast radius and affected entry points/execution flows from current Git diff changes.",
+    "params": [
+      "maxDepth?"
+    ],
+    "args": "{ maxDepth }"
+  },
+  {
+    "name": "flutter_analyze_widget_depth",
+    "desc": "Analyze widget hierarchy nesting depth across project files and detect excessive nesting exceeding thresholds (inspired by DCM widget-nesting-depth).",
+    "params": [
+      "maxDepthThreshold?"
+    ],
+    "args": "{ maxDepthThreshold }"
+  },
+  {
+    "name": "flutter_detect_duplicate_widgets",
+    "desc": "Detect duplicate or near-identical widget subtrees across project files and generate proposals for extracting reusable custom widgets (inspired by DCM Duplicate Widget Analyzer).",
+    "params": [
+      "minNodeCount?"
+    ],
+    "args": "{ minNodeCount }"
+  },
+  {
+    "name": "flutter_detect_memory_leaks",
+    "desc": "Detect potential memory leaks and undisposed controllers (TextEditingController, AnimationController, ScrollController, StreamSubscription, FocusNode, etc.) in State classes (inspired by leak_tracker & saropa_lints).",
+    "params": [],
+    "args": ""
+  },
+  {
+    "name": "flutter_simulate_ui_action",
+    "desc": "Simulate user UI interactions (tap, enterText, scroll) on the live running Flutter app via VM Service (inspired by Marionette MCP & Flutter Driver).",
+    "params": [
+      "target",
+      "value?",
+      "vmUri?"
+    ],
+    "args": "{ action, target, value, vmUri }"
+  },
+  {
+    "name": "flutter_get_architectural_layers",
+    "desc": "Classify project files into Clean Architecture layers (Presentation, Domain, Data, Core), calculate Lakos coupling metrics (Ca, Ce, Instability), and detect cross-layer violations (inspired by Lakos Architecture Visualizer).",
+    "params": [],
+    "args": ""
+  }
+]

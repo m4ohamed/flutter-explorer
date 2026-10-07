@@ -166,10 +166,10 @@ export class IndexManager {
     }
     return false;
   }
-  public getProjectMode(): 'flutter' | 'web' {
-    if (fs.existsSync(path.join(this.workspaceRoot, 'pubspec.yaml'))) {
-      return 'flutter';
-    }
+  public getProjectMode(): 'flutter' | 'android' | 'web' {
+    const type = ProjectDetector.getProjectType(this.workspaceRoot);
+    if (type === 'flutter') return 'flutter';
+    if (type === 'android') return 'android';
     return 'web';
   }
   public dispose(): void {
@@ -233,13 +233,17 @@ export class IndexManager {
         const dartFiles = await vscode.workspace.findFiles('lib/**/*.dart', '**/.*', 10000, token);
         if (token.isCancellationRequested)
           return;
-        const androidFiles = await vscode.workspace.findFiles('android/app/**/*.{dart,kt,java,xml,gradle}', '**/.*', 1000, token);
+        const androidFiles = await vscode.workspace.findFiles('android/app/**/*.{dart,kt,java,xml,gradle,gradle.kts}', '**/.*', 1000, token);
         if (token.isCancellationRequested)
           return;
         const arbFiles = await vscode.workspace.findFiles('lib/**/*.arb', '**/.*', 500, token);
         if (token.isCancellationRequested)
           return;
         allFiles = [...dartFiles, ...androidFiles, ...arbFiles].filter(uri => !this.isFileExcluded(uri.fsPath));
+      }
+      else if (mode === 'android') {
+        const excludePattern = '**/{build,.gradle,.idea,.git,node_modules,out,dist}/**';
+        allFiles = (await vscode.workspace.findFiles('**/*.{kt,java,xml,gradle,gradle.kts}', excludePattern, 10000, token)).filter(uri => !this.isFileExcluded(uri.fsPath));
       }
       else {
         const excludePattern = '**/{node_modules,out,dist,build,.git,.next}/**';
@@ -291,6 +295,12 @@ export class IndexManager {
               info.contentHash = this.computeHash(content);
               const parsedInfo = this.parser.parse(info.filePath, content);
               info.warnings = parsedInfo.warnings;
+              if (!info.imports || info.imports.length === 0) {
+                info.imports = parsedInfo.imports;
+              }
+              if (!info.exports || info.exports.length === 0) {
+                info.exports = parsedInfo.exports;
+              }
               this.index.set(info.filePath, info);
               filesToUpsert.push({ relPath: info.filePath, hash: info.contentHash, info });
             }
@@ -752,6 +762,12 @@ export class IndexManager {
         if (ancestors.length > 0) {
           classAncestors.set(cls.name, ancestors);
         }
+        for (const meth of cls.methods || []) {
+          if (!classMethods.has(cls.name)) {
+            classMethods.set(cls.name, new Set());
+          }
+          classMethods.get(cls.name)!.add(meth.name);
+        }
       }
       for (const fn of info.functions || []) {
         if (fn.parentClass) {
@@ -811,6 +827,15 @@ export class IndexManager {
           }
         }
       }
+      for (const exp of info.exports || []) {
+        if (exp && !exp.startsWith('dart:')) {
+          const resolvedPath = this.resolveImportPath(filePath, exp);
+          if (resolvedPath && this.index.has(resolvedPath)) {
+            addNode(`file:${resolvedPath}`, path.basename(resolvedPath), 'file', resolvedPath);
+            edges.push({ source: fileId, target: `file:${resolvedPath}`, type: 'imports' });
+          }
+        }
+      }
       for (const cls of info.classes || []) {
         const classId = `class:${cls.name}`;
         addNode(classId, cls.name, 'class', filePath, cls.line);
@@ -823,6 +848,11 @@ export class IndexManager {
         }
         for (const mx of cls.mixins || []) {
           edges.push({ source: classId, target: `class:${mx}`, type: 'mixes_in' });
+        }
+        for (const m of cls.methods || []) {
+          const mId = `method:${cls.name}.${m.name}`;
+          addNode(mId, m.name, 'method', filePath, m.line);
+          edges.push({ source: classId, target: mId, type: 'contains' });
         }
       }
       for (const func of info.functions || []) {
@@ -1289,8 +1319,34 @@ export class IndexManager {
       }
       return importPath;
     }
-    const dir = path.dirname(fromFile);
-    return path.posix.normalize(path.posix.join(dir, importPath));
+    const normalizedFromFile = fromFile.replace(/\\/g, '/');
+    const dir = path.posix.dirname(normalizedFromFile);
+    const resolved = path.posix.normalize(path.posix.join(dir, importPath.replace(/\\/g, '/')));
+
+    if (this.index.has(resolved)) {
+      return resolved;
+    }
+
+    const candidates = [
+      resolved.replace(/\.js$/, '.ts'),
+      resolved.replace(/\.js$/, '.tsx'),
+      resolved.replace(/\.jsx$/, '.tsx'),
+      resolved + '.ts',
+      resolved + '.tsx',
+      resolved + '.js',
+      resolved + '.jsx',
+      resolved + '/index.ts',
+      resolved + '/index.tsx',
+      resolved + '/index.js'
+    ];
+
+    for (const cand of candidates) {
+      if (this.index.has(cand)) {
+        return cand;
+      }
+    }
+
+    return resolved;
   }
   private async readFile(uri: vscode.Uri): Promise<string> {
     const bytes = await vscode.workspace.fs.readFile(uri);
@@ -1445,13 +1501,29 @@ export class IndexManager {
           if (match)
             return match[1];
         }
+        for (const sf of ['settings.gradle.kts', 'settings.gradle']) {
+          const sp = path.join(currentDir, sf);
+          if (fs.existsSync(sp)) {
+            const content = fs.readFileSync(sp, 'utf-8');
+            const match = content.match(/rootProject\.name\s*=\s*['"]([^'"]+)['"]/);
+            if (match)
+              return match[1];
+          }
+        }
+        const pkgPath = path.join(currentDir, 'package.json');
+        if (fs.existsSync(pkgPath)) {
+          try {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+            if (pkg.name) return pkg.name;
+          } catch {}
+        }
         currentDir = path.dirname(currentDir);
       }
-      return null;
+      return path.basename(this.workspaceRoot);
     }
     catch (err) {
       console.error('[FlutterExplorer] Error loading project name:', err);
-      return null;
+      return path.basename(this.workspaceRoot);
     }
   }
   public async compareParsersAndWriteReport(progress?: vscode.Progress<{ message?: string; increment?: number }>): Promise<void> {

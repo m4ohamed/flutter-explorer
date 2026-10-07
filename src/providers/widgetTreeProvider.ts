@@ -12,6 +12,16 @@ export interface WidgetTreeNode {
     depth: number;
 }
 
+export interface OutlineSymbolNode {
+    name: string;
+    detail?: string;
+    kind: string;
+    badgeText: string;
+    badgeClass: string;
+    line: number;
+    children?: OutlineSymbolNode[];
+}
+
 export class WidgetTreeProvider {
     constructor(private indexManager: IndexManager) { }
 
@@ -67,10 +77,26 @@ export class WidgetTreeProvider {
         // Ensure project name is loaded for the active file's project
         await this.indexManager.ensureProjectName(filePath);
 
+        // Try getting official hierarchical Outline from VS Code DocumentSymbolProvider
+        let outlineNodes: OutlineSymbolNode[] = [];
+        try {
+            const symbols = await vscode.commands.executeCommand<(vscode.DocumentSymbol | vscode.SymbolInformation)[]>(
+                'vscode.executeDocumentSymbolProvider',
+                editor.document.uri
+            );
+            if (symbols && symbols.length > 0) {
+                outlineNodes = this.convertDocumentSymbols(symbols);
+            }
+        } catch (err) {
+            console.error('[WidgetTreeProvider] Failed to fetch document symbols:', err);
+        }
+
         const parsed = this.indexManager.parseWidgetTreeForContent(filePath, content);
         const fileName = filePath.split(/[/\\]/).pop() || '';
         return {
             fileName,
+            filePath,
+            outline: outlineNodes.length > 0 ? outlineNodes : undefined,
             tree: this.serializeWidgets(parsed.widgets),
             classNames: (parsed.classes || []).map(c => ({
                 name: c.name,
@@ -84,6 +110,116 @@ export class WidgetTreeProvider {
             extensions: (parsed.extensions || []).map(e => ({ name: e.name, line: e.line })),
             typedefs: (parsed.typedefs || []).map(t => ({ name: t.name, line: t.line })),
         };
+    }
+
+    private convertDocumentSymbols(symbols: (vscode.DocumentSymbol | vscode.SymbolInformation)[]): OutlineSymbolNode[] {
+        if (!symbols || !Array.isArray(symbols) || symbols.length === 0) return [];
+        
+        const isDocSymbol = 'range' in symbols[0];
+        if (isDocSymbol) {
+            return (symbols as vscode.DocumentSymbol[]).map(s => this.mapDocSymbol(s));
+        }
+
+        return (symbols as vscode.SymbolInformation[]).map(s => {
+            const mapped = this.mapSymbolKind(s.kind, s.name);
+            return {
+                name: s.name,
+                detail: s.containerName,
+                kind: mapped.kind,
+                badgeText: mapped.badgeText,
+                badgeClass: mapped.badgeClass,
+                line: s.location.range.start.line + 1,
+                children: []
+            };
+        });
+    }
+
+    private mapDocSymbol(symbol: vscode.DocumentSymbol): OutlineSymbolNode {
+        const rawName = symbol.name.trim();
+        let mapped = this.mapSymbolKind(symbol.kind, rawName);
+        let displayName = rawName;
+
+        // Handle Markdown headings (e.g. # Title, ## Subtitle)
+        const mdMatch = rawName.match(/^(#{1,6})\s+(.*)/);
+        if (mdMatch) {
+            mapped = {
+                kind: 'heading',
+                badgeText: `H${mdMatch[1].length}`,
+                badgeClass: 'badge-class'
+            };
+            displayName = mdMatch[2].trim();
+        } else if (rawName.startsWith('#')) {
+            const hLen = rawName.match(/^(#{1,6})/)?.[1].length || 1;
+            mapped = {
+                kind: 'heading',
+                badgeText: `H${hLen}`,
+                badgeClass: 'badge-class'
+            };
+            displayName = rawName.replace(/^#+\s*/, '').trim();
+        }
+
+        return {
+            name: displayName,
+            detail: symbol.detail || undefined,
+            kind: mapped.kind,
+            badgeText: mapped.badgeText,
+            badgeClass: mapped.badgeClass,
+            line: symbol.range ? symbol.range.start.line + 1 : 1,
+            children: symbol.children && symbol.children.length > 0
+                ? symbol.children.map(c => this.mapDocSymbol(c))
+                : []
+        };
+    }
+
+    private mapSymbolKind(kind: vscode.SymbolKind, name: string): { kind: string; badgeText: string; badgeClass: string } {
+        switch (kind) {
+            case vscode.SymbolKind.Class:
+                return { kind: 'class', badgeText: 'class', badgeClass: 'badge-class' };
+            case vscode.SymbolKind.Method:
+                return { kind: 'method', badgeText: 'method', badgeClass: 'badge-function' };
+            case vscode.SymbolKind.Function:
+                return { kind: 'function', badgeText: 'fn', badgeClass: 'badge-function' };
+            case vscode.SymbolKind.Constructor:
+                return { kind: 'constructor', badgeText: 'ctor', badgeClass: 'badge-class' };
+            case vscode.SymbolKind.Field:
+            case vscode.SymbolKind.Property:
+                return { kind: 'property', badgeText: 'prop', badgeClass: 'badge-property' };
+            case vscode.SymbolKind.Variable:
+                return { kind: 'variable', badgeText: 'var', badgeClass: 'badge-variable' };
+            case vscode.SymbolKind.Constant:
+                return { kind: 'constant', badgeText: 'const', badgeClass: 'badge-variable' };
+            case vscode.SymbolKind.Interface:
+                return { kind: 'interface', badgeText: 'interface', badgeClass: 'badge-typedef' };
+            case vscode.SymbolKind.Enum:
+                return { kind: 'enum', badgeText: 'enum', badgeClass: 'badge-enum' };
+            case vscode.SymbolKind.EnumMember:
+                return { kind: 'enumMember', badgeText: 'case', badgeClass: 'badge-enum' };
+            case vscode.SymbolKind.Module:
+            case vscode.SymbolKind.Namespace:
+            case vscode.SymbolKind.Package:
+                return { kind: 'module', badgeText: 'mod', badgeClass: 'badge-extension' };
+            case vscode.SymbolKind.String: {
+                const hMatch = name.match(/^(#{1,6})\s*/);
+                if (hMatch) {
+                    return { kind: 'heading', badgeText: `H${hMatch[1].length}`, badgeClass: 'badge-class' };
+                }
+                return { kind: 'string', badgeText: 'str', badgeClass: 'badge-variable' };
+            }
+            case vscode.SymbolKind.Number:
+            case vscode.SymbolKind.Boolean:
+            case vscode.SymbolKind.Array:
+            case vscode.SymbolKind.Object:
+            case vscode.SymbolKind.Key:
+                return { kind: 'property', badgeText: 'key', badgeClass: 'badge-property' };
+            case vscode.SymbolKind.Event:
+                return { kind: 'event', badgeText: 'event', badgeClass: 'badge-function' };
+            case vscode.SymbolKind.Operator:
+                return { kind: 'operator', badgeText: 'op', badgeClass: 'badge-function' };
+            case vscode.SymbolKind.TypeParameter:
+                return { kind: 'type', badgeText: 'type', badgeClass: 'badge-typedef' };
+            default:
+                return { kind: 'symbol', badgeText: 'sym', badgeClass: 'badge-variable' };
+        }
     }
 
     private serializeWidgets(widgets: WidgetInfo[]): SerializedWidget[] {
@@ -105,6 +241,8 @@ export class WidgetTreeProvider {
 
 export interface WebviewTreeData {
     fileName: string | null;
+    filePath?: string | null;
+    outline?: OutlineSymbolNode[];
     tree: SerializedWidget[];
     classNames: { name: string; type: string; line: number }[];
     functions?: { name: string; line: number; isPrivate: boolean }[];

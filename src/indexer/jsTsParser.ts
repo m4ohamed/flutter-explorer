@@ -27,7 +27,8 @@ import {
   MixinUsage
 } from './dartParser';
 
-import { BaseParser } from './baseParser.js';
+import { BaseParser } from './baseParser';
+import { MockupAnalyzer } from './mockupAnalyzer';
 
 export class JsTsParser extends BaseParser<DartFileInfo> {
   /**
@@ -231,7 +232,8 @@ export class JsTsParser extends BaseParser<DartFileInfo> {
 
 
       // 1. Imports
-      const impES6 = trimmed.match(P.importes6);
+      const rawLine = lines[i].trim();
+      const impES6 = (trimmed.startsWith('import ') || rawLine.startsWith('import ')) ? rawLine.match(P.importes6) : null;
       if (impES6) {
         result.imports.push({
           path: impES6[1],
@@ -242,7 +244,24 @@ export class JsTsParser extends BaseParser<DartFileInfo> {
         });
         continue;
       }
-      const impCJS = trimmed.match(P.importCommonjs);
+      if (/^import\s*\{?/.test(rawLine) && !rawLine.includes(' from ')) {
+        for (let j = i + 1; j < Math.min(lines.length, i + 50); j++) {
+          const nextRaw = lines[j].trim();
+          const fromMatch = nextRaw.match(/(?:from\s+)?['"]([^'"]+)['"]/);
+          if (nextRaw.includes('from') && fromMatch) {
+            result.imports.push({
+              path: fromMatch[1],
+              alias: null,
+              showNames: [],
+              hideNames: [],
+              line: lineNum
+            });
+            break;
+          }
+          if (nextRaw.includes(';')) break;
+        }
+      }
+      const impCJS = (trimmed.includes('require(') || rawLine.includes('require(')) ? rawLine.match(P.importCommonjs) : null;
       if (impCJS) {
         result.imports.push({
           path: impCJS[1],
@@ -255,10 +274,21 @@ export class JsTsParser extends BaseParser<DartFileInfo> {
       }
 
       // 1.5. Exports / Re-exports
-      const expMatch = trimmed.match(/^export\s+(?:[\s\S]*?\s+from\s+)?['"]([^'"]+)['"]/);
+      const expMatch = (trimmed.startsWith('export ') || rawLine.startsWith('export ')) ? rawLine.match(/^export\s+(?:[\s\S]*?\s+from\s+)?['"]([^'"]+)['"]/) : null;
       if (expMatch) {
         result.exports.push(expMatch[1]);
         continue;
+      }
+      if (/^export\s*\{/.test(rawLine) && !rawLine.includes(' from ')) {
+        for (let j = i + 1; j < Math.min(lines.length, i + 30); j++) {
+          const nextRaw = lines[j].trim();
+          const fromMatch = nextRaw.match(/(?:from\s+)?['"]([^'"]+)['"]/);
+          if (nextRaw.includes('from') && fromMatch) {
+            result.exports.push(fromMatch[1]);
+            break;
+          }
+          if (nextRaw.includes(';')) break;
+        }
       }
 
       // 2. Warnings (Hardcoded text & colors)
@@ -643,7 +673,7 @@ export class JsTsParser extends BaseParser<DartFileInfo> {
 
         // Match Top-level variables
         const varMatch = trimmed.match(/^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=/);
-        if (varMatch && !['const', 'let', 'var', 'export', 'function', 'class', 'enum', 'interface'].includes(varMatch[1])) {
+        if (varMatch && braceDepth === 0 && scopeStack.length === 0 && !['const', 'let', 'var', 'export', 'function', 'class', 'enum', 'interface'].includes(varMatch[1])) {
           const name = varMatch[1];
           result.variables.push({
             name,
@@ -666,6 +696,19 @@ export class JsTsParser extends BaseParser<DartFileInfo> {
 
     this.analyzeUsages(maskedLines, result);
     this.extractFunctionCalls(maskedLines, result, lines);
+
+    const mockupWarnings = MockupAnalyzer.analyze(filePath, content, masked);
+    for (const mw of mockupWarnings) {
+      result.warnings.push({
+        type: mw.type,
+        message: mw.message,
+        line: mw.line,
+        codeSnippet: mw.codeSnippet,
+        suggestion: mw.suggestion,
+        category: mw.category,
+        severity: mw.severity,
+      });
+    }
 
     return result;
   }

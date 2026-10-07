@@ -3,7 +3,7 @@ import * as path from 'path';
 
 export interface SearchResult {
   name: string;
-  type: 'class_definition' | 'function_definition' | 'function_call' | 'enum_definition' | 'mixin_definition' | 'extension_definition' | 'typedef_definition' | 'variable_definition' | 'constructor_definition' | 'property_definition' | 'annotation_definition' | 'interface_definition';
+  type: 'class_definition' | 'function_definition' | 'function_call' | 'enum_definition' | 'mixin_definition' | 'extension_definition' | 'extension_type_definition' | 'typedef_definition' | 'variable_definition' | 'constructor_definition' | 'property_definition' | 'annotation_definition' | 'interface_definition';
   file: string;
   line: number;
   context?: string;
@@ -207,18 +207,31 @@ export class DirectSearch {
       }
 
       // Search for extension definitions (Dart/Kotlin extension functions loosely matched)
-      if (!filter || filter === 'extension') {
+      if (!filter || filter === 'extension' || filter === 'extensionType') {
         if (searchMode === 'definitions' || searchMode === 'both') {
           for (let i = 0; i < lines.length; i++) {
             const line = lines[i].trim();
             const extMatch = line.match(/^extension\s+(\w+)?\s+on\s+(\w+)/);
-            if (extMatch) {
+            if (extMatch && filter !== 'extensionType') {
               const name = extMatch[1] || 'unnamed extension';
               if (name.toLowerCase().includes(q) || extMatch[2].toLowerCase().includes(q)) {
                 results.push({
                   name,
                   type: 'extension_definition',
                   subtype: `on ${extMatch[2]}`,
+                  file,
+                  line: i + 1,
+                });
+              }
+            }
+            const extTypeMatch = line.match(/^extension\s+type\s+(\w+)\s*\(([^)]+)\)/);
+            if (extTypeMatch && filter !== 'extension') {
+              const name = extTypeMatch[1];
+              if (name.toLowerCase().includes(q) || extTypeMatch[2].toLowerCase().includes(q)) {
+                results.push({
+                  name,
+                  type: 'extension_type_definition',
+                  subtype: `on ${extTypeMatch[2]}`,
                   file,
                   line: i + 1,
                 });
