@@ -238,6 +238,9 @@ most file-path parameters also accept \`filePath\`/\`relativePath\`/\`path\` ali
 | \`flutter_read_fragment\` | Like above but auto-detects element type, with optional surrounding context lines. |
 | \`flutter_read_lines\` | Raw line-range read of any file (\`startLine\`/\`endLine\`/\`maxLines\`, capped at 800). Cheapest way to inspect around an error. |
 | \`flutter_get_file_info\` | Full parsed JSON for one file (classes, functions, imports, etc.) from the index. |
+| \`flutter_edit_file\` | Exact-string replace in a project text file; must match one place unless \`replaceAll\`; \`dryRun\`, \`expectedCount\`. |
+| \`flutter_replace_lines\` | Replace/insert/delete an inclusive 1-based line range; \`expectedOldText\` guards stale line numbers. |
+| \`flutter_write_file\` | Create a new text file (or \`overwrite: true\`); parent folders are created. |
 
 ## Impact / dependency analysis
 | Tool | Purpose |

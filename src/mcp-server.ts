@@ -15,6 +15,7 @@ import { BM25Search, BM25Document } from './indexer/bm25Search';
 import { PackageResolver } from './indexer/packageResolver';
 import { VmServiceBridge } from './runtime/vmServiceBridge';
 import { runProjectAnalysis, runBuildRunner } from './utils/analysisRunner';
+import { registerEditTools } from './mcp-edit-tools';
 
 // Redirect console.log to console.error to prevent corrupting MCP stdio JSON-RPC protocol
 const originalConsoleLog = console.log;
@@ -61,6 +62,21 @@ if (!currentProjectPath || currentProjectPath === "${workspaceFolder}") {
 if (!currentProjectPath) {
   currentProjectPath = ProjectDetector.findProjectRoot(process.cwd());
 }
+
+// Path Traversal Protection: Ensure resolved path stays within expected boundaries
+try {
+  const resolved = path.resolve(currentProjectPath);
+  if (resolved.includes('..') || !path.isAbsolute(resolved)) {
+    console.error(`[MCP] Invalid project path detected (traversal attempt?): ${currentProjectPath}`);
+    currentProjectPath = '';
+  } else {
+    currentProjectPath = resolved;
+  }
+} catch (e) {
+  console.error('[MCP] Failed to validate project path:', e);
+  currentProjectPath = '';
+}
+
 const PUBSPEC_PATH = () => path.join(currentProjectPath, "pubspec.yaml");
 
 let sqliteCache: SqliteCache | null = null;
@@ -166,6 +182,8 @@ const server = new McpServer({
   name: "flutter-explorer-mcp",
   version: "1.0.0",
 });
+
+registerEditTools(server, () => currentProjectPath);
 
 async function handleIndexError() {
   const cache = getSqliteCache();

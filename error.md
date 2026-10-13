@@ -291,3 +291,68 @@
 - **السبب الجذري (Root Cause):** ترقية `sqlite3` إلى `6.0.1` هي ترقية رئيسية (Breaking Change) تتطلب أدوات بناء C++ وتكسر توافق الـ ABI الخاص بـ Node.js داخل VS Code Extension Host (Electron).
 - **الحل الفعلي (The Fix):** الامتناع التام عن تشغيل `npm audit fix --force` واستخدام ميزة `overrides` في `package.json` لتحديث الحزم الفرعية الآمنة مثل `braces` دون لمس `sqlite3`.
 
+## 48. فشل تشغيل Dart SDK Analyzer على نظام Windows (spawn dart ENOENT / code -4058)
+- **الخطأ (The Bug):** ظهور رسالة خطأ `Dart SDK Analyzer failed to return results.` في VS Code، مصحوبة بسجل أخطاء في Console:
+  `Failed to start Dart analyzer: Error: spawn dart ENOENT {errno: -4058, code: 'ENOENT', syscall: 'spawn dart', path: 'dart'}` و `Dart analyzer process exited with code -4058`.
+- **السبب الجذري (Root Cause):** على أنظمة Windows، تأتي بيئة Flutter مع سكربت باتش `flutter\bin\dart.bat` وليس ملفاً تنفيذياً مباشراً في ذلك المجلد. عند استدعاء `spawn('dart', ..., { shell: false })` أو محاولة تشغيل سكربت `.bat` بـ `shell: false`، تفشل دالة `CreateProcess` التابعة لويندوز ولا تطبق امتدادات `PATHEXT`، كما ترفض إصدارات Node.js الحديثة تشغيل ملفات `.bat/.cmd` بدون شل وترمي `EINVAL` أو `ENOENT`.
+- **الحل الفعلي (The Fix):**
+  1. ترقية دالة `resolveDartExecutable` للبحث عن الملف التنفيذي الحقيقي `dart.exe` الموجود داخل مجلد التخزين المؤقت لـ Flutter: `<flutter>\bin\cache\dart-sdk\bin\dart.exe` أو على `PATH`، مما يتيح تشغيله مباشرة وسريعاً بـ `{ shell: false }`.
+  2. في حالة التعذر والعثور فقط على ملف `.bat` أو الأمر المجرد `dart`، تفعيل `{ shell: true }` أو استدعاء `cmd.exe /d /s /c` لتفادي `EINVAL` و `ENOENT`.
+  3. إصلاح فحص الإصدار `checkDartSdk` لمنع التنصيص المزدوج المعطوب لـ `%~dp0` على أسماء الأوامر المجردة.
+
+## 49. انهيار بناء الاعتماديات العكسية بخطأ `Cannot read properties of undefined (reading 'includes')`
+- **الخطأ (The Bug):** عند انتهاء الفهرسة أو تشغيل Dart SDK Analyzer، ينفجر بناء الاعتماديات العكسية بالخطأ:
+  `Error building reverse dependencies: TypeError: Cannot read properties of undefined (reading 'includes')`.
+- **السبب الجذري (Root Cause):** في دالة `buildReverseDependencies` بملف `indexManager.ts`، كانت دالة `addFile` تفترض أن كافة مصفوفات الاستخدامات (`classUsages`, `functionUsages`, `extensionUsages`, إلخ) تحتوي على خاصية موحدة اسمها `usedInFiles`. لكن كائنات `FunctionUsage` في محركات التحليل (`dartParser`, `jsTsParser`, `androidParser`) تعرف مصفوفة الملفات باسم `calledInFiles` وليس `usedInFiles`، مما جعل `u.usedInFiles` بقيمة `undefined` وأدى لانهيار استدعاء `.includes()`.
+- **الحل الفعلي (The Fix):**
+  1. جعل دالة `addFile` في `indexManager.ts` مرنة وآمنة تفحص وجود `usedInFiles` أو `calledInFiles` على حدة وتنشئ المصفوفة إن لم تكن معرفة:
+  ```typescript
+  const addFile = (usages: any[], fp: string) => {
+    for (const u of usages ?? []) {
+      if (!u) continue;
+      if (Array.isArray(u.usedInFiles) && !u.usedInFiles.includes(fp)) u.usedInFiles.push(fp);
+      if (Array.isArray(u.calledInFiles) && !u.calledInFiles.includes(fp)) u.calledInFiles.push(fp);
+      if (!u.usedInFiles && !u.calledInFiles) u.usedInFiles = [fp];
+    }
+  };
+  ```
+  2. إضافة الخاصية الاختيارية `usedInFiles?: string[]` إلى واجهة `FunctionUsage` وتعبئتها في `dartParser.ts` لضمان التوافق التام ثنائي الاتجاه.
+## 50. انهيار تفعيل الإضافة بسبب استيراد `sqlite3` الأصلي وتعارض Electron ABI
+- **الخطأ (The Bug):** عند محاولة تفعيل الإضافة في VS Code، تفشل الإضافة فوراً ولا تعمل أي أوامر مع رسالة خطأ:
+  `Activating extension 'Flutter Explorer' failed: The module 'node_sqlite3.node' was compiled against a different Node.js version using NODE_MODULE_VERSION 131. This version of Node.js requires NODE_MODULE_VERSION 123.`
+- **السبب الجذري (Root Cause):** استخدام استيراد صريح ثابت `import sqlite3 from 'sqlite3'` في رأس ملف `sqliteCache.ts`. يتم تجميع الاستيراد بـ esbuild إلى استدعاء `require('sqlite3')` عند تحميل الحزمة وقبل تشغيل دالة `activate()`. نظراً لاختلاف إصدار ABI بين Node.js العادي وإصدار Electron المضمن في VS Code، يفشل تحميل الحزمة وتنهار الإضافة كلياً دون إمكانية استخدام الـ JSON Cache الاحتياطي.
+- **الحل الفعلي (The Fix):**
+  1. تحويل استيراد `sqlite3` ليكون استيراد نوع فقط `import type sqlite3Type from 'sqlite3'`.
+  2. تغليف تحميل المكتبة داخل `try/catch` ديناميكي: `try { sqlite3Lib = require('sqlite3'); } catch (e) { ... }`.
+  3. عند تعذر تحميل المكتبة الثنائية، يتم التراجع بسلاسة وتلقائية لاستخدام الـ JSON Cache بدون أي انهيار في بيئة التشغيل.
+
+## 51. صراع الفواصل المائلة على Windows (`\` مقابل `/`) وفراغ نتائج الفهرس
+- **الخطأ (The Bug):** بعد اكتمال الفهرسة باستخدام محلل Dart SDK، تظهر جميع عمليات البحث في الإضافة وشجرة الودجات فارغة، ويفشل الوصول للملفات.
+- **السبب الجذري (Root Cause):** سكربت `dart_analyzer.dart` على نظام Windows يُرجع مسارات بـ Backslashes (مثل `lib\main.dart`). يتم حفظ هذه المسارات كمفاتيح في `this.index` وفي قاعدة البيانات، بينما تبحث واجهات الإضافة ومراقب الملفات باستخدام المسارات النسبية الموحدة بـ Forward Slashes (مثل `lib/main.dart`)، مما يؤدي لإرجاع `undefined` دائماً.
+- **الحل الفعلي (The Fix):** تطبيع كافة مسارات `info.filePath` فور استلامها في `dartAnalyzerWrapper.ts` و `indexManager.ts` باستخدام `.replace(/\\/g, '/')` لضمان توحيد مفاتيح الفهرس وقاعدة البيانات بصيغة الـ POSIX.
+
+## 52. تجمد الفهرسة الأولية لمدة 10 دقائق وفقدان مسار `tools/dart_analyzer.dart` في الحزمة المجمعة
+- **الخطأ (The Bug):** عند تشغيل الفهرسة الأولية، تتجمد الإضافة ويظل مؤشر التحميل معلقاً لمدة 10 دقائق دون استجابة، بالإضافة لفشل العثور على سكربت التحليل عند عدم تمرير `extensionPath`.
+- **السبب الجذري (Root Cause):** تحديد مهلة زمنية مفرطة `ANALYZER_TIMEOUT_MS = 10 * 60 * 1000` (10 دقائق)، وعدم تضمين مسار المستوى الواحد `path.join(__dirname, '..', 'tools', ...)` في مصفوفة `searchPaths` لأن الملف المجمع يقع في مجلد `out` (على بعد خطوة واحدة فقط من مجلد tools وليس خطوتين).
+- **الحل الفعلي (The Fix):**
+  1. تقليل مهلة التحليل إلى 90 ثانية كحد أقصى للتحويل السريع إلى الـ Regex Parser في حالة تعثر الـ SDK.
+  2. إضافة المسار الصحيح المباشر `path.join(__dirname, '..', 'tools', 'dart_analyzer.dart')` ضمن مصفوفة البحث.
+  3. تمرير `sidebarProvider` إلى دالة الفهرسة الأولية لتحديث بيانات الواجهة الجانبية فور الانتهاء.
+
+## 53. تجمد الإضافة عند قراءة/كتابة قاعدة بيانات SQLite (`152/152 done` وتعليق `loadCache`)
+- **الخطأ (The Bug):** عند انتهاء فحص الملفات (مثلاً `Indexing: [] (152/152 done, 0 remaining)...`) أو عند بدء تشغيل الإضافة وقاعدة بيانات `flutter-explorer.db` موجودة مسبقاً، تعلق الإضافة ولا تكتمل أبداً. وعند الضغط على ترس إعدادات الإضافة يظهر أسفل الشاشة رسالة VS Code "Activating extension..." دون أي استجابة ولا تعمل إلا إذا تم حذف ملف `flutter-explorer.db`.
+- **السبب الجذري (Root Cause):**
+  1. في دالة `batchUpsertDartFiles`، كانت استدعاءات `stmt.run()` غير المتزامنة تُطلق في حلقة تكرارية ثم يُستدعى `stmt.finalize()` و `this.db.run('COMMIT')` فوراً في نفس الـ tick المتزامن دون انتظار انتهاء كل استعلام. هذا أدى إلى خطأ `SQLITE_BUSY: cannot commit transaction - SQL statements in progress` أو تعليق libuv worker thread في مكتبة `node-sqlite3`.
+  2. غياب مهلة أمان (Safety Timeout) في دوال `batchUpsertDartFiles`, `getAllDartFiles`, `getAllArbFiles`, `getMeta`, و `clearAll`، مما جعل الـ Promise يظل معلقاً للأبد (`pending`) عند حدوث أي قفل ملفات من عمليات متزامنة (مثل خادم MCP على نفس الملف أو مزامنة OneDrive).
+  3. استخدام وضع القفل الحصري `PRAGMA journal_mode = DELETE` بدلاً من `PRAGMA journal_mode = WAL` الذي يدعم القراءة والكتابة المتزامنة بدون تعارض (Concurrent Multi-Process Access).
+  4. استدعاء `await indexManager.loadCache()` في دالة `activate()` دون حماية زمنية تمنع تجمد تفعيل الإضافة في VS Code عند بطء قراءة القرص.
+- **الحل الفعلي (The Fix):**
+  1. إعادة هيكلة `batchUpsertDartFiles` لتتبع اكتمال كافة الاستعلامات عبر عداد `pending--`، واستدعاء `stmt.finalize` ثم `COMMIT` فقط عند وصول العداد لصفر، مع إضافة مؤقت أمان 10 ثوانٍ يفك أي تعليق تلقائياً.
+  2. إضافة مؤقتات أمان حاسمة (Safety Timeouts: 3-5 ثوانٍ) لجميع دوال القراءة والبيانات الوصفية مع التراجع للذاكرة والـ JSON عند انتهاء المهلة.
+  3. تفعيل `PRAGMA journal_mode = WAL` و `PRAGMA wal_checkpoint(TRUNCATE)` للسماح بتشغيل كل من VS Code Extension وخادم MCP معاً دون أقفال تصادمية.
+  4. حماية `loadCache()` في `extension.ts` بواسطة `Promise.race` ومؤقت 6 ثوانٍ مع `try/catch` كامل لمنع تعليق تفعيل الإضافة نهائياً.
+
+## 54. الكتابة فوق النسخ الاحتياطية المتزامنة في نفس الميلي‑ثانية في `backupFile`
+- **الخطأ (The Bug):** عند إجراء عدة تعديلات متتالية بسرعة (مثلاً 13 تعديلاً في حلقة سريعة)، يتم إنتاج عدد نسخ احتياطية أقل بكثير من المتوقع (مثلاً 7 نسخ فقط)، حيث تكتب النسخة الثانية فوق الأولى.
+- **السبب الجذري (Root Cause):** دالة `backupFile` في `configWriter.ts` كانت تسمّي ملف النسخة الاحتياطية بطابع زمني بدقة الميلي‑ثانية فقط (`stamp = new Date().toISOString().replace(/[:.]/g, '-')`). وإذا تم استدعاء الدالة مرتين أو أكثر في نفس الميلي‑ثانية لنفس الملف، يُنتج نفس الاسم ويقوم `fs.copyFileSync` بالكتابة فوق النسخة السابقة.
+- **الحل الفعلي (The Fix):** التحقق من وجود الملف المستهدف `fs.existsSync(target)` في حلقة تكرارية وإضافة لاحقة فريدة `~${String(n).padStart(3, '0')}` (مثل `<stamp>~001__<name>.bak`). واستخدام رمز `~` يضمن أيضاً ترتيب النسخ الأحدث بشكل صحيح عند تقليم النسخ القديمة (Pruning) لأن `~` يأتي بعد `_` في الترتيب الأبجدي.

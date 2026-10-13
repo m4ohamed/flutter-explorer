@@ -155,6 +155,7 @@ export interface FunctionUsage {
   parentClass: string | null;
   calledByFunctions: string[];
   calledInFiles: string[];
+  usedInFiles?: string[];
   confidence: 'high' | 'medium' | 'low';
 }
 export interface ExtensionUsage {
@@ -250,6 +251,19 @@ const NON_DEF_KEYWORDS = new Set([
   'return', 'await', 'throw', 'yield', 'new', 'else', 'case',
   'in', 'is', 'as', 'if', 'for', 'while', 'switch', 'catch', 'assert', 'final', 'var', 'const',
 ]);
+const NON_WIDGET_TYPES = new Set([
+  'Navigator', 'AppTheme', 'Theme', 'DurationFormatter', 'Localizations',
+  'Clipboard', 'HapticFeedback', 'Uuid', 'DateFormat', 'HiveService',
+  'BadgeHelper', '_DS', 'ReportPdfGenerator', 'ShareParams', 'XFile',
+  'AsyncValue', 'AsyncData', 'AsyncLoading', 'AsyncError',
+  'TextStyle', 'Border', 'BorderRadius', 'Radius', 'BoxDecoration', 'EdgeInsets',
+  'File', 'Uint8List', 'ByteData', 'Platform', 'TargetPlatform', 'WidgetsBinding',
+  'SystemChrome', 'MediaQuery', 'ScaffoldMessenger', 'FocusScope', 'FocusManager',
+  'String', 'int', 'double', 'bool', 'num', 'List', 'Map', 'Set',
+  'Future', 'Stream', 'Duration', 'DateTime', 'TextEditingController',
+  'GlobalKey', 'AnimationController', 'ScrollController', 'TabController',
+  'Color', 'Colors', 'Paint', 'Canvas', 'Path', 'Offset', 'Size', 'Rect',
+]);
 export class DartParser extends BaseParser<DartFileInfo> {
   private static readonly P = {
     import_: /^import\s+['"]([^'"]+)['"]\s*(?:as\s+([\w$]+))?\s*(?:show\s+([\w$,\s]+))?\s*(?:hide\s+([\w$,\s]+))?\s*;/,
@@ -258,32 +272,124 @@ export class DartParser extends BaseParser<DartFileInfo> {
     hardColor: /Color\s*\(\s*0x[A-Fa-f0-9]{8}\s*\)|Colors\.[a-zA-Z0-9_$]+/,
     enum_: /^enum\s+([\w$]+)\s*\{/,
     mixin_: /^mixin\s+(?!class\b)([\w$]+)(?:\s+on\s+([\w$]+))?\s*\{/,
-    extension_: /^extension\s+([\w$]+)?\s+on\s+([\w$<>\[\]?,\s]+?)\s*\{/,
+    extension_: /^extension(?:\s+([\w$]+))?\s+on\s+([\w$<>\[\]?,\s]+?)\s*\{/,
     extensionType_: /^extension\s+type\s+(const\s+)?([\w$]+)(?:\.([\w$]+))?\s*\(([\w$<>\[\]?,\s]+)\)(?:\s+implements\s+([\w$<>,\s]+))?\s*\{/,
     typedef_: /^typedef\s+([\w$]+)\s*=\s*([^;]+);/,
     typedefOld_: /^typedef\s+([\w$<>\[\]?,\s]+?)\s+([\w$]+)\s*\(([^)]*)\);/,
     annotation: /^@([\w$]+)/,
-    class_: /^((?:abstract\s+|sealed\s+|base\s+|interface\s+|final\s+)*)(mixin\s+)?class\s+([\w$]+)(?:\s+extends\s+((?:(?!with\b|implements\b)[\w$<>,\s\[\]])+))?(?:\s*with\s+((?:(?!implements\b)[\w$<>,\s\[\]])+))?(?:\s*implements\s+([\w$<>,\s\[\]]+))?/,
+    class_: /^((?:abstract\s+|sealed\s+|base\s+|interface\s+|final\s+|mixin\s+)*)(mixin\s+)?class\s+([\w$]+)(?:<[^>]*(?:<[^>]*>[^>]*)*>)?(?:\s+extends\s+((?:(?!with\b|implements\b)[\w$<>,\s\[\]?()])+))?(?:\s*with\s+((?:(?!implements\b)[\w$<>,\s\[\]?()])+))?(?:\s*implements\s+([\w$<>,\s\[\]?()]+))?/,
     ctor: /^\s*(const\s+)?(factory\s+)?([\w$]+)(?:\.([\w$]+))?\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(?::[^{;]*)?([\{;])/,
-    buildMethod: /(?:Widget|Route|PreferredSizeWidget|StatelessWidget|StatefulWidget)\s+([\w$]+)\s*\(([^)]*)\)/,
-    method: /^\s*(static\s+)?((?:\([\w$,\s{}:]+\)|[\w$][\w$<>\[\]?,\s]*?))\s+((?:operator\s*[!=<>&|^*+/~%-]+|[\w$]+))(?:<[\w$,\s<>]*>)?\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>;]/,
+    buildMethod: /^\s*(?:@override\s+)?(?:Widget|PreferredSizeWidget|StatelessWidget|StatefulWidget)\s+(build)\s*\(([^)]*)\)/,
+    method: /^\s*(static\s+)?((?:\([\w$,\s{}:]+\)|[\w$][\w$.<>\[\]?,\s()]*?))\s+((?:operator\s*[!=<>&|^*+/~%-]+|[\w$]+))(?:<[\w$,\s<>]*>)?\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*([\{=>;])/,
     getter: /^\s*(static\s+)?(?:([\w$<>\[\]?,\s]+?)\s+)?get\s+([\w$]+)\s*(=>|\{)/,
     setter: /^\s*(static\s+)?(?:([\w$]+)\s+)?set\s+([\w$]+)\s*\(([^)]*)\)/,
-    field: /^(?:(static)\s+)?(?:(final|const|late|var)\s+)?(?:(final|const|late|var)\s+)?(?:([\w$<>\[\]?,\s]+?)\s+)?([\w$]+)\s*(?:(=\s*[^;]+|;).*)/,
-    topVar: /^\s*(?:(final|const|late|var)\s+)?(?:(final|const|late|var)\s+)?(?:([\w$<>\[\]?,\s]+?)\s+)?([\w$]+)\s*((?:=\s*[^;]+|;).*)/,
-    topFunc: /^((?:\([\w$,\s{}:]+\)|[\w$][\w$<>\[\]?,\s]*?))\s+((?:operator\s*[!=<>&|^*+/~%-]+|[\w$]+))(?:<[\w$,\s<>]*>)?\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*[\{=>]/,
+    field: /^(?:(static)\s+)?(?:(final|const|late|var)\s+)?(?:(final|const|late|var)\s+)?(?:([\w$<>\[\]?,\s]+?)\s+)?([\w$]+)\s*(?:(=\s*[^;]*|;).*)/,
+    topVar: /^\s*(?:(final|const|late|var)\s+)?(?:(final|const|late|var)\s+)?(?:([\w$<>\[\]?,\s().{}]+?)\s+)?([a-zA-Z_$][\w$]*)\s*(?:(=)|(;))/,
+    topFunc: /^((?:\([\w$,\s{}:]+\)|[\w$][\w$.<>\[\]?,\s()]*?))\s+((?:operator\s*[!=<>&|^*+/~%-]+|[\w$]+))(?:<[\w$,\s<>]*>)?\s*\(([^)(]*(?:\([^)(]*\)[^)(]*)*)\)\s*(async\*?|sync\*?)?\s*([\{=>])/,
     callPat: /(?:([a-zA-Z_]\w*)\.)?([a-zA-Z_]\w*)\s*\(/g,
     classDef: /class\s+([\w$]+)/,
     funcDef: /([\w$<>\[\]?,\s]+?)\s+([\w$]+)\s*\(/,
   } as const;
   public preprocessSource(content: string): string {
-    return content
-      .replace(/\br'''[\s\S]*?'''|\br"""[\s\S]*?"""/g, m => m.replace(/[^\n]/g, ' '))
-      .replace(/\br'[^']*'|\br"[^"]*"/g, m => m.replace(/[^\n]/g, ' '))
-      .replace(/'''[\s\S]*?'''|"""[\s\S]*?"""/g, m => m.replace(/[^\n]/g, ' '))
-      .replace(/(["'])((?:\\.|(?!\1)[^\r\n\\])*)\1/g, m => m.replace(/[^\n]/g, ' '))
-      .replace(/\/\/[^\n]*/g, m => ' '.repeat(m.length))
-      .replace(/\/\*(?:[^*]|\*(?!\/))*\*\//g, m => m.replace(/[^\n]/g, ' '));
+    const len = content.length;
+    const out: string[] = new Array(len);
+    let i = 0;
+
+    while (i < len) {
+      const ch = content[i];
+      const next = i + 1 < len ? content[i + 1] : '';
+
+      // Check for single-line comment: //
+      if (ch === '/' && next === '/') {
+        out[i] = ' ';
+        out[i + 1] = ' ';
+        i += 2;
+        while (i < len && content[i] !== '\n') {
+          out[i] = ' ';
+          i++;
+        }
+        if (i < len && content[i] === '\n') {
+          out[i] = '\n';
+          i++;
+        }
+        continue;
+      }
+
+      // Check for multi-line comment: /* ... */
+      if (ch === '/' && next === '*') {
+        out[i] = ' ';
+        out[i + 1] = ' ';
+        i += 2;
+        while (i < len) {
+          if (content[i] === '*' && i + 1 < len && content[i + 1] === '/') {
+            out[i] = ' ';
+            out[i + 1] = ' ';
+            i += 2;
+            break;
+          }
+          out[i] = content[i] === '\n' ? '\n' : ' ';
+          i++;
+        }
+        continue;
+      }
+
+      // Check for raw string prefix: r'...' or r"..." or r'''...''' or r"""..."""
+      const isRaw = (ch === 'r' && (next === "'" || next === '"'));
+      let strStart = i;
+      if (isRaw) {
+        strStart = i + 1;
+      }
+      const quoteChar = isRaw ? next : ch;
+
+      if (quoteChar === "'" || quoteChar === '"') {
+        const isTriple = (strStart + 2 < len && content[strStart + 1] === quoteChar && content[strStart + 2] === quoteChar);
+        if (isTriple) {
+          const endMarker = quoteChar + quoteChar + quoteChar;
+          for (let k = i; k < strStart + 3; k++) {
+            out[k] = ' ';
+          }
+          i = strStart + 3;
+          while (i < len) {
+            if (content.startsWith(endMarker, i)) {
+              out[i] = ' ';
+              out[i + 1] = ' ';
+              out[i + 2] = ' ';
+              i += 3;
+              break;
+            }
+            out[i] = content[i] === '\n' ? '\n' : ' ';
+            i++;
+          }
+          continue;
+        } else {
+          for (let k = i; k <= strStart; k++) {
+            out[k] = ' ';
+          }
+          i = strStart + 1;
+          while (i < len && content[i] !== '\n') {
+            if (!isRaw && content[i] === '\\' && i + 1 < len) {
+              out[i] = ' ';
+              out[i + 1] = ' ';
+              i += 2;
+              continue;
+            }
+            if (content[i] === quoteChar) {
+              out[i] = ' ';
+              i++;
+              break;
+            }
+            out[i] = ' ';
+            i++;
+          }
+          continue;
+        }
+      }
+
+      out[i] = ch;
+      i++;
+    }
+
+    return out.join('');
   }
   private findContainer(
     result: DartFileInfo,
@@ -355,6 +461,7 @@ export class DartParser extends BaseParser<DartFileInfo> {
     let braceDepth = 0;
     let inBuildMethod = false;
     let buildBraceStart = 0;
+    let buildStartLine = 1;
     let buildLines: string[] = [];
     const P = DartParser.P;
     const syncedLines = new Set<number>();
@@ -423,7 +530,7 @@ export class DartParser extends BaseParser<DartFileInfo> {
             }
             if (inBuildMethod && braceDepth <= buildBraceStart) {
               inBuildMethod = false;
-              const wt = this.parseWidgetTree(buildLines.join('\n'), true);
+              const wt = this.parseWidgetTree(buildLines.join('\n'), true, buildStartLine);
               if (wt.length > 0)
                 result.widgets.push(...wt);
               buildLines = [];
@@ -605,26 +712,53 @@ export class DartParser extends BaseParser<DartFileInfo> {
       }
       const depthBeforeSync = braceDepth;
       syncBraces(i);
-      if (currentClass() && P.buildMethod.test(trimmed)) {
+      const topScope = scopeStack[scopeStack.length - 1];
+      const isDirectlyInClass = topScope && (topScope.type === 'class' || topScope.type === 'extensionType');
+      const cc = currentClass();
+
+      if (isDirectlyInClass && cc && P.buildMethod.test(trimmed)) {
         const buildMatch = trimmed.match(P.buildMethod);
-        const cc = currentClass();
-        if (buildMatch && cc) {
+        if (buildMatch) {
           const methodName = buildMatch[1];
           const methodInfo: FunctionInfo = {
-            name: methodName, returnType: trimmed.split(/\s+/)[0] || 'Widget', params: buildMatch[2].trim().replace(/\n/g, ' '),
-            line: lineNum, isPrivate: methodName.startsWith('_'),
+            name: methodName, returnType: 'Widget', params: buildMatch[2].trim().replace(/\s+/g, ' '),
+            line: lineNum, isPrivate: false,
             isAsync: false, isStatic: false, parentClass: cc,
           };
           this.attachMethod(result, cc, methodInfo);
           const hLines = buildMatch[0].split('\n').length;
           syncBraces(i, hLines);
-          scopeStack.push({ type: 'function', name: methodName, braceDepth: braceDepth - 1, ref: methodInfo });
-          inBuildMethod = true;
-          buildBraceStart = braceDepth - 1;
-          buildLines = [];
-          const braceIdx = line.indexOf('{');
-          if (braceIdx !== -1 && braceIdx < line.length - 1) {
-            buildLines.push(maskedLine.substring(braceIdx + 1));
+          // Braces still open from the matched header. A single-line body such as
+          // `Widget build(ctx) { return X(); }` has netOpen 0 — its scope frame must
+          // not be pushed, or it goes stale and swallows every line that follows.
+          const buildNetOpen = braceDepth - depthBeforeSync;
+          if (buildNetOpen > 0) {
+            scopeStack.push({ type: 'function', name: methodName, braceDepth: braceDepth - buildNetOpen, ref: methodInfo });
+            inBuildMethod = true;
+            buildBraceStart = braceDepth - buildNetOpen;
+            buildStartLine = lineNum;
+            buildLines = [];
+            const braceIdx = line.indexOf('{');
+            if (braceIdx !== -1 && braceIdx < line.length - 1) {
+              buildLines.push(maskedLine.substring(braceIdx + 1));
+            }
+          } else if (trimmed.includes('=>')) {
+            methodInfo.lineEnd = lineNum + hLines - 1;
+            const arrowIdx = line.indexOf('=>');
+            if (arrowIdx !== -1) {
+              const wt = this.parseWidgetTree(line.substring(arrowIdx + 2), false, lineNum);
+              if (wt.length > 0) result.widgets.push(...wt);
+            }
+          } else if (trimmed.includes('{')) {
+            // Body already closed on this line: extract the tree from the remainder.
+            methodInfo.lineEnd = lineNum + hLines - 1;
+            const braceIdx = line.indexOf('{');
+            if (braceIdx !== -1) {
+              const wt = this.parseWidgetTree(line.substring(braceIdx + 1), false, lineNum);
+              if (wt.length > 0) result.widgets.push(...wt);
+            }
+          } else {
+            methodInfo.lineEnd = lineNum + hLines - 1;
           }
           i += hLines - 1;
           continue;
@@ -634,9 +768,8 @@ export class DartParser extends BaseParser<DartFileInfo> {
         buildLines.push(maskedLine);
         continue;
       }
-      const cc = currentClass();
-      if (cc) {
-        const mLookahead = maskedLines.slice(i, i + 30).join('\n');
+      if (isDirectlyInClass && cc && !currentFunction()) {
+        const mLookahead = maskedLines.slice(i, i + 65).join('\n');
         const ctorMatch = mLookahead.match(P.ctor);
         if (ctorMatch && ctorMatch[3] === cc) {
           result.constructors.push({
@@ -644,27 +777,62 @@ export class DartParser extends BaseParser<DartFileInfo> {
             className: cc,
             isFactory: !!ctorMatch[2],
             isConst: !!ctorMatch[1],
-            params: ctorMatch[5] ? ctorMatch[5].replace(/\n/g, ' ').trim() : '',
+            params: ctorMatch[5] ? ctorMatch[5].replace(/\s+/g, ' ').trim() : '',
             line: lineNum,
           });
           const hLines = ctorMatch[0].split('\n').length;
           syncBraces(i, hLines);
+          if (ctorMatch[6] === '{') {
+            const netOpen = braceDepth - depthBeforeSync;
+            if (netOpen > 0) {
+              scopeStack.push({ type: 'function', name: ctorMatch[4] || cc, braceDepth: braceDepth - netOpen });
+            }
+          }
           i += hLines - 1;
           continue;
         }
         const methodMatch = mLookahead.match(P.method);
-        if (methodMatch && !SKIP_METHODS.has(methodMatch[3]) && !RESERVED.has(methodMatch[3]) && methodMatch[3] !== cc && !methodMatch[2].trim().startsWith('return')) {
-          const methodInfo: FunctionInfo = {
-            name: methodMatch[3], returnType: methodMatch[2].trim(), params: methodMatch[4].trim().replace(/\n/g, ' '),
-            line: lineNum, isPrivate: methodMatch[3].startsWith('_'),
-            isAsync: !!methodMatch[5], isStatic: !!methodMatch[1], parentClass: cc,
-          };
-          this.attachMethod(result, cc, methodInfo);
-          const hLines = methodMatch[0].split('\n').length;
-          syncBraces(i, hLines);
-          scopeStack.push({ type: 'function', name: methodMatch[3], braceDepth: braceDepth - 1, ref: methodInfo });
-          i += hLines - 1;
-          continue;
+        if (methodMatch) {
+          const returnType = methodMatch[2].trim();
+          const methodName = methodMatch[3];
+          if (!NON_DEF_KEYWORDS.has(returnType) &&
+              !returnType.startsWith('return') &&
+              !returnType.startsWith('await') &&
+              !returnType.startsWith('throw') &&
+              !SKIP_METHODS.has(methodName) &&
+              !RESERVED.has(methodName) &&
+              methodName !== cc) {
+            const params = methodMatch[4].trim()
+              .replace(/\s+/g, ' ')
+              .replace(/\s*,\s*\]/g, ']')
+              .replace(/\s*,\s*\}/g, '}');
+            const methodInfo: FunctionInfo = {
+              name: methodName,
+              returnType: returnType,
+              params: params,
+              line: lineNum,
+              isPrivate: methodName.startsWith('_'),
+              isAsync: !!methodMatch[5],
+              isStatic: !!methodMatch[1],
+              parentClass: cc,
+            };
+            this.attachMethod(result, cc, methodInfo);
+            const hLines = methodMatch[0].split('\n').length;
+            syncBraces(i, hLines);
+            const terminator = methodMatch[6];
+            if (terminator === '{') {
+              const netOpen = braceDepth - depthBeforeSync;
+              if (netOpen > 0) {
+                scopeStack.push({ type: 'function', name: methodName, braceDepth: braceDepth - netOpen, ref: methodInfo });
+              } else {
+                methodInfo.lineEnd = lineNum + hLines - 1;
+              }
+            } else {
+              methodInfo.lineEnd = lineNum + hLines - 1;
+            }
+            i += hLines - 1;
+            continue;
+          }
         }
         const getterMatch = maskedLine.match(P.getter);
         if (getterMatch) {
@@ -704,35 +872,61 @@ export class DartParser extends BaseParser<DartFileInfo> {
         }
       }
       if (!currentClass() && depthBeforeSync === 0) {
-        const fLookahead = maskedLines.slice(i, i + 30).join('\n');
+        const fLookahead = maskedLines.slice(i, i + 65).join('\n');
         const eqIdx = fLookahead.indexOf('=');
         const parenIdx = fLookahead.indexOf('(');
         const hasAssignmentBeforeParen = eqIdx !== -1 && (parenIdx === -1 || eqIdx < parenIdx);
 
         const f = !hasAssignmentBeforeParen ? fLookahead.match(P.topFunc) : null;
-        if (f && !RESERVED.has(f[2]) && !RESERVED.has(f[1].trim()) && !f[1].trim().startsWith('return')) {
+        if (f && !RESERVED.has(f[2]) && !RESERVED.has(f[1].trim()) && !NON_DEF_KEYWORDS.has(f[1].trim()) && !f[1].trim().startsWith('return')) {
           const newFunc: FunctionInfo = {
-            name: f[2], returnType: f[1].trim(), params: f[3].trim().replace(/\n/g, ' '),
-            line: lineNum, isPrivate: f[2].startsWith('_'),
-            isAsync: !!f[4], isStatic: false, parentClass: null,
+            name: f[2],
+            returnType: f[1].trim(),
+            params: f[3].trim().replace(/\s+/g, ' ').replace(/\s*,\s*\]/g, ']').replace(/\s*,\s*\}/g, '}'),
+            line: lineNum,
+            isPrivate: f[2].startsWith('_'),
+            isAsync: !!f[4],
+            isStatic: false,
+            parentClass: null,
           };
           result.functions.push(newFunc);
           const hLines = f[0].split('\n').length;
           syncBraces(i, hLines);
-          scopeStack.push({ type: 'function', name: f[2], braceDepth: braceDepth - 1, ref: newFunc });
+          if (f[0].trim().endsWith('{')) {
+            const netOpen = braceDepth - depthBeforeSync;
+            if (netOpen > 0) {
+              scopeStack.push({ type: 'function', name: f[2], braceDepth: braceDepth - netOpen, ref: newFunc });
+            } else {
+              newFunc.lineEnd = lineNum + hLines - 1;
+            }
+          } else {
+            newFunc.lineEnd = lineNum + hLines - 1;
+          }
           i += hLines - 1;
         }
         else {
-          const varMatch = trimmed.match(P.topVar);
-          if (varMatch && !RESERVED.has(varMatch[4]) && varMatch[4] !== 'dynamic' && varMatch[4] !== 'void') {
+          const varLookahead = maskedLines.slice(i, i + 25).join('\n');
+          const varMatch = varLookahead.match(P.topVar);
+          if (varMatch && !RESERVED.has(varMatch[4]) && !NON_DEF_KEYWORDS.has(varMatch[4]) && varMatch[4] !== 'dynamic' && varMatch[4] !== 'void') {
             if (!result.functions.some(fn => fn.name === varMatch[4] && fn.line === lineNum)) {
               result.variables.push({
-                name: varMatch[4], type: varMatch[3] ? varMatch[3].trim() : 'dynamic',
-                value: varMatch[5] ? varMatch[5].replace('=', '').trim() : undefined,
-                line: lineNum, isConst: varMatch[1] === 'const' || varMatch[2] === 'const',
+                name: varMatch[4],
+                type: varMatch[3] ? varMatch[3].trim() : 'dynamic',
+                line: lineNum,
+                isConst: varMatch[1] === 'const' || varMatch[2] === 'const',
                 isFinal: varMatch[1] === 'final' || varMatch[2] === 'final',
-                isPrivate: varMatch[4].startsWith('_'), isTopLevel: true,
+                isPrivate: varMatch[4].startsWith('_'),
+                isTopLevel: true,
               });
+              let endI = i;
+              for (let k = i; k < Math.min(i + 80, maskedLines.length); k++) {
+                syncBraces(k);
+                if (braceDepth === 0 && maskedLines[k].includes(';')) {
+                  endI = k;
+                  break;
+                }
+              }
+              i = endI;
             }
           }
         }
@@ -846,7 +1040,7 @@ export class DartParser extends BaseParser<DartFileInfo> {
       }
     }
   }
-  parseWidgetTree(content: string, isMasked: boolean = false): WidgetInfo[] {
+  parseWidgetTree(content: string, isMasked: boolean = false, startLine: number = 1): WidgetInfo[] {
     const widgets: WidgetInfo[] = [];
     const masked = isMasked ? content : this.preprocessSource(content);
     const lines = content.split('\n');
@@ -866,10 +1060,14 @@ export class DartParser extends BaseParser<DartFileInfo> {
         const indent = mLine.length - mLine.trimStart().length;
         const name = wm[1];
         const dotMethod = wm[2];
-        if (dotMethod && /^(of|lerp|copyWith|maybeOf|values|parse|tryParse|fromJson|toJson)$/.test(dotMethod))
+
+        if (NON_WIDGET_TYPES.has(name) || RESERVED.has(name.toLowerCase()))
           continue;
-        if (RESERVED.has(name.toLowerCase()) || ['String', 'int', 'double', 'bool', 'List', 'Map', 'Set', 'Future', 'Stream', 'Duration', 'DateTime', 'TextEditingController', 'GlobalKey', 'AnimationController', 'ScrollController'].includes(name))
+        if (/.*(Entity|Model|Exception|Error|State|Result|Params|Provider|Repository|Source|Service|Helper|Util|Utils|Data)$/.test(name))
           continue;
+        if (dotMethod && /^(of|lerp|copyWith|maybeOf|values|parse|tryParse|fromJson|toJson|push|pop|format|formatDecimalDays|formatDuration|successColor|lightImpact|setData|getData|get|set|watch|read|select|show|showDialog|showSnackBar)$/.test(dotMethod))
+          continue;
+
         const originalTrimmed = lines[i].trim();
         const lineRemaining = originalTrimmed.substring(wm.index! + wm[0].length);
         if (/^\s*\)\s*=>/.test(lineRemaining))
@@ -885,7 +1083,7 @@ export class DartParser extends BaseParser<DartFileInfo> {
         }
         const widget: WidgetInfo = {
           name,
-          line: i + 1,
+          line: startLine + i,
           children: [],
           properties: detail ? [{ name: 'detail', value: detail }] : []
         };
@@ -930,7 +1128,7 @@ export class DartParser extends BaseParser<DartFileInfo> {
     for (const et of result.extensionTypes)
       addSymbol('class', et.name, [`extension type ${et.name}`]);
     const classUsageMap = new Map(result.classes.map(c => [c.name, { className: c.name, usedInFiles: [result.filePath], usedByClasses: [] as string[], usedByFunctions: [] as string[], confidence: 'medium' as const }]));
-    const funcUsageMap = new Map(result.functions.map(f => [f.name, { functionName: f.name, parentClass: f.parentClass, calledByFunctions: [] as string[], calledInFiles: [result.filePath], confidence: 'medium' as const }]));
+    const funcUsageMap = new Map(result.functions.map(f => [f.name, { functionName: f.name, parentClass: f.parentClass, calledByFunctions: [] as string[], calledInFiles: [result.filePath], usedInFiles: [result.filePath], confidence: 'medium' as const }]));
     const extUsageMap = new Map(result.extensions.map(e => [e.name, { extensionName: e.name, usedInFiles: [] as string[], confidence: 'medium' as const }]));
     const typedefUsageMap = new Map(result.typedefs.map(t => [t.name, { typedefName: t.name, usedInFiles: [] as string[], confidence: 'medium' as const }]));
     const varUsageMap = new Map(result.variables.map(v => [v.name, { variableName: v.name, usedInFiles: [] as string[], confidence: 'medium' as const }]));
@@ -1005,6 +1203,10 @@ export class DartParser extends BaseParser<DartFileInfo> {
               const u = funcUsageMap.get(sym.name)!;
               if (ctx.type === 'function' && ctx.name !== sym.name && !u.calledByFunctions.includes(ctx.name))
                 u.calledByFunctions.push(ctx.name);
+              if (!u.calledInFiles.includes(result.filePath))
+                u.calledInFiles.push(result.filePath);
+              if (u.usedInFiles && !u.usedInFiles.includes(result.filePath))
+                u.usedInFiles.push(result.filePath);
               break;
             }
             case 'extension': {

@@ -491,9 +491,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     // ─── Startup: Load Cache or Build Full Index ───────────
-    const cacheLoaded = await indexManager.loadCache();
+    let cacheLoaded = false;
+    try {
+        cacheLoaded = await Promise.race([
+            indexManager.loadCache(),
+            new Promise<boolean>((resolve) => setTimeout(() => {
+                console.warn('[FlutterExplorer] Cache load timed out after 6000ms. Building fresh index.');
+                resolve(false);
+            }, 6000))
+        ]);
+    } catch (e) {
+        console.error('[FlutterExplorer] Failed to load cache at startup:', e);
+        cacheLoaded = false;
+    }
+
     if (cacheLoaded) {
         updateStatusBar(indexManager);
+        sidebarProvider.postMessage({ command: 'stats', data: indexManager.getStats() });
+        sidebarProvider.postMessage({
+            command: 'analysisData',
+            data: {
+                missingTranslations: indexManager.analyzeTranslations(),
+                warnings: indexManager.getWarnings()
+            }
+        });
         fileWatcher.start();
         context.subscriptions.push(fileWatcher);
 
@@ -502,7 +523,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         });
     } else {
         context.subscriptions.push(fileWatcher);
-        runIndexProgressBuild(MESSAGES.INITIAL_INDEX, indexManager).then(() => {
+        runIndexProgressBuild(MESSAGES.INITIAL_INDEX, indexManager, sidebarProvider).then(() => {
             fileWatcher.start();
         });
     }
@@ -514,7 +535,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
 
     // ─── Show Welcome README ──────────────────────────────
-    const extensionVersion = context.extension.packageJSON.version;
+    const extensionVersion = context.extension?.packageJSON?.version ?? '1.2.5';
     const lastVersionOpened = context.globalState.get<string>('lastVersionOpened');
     if (lastVersionOpened !== extensionVersion) {
         context.globalState.update('lastVersionOpened', extensionVersion);

@@ -49,7 +49,12 @@ export function backupFile(filePath: string, backupDir: string = defaultBackupDi
     fs.mkdirSync(backupDir, { recursive: true });
     const safeName = filePath.replace(/[:\\/]+/g, '_').replace(/^_+/, '');
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const target = path.join(backupDir, `${stamp}__${safeName}.bak`);
+    let target = path.join(backupDir, `${stamp}__${safeName}.bak`);
+    // Two backups inside the same millisecond must not overwrite each other. '~' sorts after '_',
+    // so "<stamp>~001__<name>" is correctly seen as newer than "<stamp>__<name>" when pruning.
+    for (let n = 1; fs.existsSync(target); n++) {
+      target = path.join(backupDir, `${stamp}~${String(n).padStart(3, '0')}__${safeName}.bak`);
+    }
     fs.copyFileSync(filePath, target);
 
     const suffix = `__${safeName}.bak`;

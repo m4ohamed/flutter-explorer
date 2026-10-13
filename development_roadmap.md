@@ -4,7 +4,21 @@
 
 ---
 
-## 📅 إنجازات اليوم (14 سبتمبر 2026)
+## 📅 إنجازات اليوم (9 أكتوبر 2026)
+
+### 1. دمج أدوات التعديل والكتابة الآمنة في خادم MCP (`flutter-explorer-mcp`)
+- تم تسجيل أدوات التعديل الآمنة في [mcp-server.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/mcp-server.ts) عبر `registerEditTools`:
+  - `flutter_edit_file`: استبدال دقيق للنصوص مع حفظ الـ BOM ونهايات الأسطر وعمل نسخ احتياطية وتتبع عدد التطابقات.
+  - `flutter_replace_lines`: استبدال/حذف/إدراج الأسطر بأرقام أسطر موثوقة مع حارس `expectedOldText`.
+  - `flutter_write_file`: إنشاء ملفات جديدة داخل حدود المشروع وتجنب الكتابة فوق الملفات الموجودة إلا بإذن صريح.
+- تم ربط مسار المشروع النشط بالدالة السهمية `() => currentProjectPath` لضمان تتبع مسار المشروع ديناميكياً عند تغييره عبر `flutter_set_project_path`.
+- تم إصلاح دالة النسخ الاحتياطي `backupFile` في [configWriter.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/utils/configWriter.ts) لمنع الكتابة فوق النسخ المنشأة في نفس الميلي‑ثانية باستخدام لاحقة التسلسل (`~001`, `~002`).
+- تم تحديث جدول مراجع الأدوات في [skillsGenerator.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/utils/skillsGenerator.ts).
+- اجتياز جميع اختبارات الوحدات البرمجية (`103 passed`) وفحص الأنواع وبناء الحزم بنجاح (`npm run compile`).
+
+---
+
+## 📅 الإنجازات السابقة (14 سبتمبر 2026)
 
 ### 1. ترقية تبويب Tree إلى شجرة كود هرمية تفاعلية بالكامل (Hierarchical Outline)
 - تم استبدال القوائم المسطحة الجامدة بنظام شجرة هرمية متداخلة وقابلة للطي (`Document Order` & `Folding`) تحاكي وتتفوق على شجرة IDE الأصلية:
@@ -442,5 +456,27 @@ npx tsc --noEmit.
   - `npm test`: اجتياز 66 اختباراً بنجاح تام (واختبار وحيد تم تجاوزه لكونه خاصاً بالـ Symlinks على ويندوز).
   - `npx tsc --noEmit`: اجتياز فحص الأنواع الصارم بنجاح تام (0 أخطاء).
   - `npm run compile`: إنتاج ملفات الحزمة الإنتاجية بنجاح (`out/mcp-server.js`, `out/extension.js`, `out/webview-graph.js`).
+
+---
+
+## 📅 إنجازات اليوم (8 أكتوبر 2026) — إصلاح Dart SDK Analyzer وحماية بناء الاعتماديات العكسية
+
+### 1. إصلاح تشغيل Dart SDK Analyzer على نظام Windows (`dartAnalyzerWrapper.ts`)
+- **حل خطأ `spawn dart ENOENT` (-4058) و `EINVAL` (-4071)**:
+  - ترقية دالة `resolveDartExecutable` لفحص مسار الملف التنفيذي المباشر `dart.exe` في كاش SDK لـ Flutter (`<flutter>\bin\cache\dart-sdk\bin\dart.exe`)، ومسارات PATH الرسمية.
+  - تشغيل `dart.exe` مباشرة بدون Shell لتفادي قيود وبطء ملفات الباتش.
+  - إضافة حارس مرن يفعّل `{ shell: true }` حصرياً عند الاضطرار لاستخدام سكربت باتش (`.bat/.cmd`) أو الأمر المجرد على ويندوز لمنع انهيار Node.js.
+  - تصحيح استدعاء `checkDartSdk` لمنع مشاكل تنصيص `%~dp0`.
+
+### 2. إصلاح وحماية بناء الاعتماديات العكسية (`indexManager.ts` & `dartParser.ts`)
+- **حل انهيار `TypeError: Cannot read properties of undefined (reading 'includes')`**:
+  - ترقية دالة `addFile` في `buildReverseDependencies` للتعامل بمرونة مع مصفوفات الاستخدامات المختلفة؛ والتحقق من `usedInFiles` و `calledInFiles` معاً، ومنع الانهيار عند غياب أي منهما.
+  - إضافة الخاصية `usedInFiles?: string[]` لواجهة `FunctionUsage` وتعبئتها في كافة المحللات البرمجية لضمان التوافق الثنائي الكامل.
+  - دمج جداول استخدامات الرموز (Class/Function/Variable/Enum Usages) المستخرجة من الـ Regex Parser داخل مخرجات Dart SDK Analyzer لضمان اكتمال شجرة العلاقات والاعتماديات العكسية للمشروع كاملاً.
+
+### 3. التحقق واختبار سلامة البناء
+- اجتياز فحص الأنواع الصارم `npx tsc --noEmit` بنجاح بنسبة 100% (exit code 0 بدون أخطاء).
+- تجميع الكود المصدري لحظياً عبر `npm run watch`.
+
 
 

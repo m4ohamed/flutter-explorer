@@ -40,14 +40,20 @@ void main(List<String> args) async {
 
         try {
           stderr.writeln('ANALYZING:${p.basename(path)}');
-          // getResolvedUnit gives us AST + Elements + LineInfo
-          final result = await context.currentSession.getResolvedUnit(path);
+          // getResolvedUnit gives us AST + Elements + LineInfo with a 4s per-file timeout
+          final result = await context.currentSession.getResolvedUnit(path).timeout(
+            const Duration(seconds: 4),
+            onTimeout: () {
+              stderr.writeln('TIMEOUT_SKIPPING:${p.basename(path)}');
+              return null as dynamic;
+            },
+          );
           if (result is ResolvedUnitResult) {
             final unit = result.unit;
             final lineInfo = result.lineInfo;
 
             final fileInfo = {
-              'filePath': p.relative(path, from: projectPath),
+              'filePath': p.relative(path, from: projectPath).replaceAll(r'\', '/'),
               'classes': <Map<String, dynamic>>[],
               'functions': <Map<String, dynamic>>[],
               'enums': <Map<String, dynamic>>[],
@@ -63,7 +69,8 @@ void main(List<String> args) async {
             // 1. Elements Analysis (Classes, Methods, etc.)
             for (final declaration in unit.declarations) {
               if (declaration is ClassDeclaration) {
-                final clazz = declaration.declaredElement!;
+                final clazz = declaration.declaredElement;
+                if (clazz == null) continue;
                 final methods = <Map<String, dynamic>>[];
                 final props = <Map<String, dynamic>>[];
 
@@ -120,7 +127,8 @@ void main(List<String> args) async {
                   'line': lineInfo.getLocation(clazz.nameOffset).lineNumber,
                 });
               } else if (declaration is FunctionDeclaration) {
-                final function = declaration.declaredElement!;
+                final function = declaration.declaredElement;
+                if (function == null) continue;
                 (fileInfo['functions'] as List).add({
                   'name': function.name,
                   'returnType': function.returnType.getDisplayString(withNullability: true),
@@ -130,7 +138,8 @@ void main(List<String> args) async {
                   'line': lineInfo.getLocation(function.nameOffset).lineNumber,
                 });
               } else if (declaration is EnumDeclaration) {
-                final enm = declaration.declaredElement!;
+                final enm = declaration.declaredElement;
+                if (enm == null) continue;
                 (fileInfo['enums'] as List).add({
                   'name': enm.name,
                   'values': enm.fields.where((f) => f.isEnumConstant).map((f) => f.name).toList(),
@@ -138,14 +147,16 @@ void main(List<String> args) async {
                   'line': lineInfo.getLocation(enm.nameOffset).lineNumber,
                 });
               } else if (declaration is MixinDeclaration) {
-                final mixin = declaration.declaredElement!;
+                final mixin = declaration.declaredElement;
+                if (mixin == null) continue;
                 (fileInfo['mixins'] as List).add({
                   'name': mixin.name,
                   'isPrivate': mixin.isPrivate,
                   'line': lineInfo.getLocation(mixin.nameOffset).lineNumber,
                 });
               } else if (declaration is ExtensionDeclaration) {
-                final ext = declaration.declaredElement!;
+                final ext = declaration.declaredElement;
+                if (ext == null) continue;
                 final methods = <Map<String, dynamic>>[];
                 for (final method in ext.methods) {
                   methods.add({
@@ -166,14 +177,16 @@ void main(List<String> args) async {
                   'line': lineInfo.getLocation(ext.nameOffset != -1 ? ext.nameOffset : declaration.offset).lineNumber,
                 });
               } else if (declaration is GenericTypeAlias) {
-                final typedef_ = declaration.declaredElement!;
+                final typedef_ = declaration.declaredElement;
+                if (typedef_ == null) continue;
                 (fileInfo['typedefs'] as List).add({
                   'name': typedef_.name,
                   'isPrivate': typedef_.isPrivate,
                   'line': lineInfo.getLocation(typedef_.nameOffset).lineNumber,
                 });
               } else if (declaration is FunctionTypeAlias) {
-                final typedef_ = declaration.declaredElement!;
+                final typedef_ = declaration.declaredElement;
+                if (typedef_ == null) continue;
                 (fileInfo['typedefs'] as List).add({
                   'name': typedef_.name,
                   'isPrivate': typedef_.isPrivate,
@@ -182,7 +195,8 @@ void main(List<String> args) async {
 
               } else if (declaration is TopLevelVariableDeclaration) {
                 for (final variable in declaration.variables.variables) {
-                  final element = variable.declaredElement!;
+                  final element = variable.declaredElement;
+                  if (element == null) continue;
                   (fileInfo['variables'] as List).add({
                     'name': element.name,
                     'type': element.type.getDisplayString(withNullability: true),

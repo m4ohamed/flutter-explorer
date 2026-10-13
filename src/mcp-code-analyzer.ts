@@ -768,7 +768,8 @@ export class CodeAnalyzer {
     const matchesLayer = (filePath: string, layerPattern: string): boolean => {
       const norm = filePath.replace(/\\/g, '/').toLowerCase();
       const pattern = layerPattern.toLowerCase();
-      return norm.includes(`/${pattern}/`) || norm.startsWith(`${pattern}/`) || norm.includes(pattern);
+      // Use segment-boundary matching to avoid substring false positives (e.g. 'data' matching 'metadata')
+      return norm.includes(`/${pattern}/`) || norm.startsWith(`${pattern}/`) || norm.endsWith(`/${pattern}`) || norm === pattern;
     };
 
     for (const [fromFile, info] of Object.entries(combinedIndex)) {
