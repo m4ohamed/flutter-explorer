@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { RustBridge } from './indexer/rustBridge';
 
 export interface SearchResult {
   name: string;
@@ -87,6 +88,70 @@ export class DirectSearch {
       } catch (e) {
         continue;
       }
+
+      // Optimize Dart search using Pure Rust AST parser when available
+      if (file.endsWith('.dart')) {
+        const bridge = RustBridge.getInstance();
+        const status = bridge.getStatus();
+        if (status.activeEngine === 'rust') {
+          const ast = bridge.parseDartAst(file, content);
+          if (ast && Array.isArray(ast.classes)) {
+            if (!filter || filter === 'class' || filter === 'widget') {
+              if (searchMode === 'definitions' || searchMode === 'both') {
+                for (const cls of ast.classes) {
+                  if (cls.name.toLowerCase().includes(q)) {
+                    if (filter === 'widget' && cls.type !== 'widget') continue;
+                    results.push({
+                      name: cls.name,
+                      type: 'class_definition',
+                      subtype: cls.type,
+                      file,
+                      line: cls.line,
+                    });
+                  }
+                }
+              }
+            }
+
+            if (!filter || filter === 'function') {
+              if (searchMode === 'definitions' || searchMode === 'both') {
+                const allFns = [
+                  ...(ast.functions || []),
+                  ...ast.classes.flatMap((c: any) => c.methods || [])
+                ];
+                for (const fn of allFns) {
+                  if (fn.name.toLowerCase().includes(q)) {
+                    results.push({
+                      name: fn.name,
+                      type: 'function_definition',
+                      parent: fn.parent_class,
+                      file,
+                      line: fn.line,
+                    });
+                  }
+                }
+              }
+            }
+
+            if (!filter || filter === 'enum') {
+              if (searchMode === 'definitions' || searchMode === 'both') {
+                for (const en of ast.enums || []) {
+                  if (en.name.toLowerCase().includes(q)) {
+                    results.push({
+                      name: en.name,
+                      type: 'enum_definition',
+                      file,
+                      line: en.line,
+                    });
+                  }
+                }
+              }
+            }
+            continue; // Finished processing Dart file via Rust
+          }
+        }
+      }
+
       const lines = content.split('\n');
 
       // Search for class definitions (Dart/Java/Kotlin/TS)
