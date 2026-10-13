@@ -57,8 +57,34 @@ jobs:
           name: flutter-explorer-vsix
           path: "*.vsix"
 
-      - name: 🚀 Upload Compiled WASM Core
+      - name: 🦀 Build Standalone Native MCP Server (Linux)
+        run: |
+          cargo build --release --manifest-path rust-core/Cargo.toml --bin flutter-explorer-mcp
+          cp rust-core/target/release/flutter-explorer-mcp ./flutter-explorer-mcp-linux
+
+      - name: 🚀 Upload Native Linux Binary
         uses: actions/upload-artifact@v4
         with:
-          name: flutter-explorer-wasm-pkg
-          path: out/wasm_pkg/
+          name: flutter-explorer-mcp-linux
+          path: flutter-explorer-mcp-linux
+
+  build-windows:
+    name: Compile Standalone Native Windows MCP Server (.exe)
+    runs-on: windows-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🦀 Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 🔨 Build Native Windows MCP Server (.exe)
+        run: |
+          cargo build --release --manifest-path rust-core/Cargo.toml --bin flutter-explorer-mcp
+          Copy-Item rust-core/target/release/flutter-explorer-mcp.exe ./flutter-explorer-mcp-windows.exe
+
+      - name: 🚀 Upload Native Windows .exe Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-explorer-mcp-windows-exe
+          path: flutter-explorer-mcp-windows.exe
