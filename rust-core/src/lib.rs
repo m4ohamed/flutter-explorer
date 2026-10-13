@@ -1,7 +1,9 @@
 pub mod bm25;
+pub mod parser;
 pub mod scanner;
 
 use bm25::{BM25Document, BM25Engine};
+use parser::PureDartParser;
 use scanner::CodeScanner;
 use wasm_bindgen::prelude::*;
 
@@ -41,3 +43,11 @@ pub fn scan_symbols_json(source: &str) -> String {
     let symbols = scanner.scan_symbols(source);
     serde_json::to_string(&symbols).unwrap_or_else(|_| "[]".to_string())
 }
+
+/// Pure Rust high-speed Dart AST parser
+#[wasm_bindgen]
+pub fn parse_dart_ast_json(source: &str) -> String {
+    let ast = PureDartParser::parse(source);
+    serde_json::to_string(&ast).unwrap_or_else(|_| "{}".to_string())
+}
+

@@ -157,4 +157,29 @@ export class RustBridge {
     const parsed = parser.parse(filePath, sourceCode);
     return parsed.warnings;
   }
+
+  /**
+   * Parse Dart AST structure (classes, methods, enums) using Pure Rust WASM if available, falling back to DartParser
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  public parseDartAst(filePath: string, sourceCode: string): any {
+    const status = this.getStatus();
+
+    if (status.activeEngine === 'rust' && this.wasmModule && typeof this.wasmModule.parse_dart_ast_json === 'function') {
+      try {
+        const rawJson = this.wasmModule.parse_dart_ast_json(sourceCode);
+        const parsed = JSON.parse(rawJson);
+        if (parsed && Array.isArray(parsed.classes)) {
+          return parsed;
+        }
+      } catch (err) {
+        console.warn('[RustBridge] Rust AST parser failed, falling back to TypeScript DartParser', err);
+      }
+    }
+
+    // Graceful Fallback: TypeScript DartParser
+    const parser = new DartParser();
+    return parser.parse(filePath, sourceCode);
+  }
 }
+

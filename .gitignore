@@ -9,4 +9,7 @@ dist
 .history
 code-review-graph-source/
 test
-rust-core/target/
+rust-core/target/
+*.zip
+src/wasm_pkg/
+

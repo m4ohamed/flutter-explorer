@@ -66,6 +66,20 @@ async function main() {
         }
         console.log(`[esbuild] Copied ${files.length} media files to out/media/`);
     }
+
+    // Copy wasm_pkg to out/wasm_pkg if present
+    const wasmDir = path.join(__dirname, 'src', 'wasm_pkg');
+    const outWasmDir = path.join(__dirname, 'out', 'wasm_pkg');
+    if (fs.existsSync(wasmDir)) {
+        if (!fs.existsSync(outWasmDir)) {
+            fs.mkdirSync(outWasmDir, { recursive: true });
+        }
+        const wasmFiles = fs.readdirSync(wasmDir);
+        for (const file of wasmFiles) {
+            fs.copyFileSync(path.join(wasmDir, file), path.join(outWasmDir, file));
+        }
+        console.log(`[esbuild] Copied ${wasmFiles.length} wasm assets to out/wasm_pkg/`);
+    }
 }
 
 main().catch(e => {

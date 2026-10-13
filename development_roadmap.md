@@ -16,6 +16,13 @@
 - إنشاء مسار البناء السحابي التلقائي عبر GitHub Actions في [.github/workflows/build-wasm.yml](file:///c:/Users/m4oha/OneDrive/Desktop/new/.github/workflows/build-wasm.yml).
 - اجتياز فحص الأنواع (`tsc --noEmit`) وبناء الحزم (`npm run compile`) واختبارات الوحدات بالكامل (`103 passed`).
 
+### 2. إضافة محلل الـ AST النحوي الخالص لدارت بلغة Rust (`PureDartParser`)
+- تم إنشاء [rust-core/src/parser.rs](file:///c:/Users/m4oha/OneDrive/Desktop/new/rust-core/src/parser.rs) كمحلل AST خالص فائق السرعة وخفيف الوزن (بديل Tree-sitter).
+- استخراج الكلاسات، وتحديد الودجات تلقائياً من صنف الوراثة (`StatelessWidget`, `StatefulWidget`, `ConsumerWidget`)، واستخراج الواجهات (`implements`)، والخلط (`mixins`).
+- استخراج الدوال والميثودات مع نوع الإرجاع والمعاملات ومحددات التزامن (`async`/`static`).
+- تصدير الدالة `parse_dart_ast_json` عبر WASM في [rust-core/src/lib.rs](file:///c:/Users/m4oha/OneDrive/Desktop/new/rust-core/src/lib.rs).
+- ربط الدالة داخل [rustBridge.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/indexer/rustBridge.ts) عبر `parseDartAst` مع التراجع التلقائي لـ `DartParser`.
+
 ---
 
 ## 📅 الإنجازات السابقة (9 أكتوبر 2026)
