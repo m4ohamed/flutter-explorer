@@ -34,4 +34,5 @@ cline_docs/**
 *.zip
 *.exe
 *.vsix
+parser_comparison_report.md
 

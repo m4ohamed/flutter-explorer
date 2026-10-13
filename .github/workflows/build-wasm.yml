@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Compile Rust WASM & VSIX
+    name: Compile Rust WASM & Linux MCP Server
     runs-on: ubuntu-latest
 
     steps:
@@ -29,33 +29,8 @@ jobs:
         run: |
           cd rust-core
           wasm-pack build --target nodejs --out-dir ../out/wasm_pkg
-          # Also copy bindings to src/wasm_pkg for TypeScript typings if needed
           mkdir -p ../src/wasm_pkg
           cp -r ../out/wasm_pkg/* ../src/wasm_pkg/
-
-      - name: 📦 Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-
-      - name: 📥 Install Dependencies
-        run: npm install
-
-      - name: 🔨 Compile Extension & MCP Server
-        run: npm run compile
-
-      - name: 🧪 Run Typecheck
-        run: npm run typecheck
-
-      - name: 📦 Package VSIX
-        run: npx vsce package --no-dependencies
-
-      - name: 🚀 Upload VSIX Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: flutter-explorer-vsix
-          path: "*.vsix"
 
       - name: 🚀 Upload Compiled WASM Core
         uses: actions/upload-artifact@v4
@@ -75,7 +50,8 @@ jobs:
           path: flutter-explorer-mcp-linux
 
   build-windows:
-    name: Compile Standalone Native Windows MCP Server (.exe)
+    name: Compile Windows MCP & Package Complete VSIX
+    needs: build
     runs-on: windows-latest
     steps:
       - name: 📥 Checkout repository
@@ -94,3 +70,38 @@ jobs:
         with:
           name: flutter-explorer-mcp-windows-exe
           path: flutter-explorer-mcp-windows.exe
+
+      - name: 📥 Download WASM Core from Build Job
+        uses: actions/download-artifact@v4
+        with:
+          name: flutter-explorer-wasm-pkg
+          path: out/wasm_pkg
+
+      - name: 📋 Copy WASM to src/wasm_pkg
+        run: |
+          New-Item -ItemType Directory -Force -Path src/wasm_pkg
+          Copy-Item -Recurse out/wasm_pkg/* src/wasm_pkg/
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: 📥 Install Dependencies (Native Windows sqlite3)
+        run: npm install
+
+      - name: 🔨 Compile Extension & MCP Server
+        run: npm run compile
+
+      - name: 🧪 Run Typecheck
+        run: npm run typecheck
+
+      - name: 📦 Package Complete Windows VSIX (No Missing Modules)
+        run: npx vsce package
+
+      - name: 🚀 Upload Complete Windows VSIX Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-explorer-vsix
+          path: "*.vsix"
