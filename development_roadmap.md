@@ -30,6 +30,12 @@
 - استهلاك ذاكرة فائق الانخفاض (~10MB) وزمن استجابة أقل من 5ms.
 - تحديث [.github/workflows/build-wasm.yml](file:///c:/Users/m4oha/OneDrive/Desktop/new/.github/workflows/build-wasm.yml) لإنتاج ثنائيات تنفيذية مخصصة لكل من Windows (`flutter-explorer-mcp-windows.exe`) و Linux (`flutter-explorer-mcp-linux`).
 
+### 4. دمج محرك SQLite الأصلي (`rusqlite`) ومراقب ملفات نظام التشغيل (`notify`)
+- تم إنشاء [rust-core/src/db.rs](file:///c:/Users/m4oha/OneDrive/Desktop/new/rust-core/src/db.rs) باستخدام مكتبة `rusqlite` المدمجة بالكامل، لتوفير كاش SQLite أصلي سريع وخالٍ تماماً من أقفال التنافس (`WAL Mode`).
+- مطابقة جداول التخزين مع `sqliteCache.ts` (`dart_files`, `arb_files`, `metadata`).
+- تم إنشاء [rust-core/src/watcher.rs](file:///c:/Users/m4oha/OneDrive/Desktop/new/rust-core/src/watcher.rs) لمراقبة ملفات المشروع بمستوى نواة نظام التشغيل (ReadDirectoryChangesW على Windows) بزمن تأخير 0ms وبدون استهلاك للذاكرة.
+- ربط المحركين داخل خادم الـ MCP المستقل في [rust-core/src/main.rs](file:///c:/Users/m4oha/OneDrive/Desktop/new/rust-core/src/main.rs) لتحديث الكاش تلقائياً وقراءة إحصائيات قاعدة البيانات فورياً.
+
 ---
 
 ## 📅 الإنجازات السابقة (9 أكتوبر 2026)

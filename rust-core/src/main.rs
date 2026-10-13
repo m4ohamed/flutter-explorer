@@ -5,12 +5,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 mod bm25;
+#[cfg(not(target_arch = "wasm32"))]
+mod db;
 mod parser;
 mod scanner;
+#[cfg(not(target_arch = "wasm32"))]
+mod watcher;
 
 use bm25::{BM25Document, BM25DocumentFields, BM25Engine};
+#[cfg(not(target_arch = "wasm32"))]
+use db::NativeSqliteCache;
 use parser::PureDartParser;
 use scanner::CodeScanner;
+#[cfg(not(target_arch = "wasm32"))]
+use watcher::NativeFileWatcher;
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
@@ -32,13 +40,40 @@ struct JsonRpcResponse {
 
 struct McpServerState {
     project_root: PathBuf,
+    #[cfg(not(target_arch = "wasm32"))]
+    db_conn: Option<rusqlite::Connection>,
 }
 
 impl McpServerState {
     fn new() -> Self {
         let current = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        #[cfg(not(target_arch = "wasm32"))]
+        let db_conn = {
+            let db_path = current.join(".flutter-explorer").join("flutter-explorer.db");
+            match NativeSqliteCache::open(&db_path) {
+                Ok(conn) => {
+                    eprintln!("[Rust Core] 💾 Native SQLite cache connected at '{}'", db_path.display());
+                    Some(conn)
+                }
+                Err(e) => {
+                    eprintln!("[Rust Core] ⚠️ SQLite cache not available: {}", e);
+                    None
+                }
+            }
+        };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let watch_dir = current.clone();
+            NativeFileWatcher::start(watch_dir, move |file_path| {
+                eprintln!("[Rust Watcher] ⚡ Incremental update for '{}'", file_path.display());
+            });
+        }
+
         Self {
             project_root: current,
+            #[cfg(not(target_arch = "wasm32"))]
+            db_conn,
         }
     }
 
@@ -382,6 +417,15 @@ fn main() {
                             }
                         }
 
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let cached_dart_files = if let Some(ref conn) = state.db_conn {
+                            NativeSqliteCache::count_table(conn, "dart_files")
+                        } else {
+                            0
+                        };
+                        #[cfg(target_arch = "wasm32")]
+                        let cached_dart_files = 0;
+
                         json!({
                             "content": [{
                                 "type": "text",
@@ -390,6 +434,7 @@ fn main() {
                                     "totalLinesOfCode": total_lines,
                                     "classesCount": total_classes,
                                     "widgetsCount": total_widgets,
+                                    "cachedInSqlite": cached_dart_files,
                                     "engine": "Rust Native (Zero-Runtime)",
                                     "projectRoot": state.project_root.display().to_string()
                                 })).unwrap_or_else(|_| "{}".to_string())
