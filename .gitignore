@@ -12,4 +12,6 @@ test
 rust-core/target/
 *.zip
 src/wasm_pkg/
+*.exe
+scratch/
 

@@ -27,6 +27,7 @@ const COMMANDS = {
     SETUP_MCP: 'flutterExplorer.setupMcp',
     OPEN_GRAPH: 'flutterExplorer.openGraph',
     COMPARE_PARSERS: 'flutterExplorer.compareParsers',
+    SHOW_ENGINE_STATUS: 'flutterExplorer.showEngineStatus',
     INTL_GENERATE: 'flutterExplorer.intlGenerate',
     INTL_INIT: 'flutterExplorer.intlInitialize',
     INTL_ADD_LOCALE: 'flutterExplorer.intlAddLocale',
@@ -226,6 +227,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     await indexManager.compareParsersAndWriteReport(progress);
                 }
             );
+        }),
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand(COMMANDS.SHOW_ENGINE_STATUS, () => {
+            const { RustBridge } = require('./indexer/rustBridge');
+            const status = RustBridge.getInstance().getStatus();
+            const icon = status.activeEngine === 'rust' ? '🦀' : '⚡';
+            const msg = `Flutter Explorer Engine: ${icon} ${status.activeEngine.toUpperCase()} (${status.details})`;
+            const action = 'Configure Engine';
+            vscode.window.showInformationMessage(msg, action).then(sel => {
+                if (sel === action) {
+                    vscode.commands.executeCommand('workbench.action.openSettings', 'flutterExplorer.engine');
+                }
+            });
         }),
     );
 
@@ -535,7 +551,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
 
     // ─── Show Welcome README ──────────────────────────────
-    const extensionVersion = context.extension?.packageJSON?.version ?? '1.2.5';
+    const extensionVersion = context.extension?.packageJSON?.version ?? '1.2.6';
     const lastVersionOpened = context.globalState.get<string>('lastVersionOpened');
     if (lastVersionOpened !== extensionVersion) {
         context.globalState.update('lastVersionOpened', extensionVersion);
@@ -559,11 +575,15 @@ function updateStatusBar(indexManager: IndexManager): void {
     const stats = indexManager.getStats();
     const mode = indexManager.getProjectMode();
     const modeLabel = mode === 'android' ? 'Android' : mode === 'web' ? 'Web' : 'Flutter';
-    let text = `[${modeLabel}] $(symbol-class) ${stats.classes} classes · $(symbol-method) ${stats.functions} fns · $(extensions) ${stats.widgets} widgets`;
+    const { RustBridge } = require('./indexer/rustBridge');
+    const engineStatus = RustBridge.getInstance().getStatus();
+    const engineTag = engineStatus.activeEngine === 'rust' ? ' | 🦀 Rust' : '';
+    let text = `[${modeLabel}${engineTag}] $(symbol-class) ${stats.classes} classes · $(symbol-method) ${stats.functions} fns · $(extensions) ${stats.widgets} widgets`;
     if (mode === 'flutter' && stats.translations > 0) {
         text += ` · $(globe) ${stats.translations} loc`;
     }
     statusBarItem.text = text;
+    statusBarItem.tooltip = `Flutter Explorer (${engineStatus.details}) — Click to rebuild index`;
     statusBarItem.show();
 }
 

@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { BM25Document, BM25Search } from './bm25Search';
-import { DartParser, WarningInfo } from './dartParser';
+import { DartParser, DartFileInfo, WarningInfo } from './dartParser';
 
 export type ExecutionEngine = 'auto' | 'rust' | 'javascript';
 
@@ -181,5 +181,100 @@ export class RustBridge {
     const parser = new DartParser();
     return parser.parse(filePath, sourceCode);
   }
+
+  /**
+   * Parse Dart source code to a standardized DartFileInfo structure using Pure Rust WASM.
+   * If WASM is unavailable or fails, gracefully falls back to DartParser.
+   */
+  public parseDartToInfo(filePath: string, sourceCode: string): DartFileInfo {
+    const status = this.getStatus();
+
+    if (status.activeEngine === 'rust' && this.wasmModule && typeof this.wasmModule.parse_dart_ast_json === 'function') {
+      try {
+        const rawJson = this.wasmModule.parse_dart_ast_json(sourceCode);
+        const parsed = JSON.parse(rawJson);
+        if (parsed && Array.isArray(parsed.classes)) {
+          const cleanPath = filePath.replace(/\\/g, '/');
+          return {
+            filePath: cleanPath,
+            classes: (parsed.classes || []).map((c: any) => ({
+              name: c.name,
+              type: c.type || 'class',
+              line: c.line,
+              lineEnd: c.line_end,
+              extendsClass: c.extends_class || null,
+              mixins: c.mixins || [],
+              implements: c.implements || [],
+              isAbstract: !!c.is_abstract,
+              isPrivate: !!c.is_private,
+              methods: (c.methods || []).map((m: any) => ({
+                name: m.name,
+                returnType: m.return_type || '',
+                params: m.params || '',
+                line: m.line,
+                lineEnd: m.line_end,
+                isPrivate: !!m.is_private,
+                isAsync: !!m.is_async,
+                isStatic: !!m.is_static,
+                parentClass: c.name,
+                bodyHash: '',
+              })),
+              properties: [],
+              bodyHash: '',
+            })),
+            functions: (parsed.functions || []).map((m: any) => ({
+              name: m.name,
+              returnType: m.return_type || '',
+              params: m.params || '',
+              line: m.line,
+              lineEnd: m.line_end,
+              isPrivate: !!m.is_private,
+              isAsync: !!m.is_async,
+              isStatic: !!m.is_static,
+              parentClass: null,
+              bodyHash: '',
+            })),
+            enums: (parsed.enums || []).map((e: any) => ({
+              name: e.name,
+              values: e.values || [],
+              line: e.line,
+              isPrivate: !!e.is_private,
+            })),
+            mixins: [],
+            extensions: [],
+            extensionTypes: [],
+            widgets: [],
+            warnings: [],
+            imports: [],
+            exports: [],
+            typedefs: [],
+            functionCalls: [],
+            classUsages: [],
+            functionUsages: [],
+            extensionUsages: [],
+            typedefUsages: [],
+            variableUsages: [],
+            constructorUsages: [],
+            propertyUsages: [],
+            annotationUsages: [],
+            enumUsages: [],
+            mixinUsages: [],
+            annotations: [],
+            constructors: [],
+            variables: [],
+            properties: [],
+            lastModified: Date.now(),
+          };
+        }
+      } catch (err) {
+        console.warn('[RustBridge] Rust AST parser failed, falling back to TypeScript DartParser', err);
+      }
+    }
+
+    // Graceful Fallback: TypeScript DartParser
+    const parser = new DartParser();
+    return parser.parse(filePath, sourceCode);
+  }
 }
+
 

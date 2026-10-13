@@ -57,6 +57,12 @@ jobs:
           name: flutter-explorer-vsix
           path: "*.vsix"
 
+      - name: 🚀 Upload Compiled WASM Core
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-explorer-wasm-pkg
+          path: out/wasm_pkg/
+
       - name: 🦀 Build Standalone Native MCP Server (Linux)
         run: |
           cargo build --release --manifest-path rust-core/Cargo.toml --bin flutter-explorer-mcp

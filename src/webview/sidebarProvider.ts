@@ -219,7 +219,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         <span>Code Analysis</span>
         <div style="display: flex; gap: 4px;">
           <button class="icon-btn" id="generateIntl" title="Regenerate Localization Files (l10n.dart & messages)">🌐</button>
-          <button class="icon-btn" id="compareParsers" title="Compare Regex and SDK Parsers">⚖</button>
+          <button class="icon-btn" id="compareParsers" title="Benchmark Engines (Rust WASM vs Regex vs Dart SDK)">⚖</button>
           <button class="icon-btn" id="copyAllAnalysis" title="Copy All Filtered Analysis Results">📋</button>
           <button class="icon-btn" id="refreshAnalysis" title="Refresh">⟳</button>
         </div>

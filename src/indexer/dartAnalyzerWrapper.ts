@@ -50,6 +50,18 @@ export async function analyzeWithDart(
             let stdoutData = '';
             let stderrData = '';
 
+            // Guard against indefinite hanging: 60s timeout
+            const timeoutMs = 60000;
+            const timeoutTimer = setTimeout(() => {
+                console.warn(`[dartAnalyzerWrapper] Dart analyzer timed out after ${timeoutMs}ms. Terminating process.`);
+                try {
+                    child.kill();
+                } catch (_) {}
+                resolve(null);
+            }, timeoutMs);
+
+            const cleanup = () => clearTimeout(timeoutTimer);
+
             child.stdout.on('data', (data) => {
                 stdoutData += data.toString();
             });
@@ -95,6 +107,7 @@ export async function analyzeWithDart(
             });
 
             child.on('close', (code) => {
+                cleanup();
                 if (code !== 0) {
                     console.error(`Dart analyzer process exited with code ${code}`);
                     console.error(`Stderr: ${stderrData}`);
@@ -133,6 +146,7 @@ export async function analyzeWithDart(
             });
 
             child.on('error', (err) => {
+                cleanup();
                 console.error('Failed to start Dart analyzer:', err);
                 resolve(null);
             });
