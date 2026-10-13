@@ -10,6 +10,7 @@ code-review-graph-source/**
 scratch/**
 skills/**
 .cursor/**
+rust-core/**
 AGENTS
 analyzer_output.json
 development_roadmap.md

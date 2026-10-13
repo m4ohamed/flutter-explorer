@@ -1,0 +1,64 @@
+name: Build Rust WASM & Extension Package
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Compile Rust WASM & VSIX
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🦀 Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: ⚡ Install wasm-pack
+        run: |
+          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: ⚙️ Build Rust Core to WebAssembly
+        run: |
+          cd rust-core
+          wasm-pack build --target nodejs --out-dir ../out/wasm_pkg
+          # Also copy bindings to src/wasm_pkg for TypeScript typings if needed
+          mkdir -p ../src/wasm_pkg
+          cp -r ../out/wasm_pkg/* ../src/wasm_pkg/
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: 📥 Install Dependencies
+        run: npm install
+
+      - name: 🔨 Compile Extension & MCP Server
+        run: npm run compile
+
+      - name: 🧪 Run Typecheck
+        run: npm run typecheck
+
+      - name: 📦 Package VSIX
+        run: npx vsce package --no-dependencies
+
+      - name: 🚀 Upload VSIX Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-explorer-vsix
+          path: "*.vsix"
+
+      - name: 🚀 Upload Compiled WASM Core
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-explorer-wasm-pkg
+          path: out/wasm_pkg/

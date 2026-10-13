@@ -153,6 +153,17 @@
         "configuration": {
             "title": "Flutter Explorer",
             "properties": {
+                "flutterExplorer.engine": {
+                    "type": "string",
+                    "enum": ["auto", "javascript", "rust"],
+                    "enumDescriptions": [
+                        "Automatically use Rust WASM core if available, falling back to TypeScript/JavaScript on any error.",
+                        "Force pure TypeScript/JavaScript engine (legacy fallback mode).",
+                        "Force Rust WASM core (will alert if WASM is not available)."
+                    ],
+                    "default": "auto",
+                    "description": "Execution engine for code scanning, warnings, and BM25 search (auto / javascript / rust)"
+                },
                 "flutterExplorer.autoIndex": {
                     "type": "boolean",
                     "default": true,

@@ -4,7 +4,21 @@
 
 ---
 
-## 📅 إنجازات اليوم (9 أكتوبر 2026)
+## 📅 إنجازات اليوم (13 أكتوبر 2026)
+
+### 1. تأسيس نواة Rust فائق السرعة (`rust-core`) ونظام المحرك المزدوج (Dual Engine)
+- تم إنشاء حزمة Rust المستقلة في [rust-core/Cargo.toml](file:///c:/Users/m4oha/OneDrive/Desktop/new/rust-core/Cargo.toml) بتكوين `cdylib` لإنتاج WebAssembly فائق الأداء.
+- تنفيذ خوارزمية ترتيب البحث **Okapi BM25** بلغة Rust في [rust-core/src/bm25.rs](file:///c:/Users/m4oha/OneDrive/Desktop/new/rust-core/src/bm25.rs) مع دعم الفهرس المعكوس (Inverted Index) والأوزان المتعددة.
+- تنفيذ فاحص الأكواد السريع في [rust-core/src/scanner.rs](file:///c:/Users/m4oha/OneDrive/Desktop/new/rust-core/src/scanner.rs) لاكتشاف النصوص والألوان المكتوبة يدوياً (Hardcoded values).
+- تصدير واجهات WASM التفاعلية عبر `wasm-bindgen` في [rust-core/src/lib.rs](file:///c:/Users/m4oha/OneDrive/Desktop/new/rust-core/src/lib.rs).
+- إنشاء جسر التراجع التلقائي والآمن في [rustBridge.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/indexer/rustBridge.ts) لضمان العمل التام عبر JavaScript/TypeScript دون أي تعطل إذا لم يكن ملف الـ WASM مبنياً.
+- إضافة إعداد `flutterExplorer.engine` في [package.json](file:///c:/Users/m4oha/OneDrive/Desktop/new/package.json) للاختيار بين (`auto` / `javascript` / `rust`).
+- إنشاء مسار البناء السحابي التلقائي عبر GitHub Actions في [.github/workflows/build-wasm.yml](file:///c:/Users/m4oha/OneDrive/Desktop/new/.github/workflows/build-wasm.yml).
+- اجتياز فحص الأنواع (`tsc --noEmit`) وبناء الحزم (`npm run compile`) واختبارات الوحدات بالكامل (`103 passed`).
+
+---
+
+## 📅 الإنجازات السابقة (9 أكتوبر 2026)
 
 ### 1. دمج أدوات التعديل والكتابة الآمنة في خادم MCP (`flutter-explorer-mcp`)
 - تم تسجيل أدوات التعديل الآمنة في [mcp-server.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/mcp-server.ts) عبر `registerEditTools`:
