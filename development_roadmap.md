@@ -36,6 +36,26 @@
 - تم إنشاء [rust-core/src/watcher.rs](file:///c:/Users/m4oha/OneDrive/Desktop/new/rust-core/src/watcher.rs) لمراقبة ملفات المشروع بمستوى نواة نظام التشغيل (ReadDirectoryChangesW على Windows) بزمن تأخير 0ms وبدون استهلاك للذاكرة.
 - ربط المحركين داخل خادم الـ MCP المستقل في [rust-core/src/main.rs](file:///c:/Users/m4oha/OneDrive/Desktop/new/rust-core/src/main.rs) لتحديث الكاش تلقائياً وقراءة إحصائيات قاعدة البيانات فورياً.
 
+### 5. إطلاق الإصدار 1.2.6، مقارنة الأداء الثلاثية (3-Way Benchmark)، واستعادة حزمة WASM
+- **استعادة حزمة WASM في GitHub Actions**: تم إصلاح خطوة رفع حزمة WASM (`flutter-explorer-wasm-pkg`) في [.github/workflows/build-wasm.yml](file:///c:/Users/m4oha/OneDrive/Desktop/new/.github/workflows/build-wasm.yml) بعد استبدالها السابق بالخطأ، لتوفير كافة الحزم الـ 4 سحابياً.
+- **القضاء على التجمد والدوران اللانهائي (Infinite Spinner Fix)**:
+  - ضبط الإعداد الافتراضي لـ `flutterExplorer.useDartAnalyzer` إلى `false` في [package.json](file:///c:/Users/m4oha/OneDrive/Desktop/new/package.json) للاعتماد المباشر على محرك Rust WASM Core ومحلل Regex السريع بدون تعليق.
+  - إضافة مهلة أمان صارمة (Timeout Guard: 60s) في [dartAnalyzerWrapper.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/indexer/dartAnalyzerWrapper.ts) لقتل العمليات المعلقة واستعادة التحكم فوراً.
+  - حذف الكاش القديم المعلق وتجهيز مسار كاش SQLite نظيف وسريع.
+- **نظام المقارنة وقياس الأداء الثلاثي (3-Way Engine Benchmark)**:
+  - ترقية دالة `compareParsersAndWriteReport` في [indexManager.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/indexer/indexManager.ts) لإجراء اختبار سرعة حقيقي بين:
+    1. 🦀 **Pure Rust Core WASM Engine** (`RustBridge`)
+    2. ⚡ **TypeScript Regex Parser** (`DartParser`)
+    3. 🎯 **Dart SDK Analyzer** (`analyzeWithDart`)
+  - قياس معدل المعالجة (Throughput - files/sec) والسرعة النسبية وعدد الفئات والميثودات والدوال والـ Enums، وحفظ قواعد بيانات مقارنة مستقلة (`rust_indexer.db`, `indexer.db`, `analyze.db`) وتوليد تقرير شامل في [parser_comparison_report.md](file:///c:/Users/m4oha/OneDrive/Desktop/new/parser_comparison_report.md).
+- **إظهار شارة المحرك والتحكم السريع في VS Code**:
+  - إضافة شارة المحرك في شريط الحالة (Status Bar): `[Flutter | 🦀 Rust]` في [extension.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/extension.ts).
+  - إضافة الأمر الجديد `flutterExplorer.showEngineStatus` لعرض حالة المحرك وإصدار الـ WASM وتغيير الإعدادات بنقرة واحدة.
+  - ربط التحليل التدريجي اللحظي عند تعديل الملفات في `updateFile` بمحرك Rust WASM مباشرة.
+- **النشر والرفع للسحابة**:
+  - رفع الإصدار إلى `1.2.6` في `package.json`.
+  - دفع التغييرات بنجاح إلى GitHub عبر `git push origin main` لتفعيل الـ Workflow وبناء الـ VSIX، وحزم الـ WASM، والنسخ التنفيذية لويندوز ولينكس تلقائياً.
+
 ---
 
 ## 📅 الإنجازات السابقة (9 أكتوبر 2026)
