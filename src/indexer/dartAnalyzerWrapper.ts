@@ -45,20 +45,35 @@ export async function analyzeWithDart(
         }
 
 
+        const toolsDir = path.dirname(toolsPath);
         return new Promise((resolve) => {
-            const child = spawn('dart', [`"${toolsPath}"`, `"${projectPath}"`], { shell: true });
+            const child = spawn('dart', ['run', `"${toolsPath}"`, `"${projectPath}"`], { 
+                cwd: toolsDir,
+                shell: true 
+            });
             let stdoutData = '';
             let stderrData = '';
 
-            // Guard against indefinite hanging: 60s timeout
-            const timeoutMs = 60000;
-            const timeoutTimer = setTimeout(() => {
+            // Guard against indefinite hanging: 180s initial timeout with activity keep-alive
+            const timeoutMs = 180000;
+            let timeoutTimer = setTimeout(() => {
                 console.warn(`[dartAnalyzerWrapper] Dart analyzer timed out after ${timeoutMs}ms. Terminating process.`);
                 try {
                     child.kill();
                 } catch (_) {}
                 resolve(null);
             }, timeoutMs);
+
+            const resetTimeout = () => {
+                clearTimeout(timeoutTimer);
+                timeoutTimer = setTimeout(() => {
+                    console.warn(`[dartAnalyzerWrapper] Dart analyzer timed out due to inactivity.`);
+                    try {
+                        child.kill();
+                    } catch (_) {}
+                    resolve(null);
+                }, 60000);
+            };
 
             const cleanup = () => clearTimeout(timeoutTimer);
 
@@ -86,6 +101,7 @@ export async function analyzeWithDart(
                             totalFiles = parseInt(totalMatch[1], 10);
                         }
                     } else if (line.startsWith('ANALYZING:')) {
+                        resetTimeout();
                         const fileName = line.substring('ANALYZING:'.length).trim();
                         if (onProgress) {
                             const remaining = totalFiles !== undefined ? totalFiles - currentFileCount : '?';
@@ -93,6 +109,7 @@ export async function analyzeWithDart(
                             onProgress(`Analyzing Dart SDK: [${fileName}] (${currentFileCount}/${totalStr} done, ${remaining} remaining)...`);
                         }
                     } else if (line.startsWith('PROGRESS:')) {
+                        resetTimeout();
                         const progressMatch = line.match(/PROGRESS:(\d+)/);
                         if (progressMatch) {
                             currentFileCount = parseInt(progressMatch[1], 10);

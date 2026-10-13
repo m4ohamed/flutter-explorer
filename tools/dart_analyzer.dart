@@ -14,10 +14,18 @@ void main(List<String> args) async {
     exit(1);
   }
 
-  final projectPath = p.absolute(args[0]);
+  // Handle paths with spaces that might be split across args by Windows shell
+  String rawPath = args.join(' ').trim();
+  if ((rawPath.startsWith('"') && rawPath.endsWith('"')) ||
+      (rawPath.startsWith("'") && rawPath.endsWith("'"))) {
+    rawPath = rawPath.substring(1, rawPath.length - 1).trim();
+  }
+
+  final projectPath = p.absolute(rawPath);
   final libPath = p.join(projectPath, 'lib');
 
   if (!Directory(libPath).existsSync()) {
+    stderr.writeln('Dart Analyzer Error: Directory lib does not exist at $libPath (project: $projectPath)');
     stdout.write(jsonEncode([]));
     return;
   }

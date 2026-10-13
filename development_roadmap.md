@@ -56,6 +56,15 @@
   - رفع الإصدار إلى `1.2.6` في `package.json`.
   - دفع التغييرات بنجاح إلى GitHub عبر `git push origin main` لتفعيل الـ Workflow وبناء الـ VSIX، وحزم الـ WASM، والنسخ التنفيذية لويندوز ولينكس تلقائياً.
 
+### 6. تشغيل Dart SDK Analyzer في الفحص الموسع وإظهار كافة تفاصيل شارات الواجهة (UI Badges Parity)
+- **إصلاح مسارات المشاريع ذات المسافات في Dart SDK**:
+  - في [tools/dart_analyzer.dart](file:///c:/Users/m4oha/OneDrive/Desktop/new/tools/dart_analyzer.dart): إعادة تجميع المعاملات التي يفصلها Windows `cmd.exe` بواسطة `args.join(' ').trim()`، مما حل مشكلة فشل الفحص الفوري على مسارات مثل `e:\spy game\app`.
+  - في [src/indexer/dartAnalyzerWrapper.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/indexer/dartAnalyzerWrapper.ts): تشغيل السكربت من مجلد `tools` باستخدام `dart run`، وتمديد المهلة إلى 180 ثانية مع إضافة مؤقت نبض (Activity Keep-alive Timer) يُعاد ضبطه عند كل ملف لمنع أي توقف زائف.
+  - تمرير دالة متابعة التقدم اللحظي `onProgress` في [src/indexer/indexManager.ts](file:///c:/Users/m4oha/OneDrive/Desktop/new/src/indexer/indexManager.ts) لإظهار اسم الملف المجرى فحصه خطوة بخطوة في شريط VS Code.
+- **توسيع جدول تقرير المقارنة ليشمل جميع شارات الواجهة الـ 14**:
+  - ترقية جدول المقارنة ليشمل كافة الرموز الظاهرة في واجهة الإضافة (Sidebar Badges): الكلاسات، الدوال المدمجة (Methods + Top-Level Functions)، الودجات (القمية والشجرة الكاملة)، المشيدات (Constructors)، الخصائص (Properties)، الـ Annotations، استدعاءات الدوال (Calls)، المتغيرات (Variables)، الـ Enums، الـ Typedefs، الـ Mixins، والـ Extensions.
+  - إيضاح علامة `N/A (AST mode)` في محرك Rust Core لبيان تركيز النواة الحالية على النحو اللغوي الصرف (Syntactic AST) وتغذية الفهرس السريع، مع احتفاظ TypeScript و Dart Analyzer بباقي التفاصيل السيمانتيكية.
+
 ---
 
 ## 📅 الإنجازات السابقة (9 أكتوبر 2026)

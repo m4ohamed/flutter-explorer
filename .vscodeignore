@@ -31,4 +31,7 @@ out.json
 !package.json
 !package-lock.json
 cline_docs/**
+*.zip
+*.exe
+*.vsix
 

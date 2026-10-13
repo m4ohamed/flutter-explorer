@@ -367,3 +367,14 @@
   2. إضافة مهلة زمنية صارمة 60 ثانية (Timeout Guard) في `dartAnalyzerWrapper.ts` لقتل العملية المتجمدة بأمان واستعادة التحكم.
   3. إعادة خطوة رفع `flutter-explorer-wasm-pkg` إلى `.github/workflows/build-wasm.yml` وتفعيل إنتاج كافة الحزم الأربعة تلقائياً.
 
+## 56. ظهور Dart SDK Analyzer كـ `(Skipped / Standalone)` واختفاء تفاصيل الرموز في تقرير المقارنة
+- **الخطأ (The Bug):** عند إجراء مقارنة المحركات الثلاثية (Benchmark Engines)، يظهر محرك Dart SDK Analyzer كـ `(Skipped / Standalone)` ولا يعرض أي إحصائيات، بالإضافة إلى أن تقرير المقارنة كان يقتصر على الكلاسات والدوال العامة ولا يعرض تفاصيل شارات الواجهة الجانبية (مثل Constructors, Properties, Annotations, Calls, Variables, Typedefs, Mixins, Extensions).
+- **السبب الجذري (Root Cause):**
+  1. عند تشغيل المشروع من مسار يحتوي على مسافات (مثل `e:\spy game\app`) عبر `spawn` مع `shell: true` في نظام Windows، يقوم `cmd.exe` بتفكيك المسار عند المسافة، فيستقبل سكربت `dart_analyzer.dart` المعامل `args[0] = 'e:\spy'` فقط بدلاً من المسار كاملاً. وبما أن مجلد `e:\spy/lib` غير موجود، يُرجع السكربت مصفوفة فارغة `[]` فوراً، مما يجعل الفحص يُسجل كـ `skipped`.
+  2. مهلة الـ 60 ثانية القديمة كانت تقتل عملية Dart SDK قبل أن تُكمل المشاريع المتوسطة (38 ملفاً تستغرق حوالي 80 ثانية في Dart Analyzer).
+  3. دالة المقارنة `compareParsersAndWriteReport` كانت تجمع فقط 5 أصناف من الرموز وتتجاهل باقي الرموز الموجودة في شارات الـ Sidebar.
+- **الحل الفعلي (The Fix):**
+  1. في `tools/dart_analyzer.dart`: إعادة تجميع المعاملات المجزأة بواسطة `args.join(' ').trim()` وإزالة أي علامات اقتباس محيطة لضمان قراءة المسارات التي تحتوي على مسافات بدقة.
+  2. في `src/indexer/dartAnalyzerWrapper.ts`: تشغيل السكربت عبر `dart run` مع تعيين `cwd: toolsDir`، ورفع المهلة المبدئية إلى 180 ثانية مع إضافة مؤقت نبض (Activity Keep-alive Timer) يُعاد ضبطه عند كل رسالة تقدم (`ANALYZING:` أو `PROGRESS:`).
+  3. في `src/indexer/indexManager.ts`: تمرير دالة متابعة التقدم `onProgress` لتحديث شريط التقدم في VS Code لحظياً، وتوسيع جدول المقارنة ليشمل جميع تفاصيل شارات الواجهة الجانبية الـ 14 بدقة تامة.
+

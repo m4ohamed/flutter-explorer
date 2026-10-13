@@ -1651,7 +1651,13 @@ export class IndexManager {
         if (progress) progress.report({ message: 'Phase 3: Running Dart SDK Analyzer (package:analyzer)...' });
         try {
           const sdkStart = Date.now();
-          const runResults = await analyzeWithDart(this.workspaceRoot, this.extensionPath);
+          const runResults = await analyzeWithDart(
+            this.workspaceRoot, 
+            this.extensionPath,
+            (msg) => {
+              if (progress) progress.report({ message: `Phase 3: ${msg}` });
+            }
+          );
           sdkDurationMs = Date.now() - sdkStart;
           if (runResults && runResults.length > 0) {
             sdkResults = runResults;
@@ -1696,22 +1702,11 @@ export class IndexManager {
 
       const totalFiles = Math.max(rustResults.length, regexResults.length, sdkResults.length);
 
+      // Rust Metrics
       let totalClassesRust = 0;
       let totalMethodsRust = 0;
       let totalFunctionsRust = 0;
       let totalEnumsRust = 0;
-
-      let totalClassesRegex = 0;
-      let totalMethodsRegex = 0;
-      let totalFunctionsRegex = 0;
-      let totalEnumsRegex = 0;
-      let totalWidgetsRegex = 0;
-
-      let totalClassesSDK = 0;
-      let totalMethodsSDK = 0;
-      let totalFunctionsSDK = 0;
-      let totalEnumsSDK = 0;
-      let totalWidgetsSDK = 0;
 
       for (const r of rustResults) {
         totalClassesRust += r.classes?.length || 0;
@@ -1720,20 +1715,74 @@ export class IndexManager {
         r.classes?.forEach(c => totalMethodsRust += c.methods?.length || 0);
       }
 
+      // TypeScript Regex Metrics (matching Sidebar Badges)
+      let totalClassesRegex = 0;
+      let totalMethodsRegex = 0;
+      let totalFunctionsRegex = 0;
+      let totalEnumsRegex = 0;
+      let totalWidgetsTopRegex = 0;
+      let totalWidgetsAllRegex = 0;
+      let totalPropsRegex = 0;
+      let totalCtorsRegex = 0;
+      let totalAnnosRegex = 0;
+      let totalCallsRegex = 0;
+      let totalVarsRegex = 0;
+      let totalTypedefsRegex = 0;
+      let totalMixinsRegex = 0;
+      let totalExtsRegex = 0;
+
       for (const r of regexResults) {
         totalClassesRegex += r.classes?.length || 0;
         totalFunctionsRegex += r.functions?.length || 0;
         totalEnumsRegex += r.enums?.length || 0;
-        r.classes?.forEach(c => totalMethodsRegex += c.methods?.length || 0);
-        totalWidgetsRegex += collectWidgets(r.widgets || []).length;
+        totalWidgetsTopRegex += r.widgets?.length || 0;
+        totalWidgetsAllRegex += collectWidgets(r.widgets || []).length;
+        totalPropsRegex += r.properties?.length || 0;
+        totalCtorsRegex += r.constructors?.length || 0;
+        totalAnnosRegex += r.annotations?.length || 0;
+        totalCallsRegex += r.functionCalls?.length || 0;
+        totalVarsRegex += r.variables?.length || 0;
+        totalTypedefsRegex += r.typedefs?.length || 0;
+        totalMixinsRegex += r.mixins?.length || 0;
+        totalExtsRegex += r.extensions?.length || 0;
+        r.classes?.forEach(c => {
+          totalMethodsRegex += c.methods?.length || 0;
+        });
       }
+
+      // Dart SDK Analyzer Metrics
+      let totalClassesSDK = 0;
+      let totalMethodsSDK = 0;
+      let totalFunctionsSDK = 0;
+      let totalEnumsSDK = 0;
+      let totalWidgetsTopSDK = 0;
+      let totalWidgetsAllSDK = 0;
+      let totalPropsSDK = 0;
+      let totalCtorsSDK = 0;
+      let totalAnnosSDK = 0;
+      let totalCallsSDK = 0;
+      let totalVarsSDK = 0;
+      let totalTypedefsSDK = 0;
+      let totalMixinsSDK = 0;
+      let totalExtsSDK = 0;
 
       for (const s of sdkResults) {
         totalClassesSDK += s.classes?.length || 0;
         totalFunctionsSDK += s.functions?.length || 0;
         totalEnumsSDK += s.enums?.length || 0;
-        s.classes?.forEach(c => totalMethodsSDK += c.methods?.length || 0);
-        totalWidgetsSDK += collectWidgets(s.widgets || []).length;
+        totalWidgetsTopSDK += s.widgets?.length || 0;
+        totalWidgetsAllSDK += collectWidgets(s.widgets || []).length;
+        totalPropsSDK += s.properties?.length || 0;
+        totalCtorsSDK += s.constructors?.length || 0;
+        totalAnnosSDK += s.annotations?.length || 0;
+        totalCallsSDK += s.functionCalls?.length || 0;
+        totalVarsSDK += s.variables?.length || 0;
+        totalTypedefsSDK += s.typedefs?.length || 0;
+        totalMixinsSDK += s.mixins?.length || 0;
+        totalExtsSDK += s.extensions?.length || 0;
+        s.classes?.forEach(c => {
+          totalMethodsSDK += c.methods?.length || 0;
+        });
       }
 
       const diffs: string[] = [];
@@ -1789,15 +1838,24 @@ export class IndexManager {
         reportContent += `| 🎯 **Dart SDK Analyzer** | *(Skipped / Standalone)* | N/A | N/A | External Dart CLI Process |\n\n`;
       }
 
-      reportContent += `## 📊 Symbol Accuracy & Discovery Parity\n\n`;
-      reportContent += `| Symbol Category | 🦀 Rust Core WASM | ⚡ TypeScript Regex | 🎯 Dart SDK Analyzer | Parity Notes |\n`;
+      reportContent += `## 📊 Complete Symbol Discovery Parity (All UI Metrics)\n\n`;
+      reportContent += `| Symbol Category | 🦀 Rust Core WASM | ⚡ TypeScript Regex | 🎯 Dart SDK Analyzer | Sidebar UI Badge |\n`;
       reportContent += `| --- | --- | --- | --- | --- |\n`;
-      reportContent += `| **Analyzed Files** | ${rustResults.length} | ${regexResults.length} | ${sdkRan ? sdkResults.length : 'N/A'} | 100% file coverage |\n`;
-      reportContent += `| **Classes** | **${totalClassesRust}** | **${totalClassesRegex}** | ${sdkRan ? totalClassesSDK : 'N/A'} | High parity across all engines |\n`;
-      reportContent += `| **Methods** | **${totalMethodsRust}** | **${totalMethodsRegex}** | ${sdkRan ? totalMethodsSDK : 'N/A'} | Accurate method boundary capture |\n`;
-      reportContent += `| **Top-level Functions** | **${totalFunctionsRust}** | **${totalFunctionsRegex}** | ${sdkRan ? totalFunctionsSDK : 'N/A'} | Robust declaration scanning |\n`;
-      reportContent += `| **Enums** | **${totalEnumsRust}** | **${totalEnumsRegex}** | ${sdkRan ? totalEnumsSDK : 'N/A'} | Full enum & value capture |\n`;
-      reportContent += `| **Widgets** | N/A (AST mode) | **${totalWidgetsRegex}** | ${sdkRan ? totalWidgetsSDK : 'N/A'} | Extracted via widget builder |\n\n`;
+      reportContent += `| 📄 **Analyzed Files** | **${rustResults.length}** | **${regexResults.length}** | ${sdkRan ? `**${sdkResults.length}**` : 'N/A'} | 📄 All (${regexResults.length}) |\n`;
+      reportContent += `| 🔷 **Classes** | **${totalClassesRust}** | **${totalClassesRegex}** | ${sdkRan ? `**${totalClassesSDK}**` : 'N/A'} | 🔷 Classes (${totalClassesRegex}) |\n`;
+      reportContent += `| ⚡ **Total Functions (Combined)** | **${totalMethodsRust + totalFunctionsRust}** | **${totalMethodsRegex + totalFunctionsRegex}** | ${sdkRan ? `**${totalMethodsSDK + totalFunctionsSDK}**` : 'N/A'} | ⚡ Functions (${totalMethodsRegex + totalFunctionsRegex}) |\n`;
+      reportContent += `| &nbsp;&nbsp;&nbsp;&nbsp;↳ *Class Methods* | **${totalMethodsRust}** | **${totalMethodsRegex}** | ${sdkRan ? `**${totalMethodsSDK}**` : 'N/A'} | *(Method bodies)* |\n`;
+      reportContent += `| &nbsp;&nbsp;&nbsp;&nbsp;↳ *Top-Level Functions* | **${totalFunctionsRust}** | **${totalFunctionsRegex}** | ${sdkRan ? `**${totalFunctionsSDK}**` : 'N/A'} | *(Top-level declarations)* |\n`;
+      reportContent += `| 🧩 **Widgets (Top-Level / Nodes)** | N/A *(AST mode)* | **${totalWidgetsTopRegex}** / **${totalWidgetsAllRegex}** | ${sdkRan ? `**${totalWidgetsTopSDK}** / **${totalWidgetsAllSDK}**` : 'N/A'} | 🧩 Widgets (${totalWidgetsTopRegex}) |\n`;
+      reportContent += `| 🛠️ **Constructors (Ctors)** | N/A *(AST mode)* | **${totalCtorsRegex}** | ${sdkRan ? `**${totalCtorsSDK}**` : 'N/A'} | 🛠️ Ctors (${totalCtorsRegex}) |\n`;
+      reportContent += `| 🔑 **Properties (Props)** | N/A *(AST mode)* | **${totalPropsRegex}** | ${sdkRan ? `**${totalPropsSDK}**` : 'N/A'} | 🔑 Props (${totalPropsRegex}) |\n`;
+      reportContent += `| 🏷️ **Annotations (Annos)** | N/A *(AST mode)* | **${totalAnnosRegex}** | ${sdkRan ? `**${totalAnnosSDK}**` : 'N/A'} | 🏷️ Annos (${totalAnnosRegex}) |\n`;
+      reportContent += `| 📞 **Function Calls (Calls)** | N/A *(AST mode)* | **${totalCallsRegex}** | ${sdkRan ? `**${totalCallsSDK}**` : 'N/A'} | 📞 Calls (${totalCallsRegex}) |\n`;
+      reportContent += `| 💎 **Variables (Vars)** | N/A *(AST mode)* | **${totalVarsRegex}** | ${sdkRan ? `**${totalVarsSDK}**` : 'N/A'} | 💎 Vars (${totalVarsRegex}) |\n`;
+      reportContent += `| 🟣 **Enums** | **${totalEnumsRust}** | **${totalEnumsRegex}** | ${sdkRan ? `**${totalEnumsSDK}**` : 'N/A'} | 🟣 Enums (${totalEnumsRegex}) |\n`;
+      reportContent += `| 🏷️ **Type Aliases (Type)** | N/A *(AST mode)* | **${totalTypedefsRegex}** | ${sdkRan ? `**${totalTypedefsSDK}**` : 'N/A'} | 🏷️ Type (${totalTypedefsRegex}) |\n`;
+      reportContent += `| 🟠 **Mixins** | N/A *(AST mode)* | **${totalMixinsRegex}** | ${sdkRan ? `**${totalMixinsSDK}**` : 'N/A'} | 🟠 Mixins (${totalMixinsRegex}) |\n`;
+      reportContent += `| 🧬 **Extensions (Ext)** | N/A *(AST mode)* | **${totalExtsRegex}** | ${sdkRan ? `**${totalExtsSDK}**` : 'N/A'} | 🧬 Ext (${totalExtsRegex}) |\n\n`;
 
       if (diffs.length === 0) {
         reportContent += `## 🎉 Perfect Engine Alignment!\n\nAll enabled engines analyzed the workspace symbols in complete unison. No discrepancies were detected!\n\n`;
