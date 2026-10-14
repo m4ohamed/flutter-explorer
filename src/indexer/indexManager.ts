@@ -348,7 +348,7 @@ export class IndexManager {
           if (uri.fsPath.endsWith('.dart')) {
             if (!dartFilesAnalyzed) {
               const content = await this.readFile(uri);
-              const info = RustBridge.getInstance().parseDartToInfo(relPath, content);
+              const info = RustBridge.getInstance().parseFileToInfo(relPath, content);
               info.contentHash = this.computeHash(content);
               this.index.set(relPath, info);
               dartFilesToUpsert.push({ relPath, hash: info.contentHash, info });
@@ -356,7 +356,7 @@ export class IndexManager {
           }
           else if (uri.fsPath.endsWith('.ts') || uri.fsPath.endsWith('.tsx') || uri.fsPath.endsWith('.js') || uri.fsPath.endsWith('.jsx')) {
             const content = await this.readFile(uri);
-            const info = this.jsTsParser.parse(relPath, content);
+            const info = RustBridge.getInstance().parseFileToInfo(relPath, content);
             info.contentHash = this.computeHash(content);
             this.index.set(relPath, info);
             dartFilesToUpsert.push({ relPath, hash: info.contentHash, info });
@@ -369,7 +369,7 @@ export class IndexManager {
           }
           else if (uri.fsPath.endsWith('.kt') || uri.fsPath.endsWith('.java') || uri.fsPath.endsWith('.xml') || uri.fsPath.endsWith('.gradle') || uri.fsPath.endsWith('.gradle.kts')) {
             const content = await this.readFile(uri);
-            const info = this.androidParser.parse(relPath, content);
+            const info = RustBridge.getInstance().parseFileToInfo(relPath, content);
             info.contentHash = this.computeHash(content);
             this.index.set(relPath, info);
             dartFilesToUpsert.push({ relPath, hash: info.contentHash, info });
@@ -425,7 +425,7 @@ export class IndexManager {
         const cached = await this.sqliteCache.getDartFile(relPath);
         if (cached && cached.hash === newHash)
           return;
-        const info = RustBridge.getInstance().parseDartToInfo(relPath, content);
+        const info = RustBridge.getInstance().parseFileToInfo(relPath, content);
         info.contentHash = newHash;
         this.index.set(relPath, info);
         await this.sqliteCache.upsertDartFile(relPath, newHash, info);
@@ -435,7 +435,7 @@ export class IndexManager {
         const cached = await this.sqliteCache.getDartFile(relPath);
         if (cached && cached.hash === newHash)
           return;
-        const info = this.jsTsParser.parse(relPath, content);
+        const info = RustBridge.getInstance().parseFileToInfo(relPath, content);
         info.contentHash = newHash;
         this.index.set(relPath, info);
         await this.sqliteCache.upsertDartFile(relPath, newHash, info);
@@ -445,7 +445,7 @@ export class IndexManager {
         const cached = await this.sqliteCache.getDartFile(relPath);
         if (cached && cached.hash === newHash)
           return;
-        const info = this.androidParser.parse(relPath, content);
+        const info = RustBridge.getInstance().parseFileToInfo(relPath, content);
         info.contentHash = newHash;
         this.index.set(relPath, info);
         await this.sqliteCache.upsertDartFile(relPath, newHash, info);

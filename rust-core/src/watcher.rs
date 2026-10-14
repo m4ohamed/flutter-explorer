@@ -3,7 +3,7 @@ use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watche
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc::{channel, Receiver, Sender};
 #[cfg(not(target_arch = "wasm32"))]
@@ -42,7 +42,18 @@ pub struct NativeFileWatcher;
 
 #[cfg(not(target_arch = "wasm32"))]
 impl NativeFileWatcher {
-    /// Spawns a managed background watcher with debouncing, Remove event tracking, and a stop handle
+    pub fn is_supported_source_file(path: &Path) -> bool {
+        let ext = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        matches!(
+            ext.as_str(),
+            "dart" | "kt" | "java" | "xml" | "gradle" | "kts" | "ts" | "tsx" | "js" | "jsx" | "arb"
+        )
+    }
+
+    /// Spawns a managed background watcher with debouncing, Remove event tracking, and multi-language file support
     pub fn start_managed(watch_dir: PathBuf) -> (WatcherHandle, Receiver<FileWatchEvent>) {
         let (stop_tx, stop_rx) = channel::<()>();
         let (event_tx, event_rx) = channel::<FileWatchEvent>();
@@ -60,7 +71,7 @@ impl NativeFileWatcher {
                 }
             };
 
-            let target_path = if watch_dir.join("lib").exists() {
+            let target_path = if watch_dir.join("lib").exists() && !watch_dir.join("android").exists() {
                 watch_dir.join("lib")
             } else {
                 watch_dir
@@ -76,7 +87,7 @@ impl NativeFileWatcher {
             }
 
             eprintln!(
-                "[Rust Watcher] ⚡ Watching '{}' natively via OS events",
+                "[Rust Watcher] ⚡ Watching '{}' natively via OS events (Multi-Language: Dart, Kotlin/Java/XML, TS/React)",
                 target_path.display()
             );
 
@@ -84,7 +95,6 @@ impl NativeFileWatcher {
             let debounce_window = Duration::from_millis(120);
 
             loop {
-                // Check if shutdown was requested
                 if stop_rx.try_recv().is_ok() {
                     let _ = watcher.unwatch(&target_path);
                     break;
@@ -94,11 +104,10 @@ impl NativeFileWatcher {
                     Ok(Ok(Event { kind, paths, .. })) => {
                         let now = Instant::now();
                         for path in paths {
-                            if !path.extension().map_or(false, |ext| ext == "dart") {
+                            if !Self::is_supported_source_file(&path) {
                                 continue;
                             }
 
-                            // Debounce rapid duplicate events for the same file
                             if let Some(&prev_time) = last_seen.get(&path) {
                                 if now.duration_since(prev_time) < debounce_window {
                                     continue;

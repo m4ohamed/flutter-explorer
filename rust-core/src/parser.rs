@@ -1710,4 +1710,1436 @@ impl PureDartParser {
             doc_comment: None,
         })
     }
+
+    // =========================================================================
+    // Multi-Language Rust Core: Dispatcher & Native Parsers for
+    // Kotlin/Java/Jetpack Compose, Android XML, Gradle, TypeScript/React/JSX,
+    // Markdown, CSS/SCSS, and JSON.
+    // =========================================================================
+
+    /// Parse any supported project file into the unified `DartParsedAst` structure
+    /// based on its file path / extension.
+    pub fn parse_by_extension(file_path: &str, source: &str) -> DartParsedAst {
+        let lower = file_path.trim().to_ascii_lowercase();
+        if lower.ends_with(".dart") {
+            Self::parse(source)
+        } else if lower.ends_with(".kt") || lower.ends_with(".java") {
+            Self::parse_kotlin_java(file_path, source)
+        } else if lower.ends_with(".xml") || lower.ends_with(".html") || lower.ends_with(".htm") {
+            Self::parse_xml(file_path, source)
+        } else if lower.ends_with(".gradle") || lower.ends_with(".kts") {
+            Self::parse_gradle(file_path, source)
+        } else if lower.ends_with(".ts")
+            || lower.ends_with(".tsx")
+            || lower.ends_with(".js")
+            || lower.ends_with(".jsx")
+            || lower.ends_with(".mjs")
+            || lower.ends_with(".cjs")
+        {
+            Self::parse_js_ts(file_path, source)
+        } else if lower.ends_with(".md")
+            || lower.ends_with(".css")
+            || lower.ends_with(".scss")
+            || lower.ends_with(".json")
+        {
+            Self::parse_auxiliary(file_path, source)
+        } else {
+            Self::parse(source)
+        }
+    }
+
+    /// Native Rust parser for Kotlin (`.kt`) and Java (`.java`), including Jetpack Compose `@Composable` UI trees
+    pub fn parse_kotlin_java(file_path: &str, source: &str) -> DartParsedAst {
+        let is_kotlin = file_path.to_ascii_lowercase().ends_with(".kt");
+        let raw_lines: Vec<&str> = source.lines().collect();
+        let total_lines = raw_lines.len();
+
+        let mut classes = Vec::new();
+        let mut functions = Vec::new();
+        let mut enums = Vec::new();
+        let mut widgets = Vec::new();
+        let mut mixins = Vec::new();
+        let mut extensions = Vec::new();
+        let mut typedefs = Vec::new();
+        let mut variables = Vec::new();
+        let mut constructors = Vec::new();
+        let mut properties = Vec::new();
+        let mut annotations = Vec::new();
+        let mut function_calls = Vec::new();
+        let mut imports = Vec::new();
+        let mut import_details = Vec::new();
+
+        let mut in_block_comment = false;
+        let mut masked_lines: Vec<String> = Vec::with_capacity(total_lines);
+        for &l in &raw_lines {
+            masked_lines.push(Self::sanitize_line(l, &mut in_block_comment));
+        }
+
+        let mut brace_depth: usize = 0;
+        let mut active_class: Option<DartClass> = None;
+        let mut class_brace_depth: usize = 0;
+        let mut active_enum: Option<DartEnum> = None;
+        let mut enum_brace_depth: usize = 0;
+        let mut enum_values_finished = false;
+        let mut active_method: Option<ActiveMethodState> = None;
+        let mut compose_ranges: Vec<(usize, usize)> = Vec::new();
+        let mut pending_composable = false;
+
+        let re_import = Regex::new(r"^import\s+(?:static\s+)?([a-zA-Z0-9_.*]+)(?:\s+as\s+([a-zA-Z0-9_]+))?").unwrap();
+        let re_anno = Regex::new(r"^@([A-Za-z_][A-Za-z0-9_.]*)").unwrap();
+        let re_kt_enum = Regex::new(r"^(?:(?:public|private|internal|protected)\s+)?enum\s+class\s+([A-Za-z_][A-Za-z0-9_]*)").unwrap();
+        let re_java_enum = Regex::new(r"^(?:(?:public|private|protected|static|final)\s+)*enum\s+([A-Za-z_][A-Za-z0-9_]*)").unwrap();
+        let re_iface = Regex::new(r"^(?:(?:public|private|internal|protected|sealed|fun)\s+)*interface\s+([A-Za-z_][A-Za-z0-9_]*)(?:<[^>]+>)?(?:\s*(?::|extends)\s*([^{]+))?").unwrap();
+        let re_kt_class = Regex::new(r"^(?:(?:public|private|internal|protected|open|abstract|sealed|data|value|inner|annotation)\s+)*(class|object)\s+([A-Za-z_][A-Za-z0-9_]*)(?:<[^>]+>)?(?:\s*(?:(?:private|internal|protected|public)\s+)?(?:constructor\s*)?\([^)]*\))?(?:\s*:\s*([^{]+))?").unwrap();
+        let re_java_class = Regex::new(r"^(?:(?:public|private|protected|abstract|final|static)\s+)*class\s+([A-Za-z_][A-Za-z0-9_]*)(?:<[^>]+>)?(?:\s+extends\s+([A-Za-z0-9_.<>]+))?(?:\s+implements\s+([^{]+))?").unwrap();
+        let re_kt_typealias = Regex::new(r"^(?:(?:public|private|internal)\s+)?typealias\s+([A-Za-z_][A-Za-z0-9_]*)(?:<[^>]+>)?\s*=\s*(.+)$").unwrap();
+        let re_kt_fun = Regex::new(r"^(?:(?:public|private|protected|internal|override|open|abstract|inline|suspend|operator|infix|tailrec|external)\s+)*fun\s+(?:<[^>]+>\s*)?(?:([A-Za-z_][A-Za-z0-9_<>?.*]*)\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)(?:\s*:\s*([A-Za-z0-9_<>?.,\s]+))?").unwrap();
+        let re_java_method = Regex::new(r"^(?:(?:public|protected|private|static|final|synchronized|abstract|native|default)\s+)+(?:<[^>]+>\s+)?([A-Za-z_][A-Za-z0-9_<>?\[\].]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)").unwrap();
+        let re_kt_prop = Regex::new(r"^(?:(?:public|private|protected|internal|override|open|abstract|const|lateinit)\s+)*(val|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*([^={;]+))?(?:\s*=\s*(.+))?").unwrap();
+
+        for i in 0..total_lines {
+            let line_num = i + 1;
+            let raw_line = raw_lines[i];
+            let raw_trimmed = raw_line.trim();
+            let sanitized = &masked_lines[i];
+            let trimmed = sanitized.trim();
+
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if brace_depth == 0 && (trimmed.starts_with("import ") || raw_trimmed.starts_with("import ")) {
+                if let Some(cap) = re_import.captures(raw_trimmed) {
+                    let path = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                    let alias = cap.get(2).map(|m| m.as_str().to_string());
+                    if !path.is_empty() {
+                        if !imports.contains(&path) {
+                            imports.push(path.clone());
+                        }
+                        import_details.push(DartImportInfo {
+                            path,
+                            alias,
+                            show_names: Vec::new(),
+                            hide_names: Vec::new(),
+                            line: line_num,
+                        });
+                    }
+                }
+            }
+
+            if raw_trimmed.starts_with('@') {
+                if let Some(cap) = re_anno.captures(raw_trimmed) {
+                    let anno_name = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+                    if anno_name == "Composable" || anno_name.ends_with(".Composable") {
+                        pending_composable = true;
+                    }
+                    let next_line = masked_lines.get(i + 1).map(|s| s.trim()).unwrap_or("");
+                    let (target, target_name) = Self::infer_annotation_target(next_line);
+                    annotations.push(DartAnnotationInfo {
+                        name: anno_name.to_string(),
+                        target,
+                        target_name,
+                        line: line_num,
+                    });
+                }
+            }
+
+            if active_class.is_none() && active_enum.is_none() && brace_depth == 0 {
+                if is_kotlin {
+                    if let Some(cap) = re_kt_typealias.captures(trimmed) {
+                        let name = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                        let sig = cap.get(2).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+                        typedefs.push(DartTypedefInfo {
+                            is_private: trimmed.starts_with("private "),
+                            name,
+                            signature: sig,
+                            line: line_num,
+                        });
+                    }
+                }
+
+                let enum_match = if is_kotlin {
+                    re_kt_enum.captures(trimmed)
+                } else {
+                    re_java_enum.captures(trimmed)
+                };
+                if let Some(cap) = enum_match {
+                    let name = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                    let mut enm = DartEnum {
+                        is_private: trimmed.starts_with("private "),
+                        name,
+                        values: Vec::new(),
+                        line: line_num,
+                        line_end: None,
+                        doc_comment: None,
+                    };
+                    enum_brace_depth = brace_depth;
+                    enum_values_finished = false;
+                    if let Some(brace_pos) = trimmed.find('{') {
+                        let after_brace = &trimmed[brace_pos + 1..];
+                        let inside = after_brace.split('}').next().unwrap_or(after_brace);
+                        Self::extract_enum_values(inside, &mut enm.values, &mut enum_values_finished);
+                    }
+                    active_enum = Some(enm);
+                } else if let Some(cap) = re_iface.captures(trimmed) {
+                    let name = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                    let on = cap.get(2).map(|m| Self::strip_generics(m.as_str()));
+                    mixins.push(DartMixinInfo {
+                        is_private: trimmed.starts_with("private "),
+                        name,
+                        on,
+                        line: line_num,
+                        line_end: None,
+                    });
+                } else if is_kotlin {
+                    if let Some(cap) = re_kt_class.captures(trimmed) {
+                        let kind_kw = cap.get(1).map(|m| m.as_str()).unwrap_or("class");
+                        let name = cap.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
+                        let supertypes_raw = cap.get(3).map(|m| m.as_str()).unwrap_or("");
+                        let mut extends_class = None;
+                        let mut implements = Vec::new();
+                        for part in Self::split_top_level_commas(supertypes_raw) {
+                            let clean_part = part.trim();
+                            if clean_part.is_empty() {
+                                continue;
+                            }
+                            if let Some(p_idx) = clean_part.find('(') {
+                                let sup = clean_part[..p_idx].trim();
+                                if !sup.is_empty() && extends_class.is_none() {
+                                    extends_class = Some(sup.to_string());
+                                }
+                            } else if extends_class.is_none() && (clean_part.ends_with("Activity") || clean_part.ends_with("Fragment") || clean_part.ends_with("ViewModel") || clean_part.ends_with("Application") || clean_part.ends_with("Service")) {
+                                extends_class = Some(clean_part.to_string());
+                            } else {
+                                implements.push(clean_part.to_string());
+                            }
+                        }
+                        let is_widget = extends_class.as_ref().map_or(false, |ext| {
+                            ext.ends_with("Activity") || ext.ends_with("Fragment") || ext.ends_with("View") || ext.ends_with("Dialog")
+                        });
+                        let is_abstract = trimmed.contains("abstract ") || trimmed.contains("sealed ");
+                        let is_private = trimmed.starts_with("private ");
+                        class_brace_depth = brace_depth;
+                        active_class = Some(DartClass {
+                            name,
+                            r#type: if is_widget { "widget".to_string() } else if kind_kw == "object" { "class".to_string() } else { "class".to_string() },
+                            line: line_num,
+                            line_end: None,
+                            extends_class,
+                            mixins: Vec::new(),
+                            implements,
+                            is_abstract,
+                            is_private,
+                            methods: Vec::new(),
+                            properties: Vec::new(),
+                            doc_comment: None,
+                        });
+                    }
+                } else if let Some(cap) = re_java_class.captures(trimmed) {
+                    let name = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                    let extends_class = cap.get(2).map(|m| Self::strip_generics(m.as_str()));
+                    let implements = cap
+                        .get(3)
+                        .map(|m| Self::split_top_level_commas(m.as_str()))
+                        .unwrap_or_default();
+                    let is_widget = extends_class.as_ref().map_or(false, |ext| {
+                        ext.ends_with("Activity") || ext.ends_with("Fragment") || ext.ends_with("View")
+                    });
+                    class_brace_depth = brace_depth;
+                    active_class = Some(DartClass {
+                        name,
+                        r#type: if is_widget { "widget".to_string() } else { "class".to_string() },
+                        line: line_num,
+                        line_end: None,
+                        extends_class,
+                        mixins: Vec::new(),
+                        implements,
+                        is_abstract: trimmed.contains("abstract "),
+                        is_private: trimmed.starts_with("private "),
+                        methods: Vec::new(),
+                        properties: Vec::new(),
+                        doc_comment: None,
+                    });
+                }
+            } else if let Some(ref mut enm) = active_enum {
+                if brace_depth == enum_brace_depth + 1 && !enum_values_finished {
+                    let segment = trimmed.split('}').next().unwrap_or(trimmed);
+                    Self::extract_enum_values(segment, &mut enm.values, &mut enum_values_finished);
+                }
+            }
+
+            // Member or top-level declarations
+            if active_method.is_none() {
+                let in_class = active_class.is_some() && brace_depth == class_brace_depth + 1;
+                let top_level = active_class.is_none() && active_enum.is_none() && brace_depth == 0;
+
+                if in_class || top_level {
+                    // Check Kotlin `fun` or Java method
+                    let mut matched_method: Option<(Option<String>, DartMethod, bool)> = None;
+                    if is_kotlin {
+                        if let Some(cap) = re_kt_fun.captures(trimmed) {
+                            let receiver_ext = cap.get(1).map(|m| m.as_str().trim().to_string());
+                            let fn_name = cap.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
+                            let params = cap.get(3).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+                            let ret_type = cap.get(4).map(|m| m.as_str().trim().to_string()).unwrap_or_else(|| "Unit".to_string());
+                            let is_Composable = pending_composable || raw_trimmed.contains("@Composable");
+                            pending_composable = false;
+
+                            let dm = DartMethod {
+                                is_private: trimmed.starts_with("private "),
+                                is_async: trimmed.contains("suspend "),
+                                is_static: false,
+                                name: fn_name,
+                                return_type: if is_Composable { "Composable".to_string() } else { ret_type },
+                                params,
+                                line: line_num,
+                                line_end: None,
+                                parent_class: active_class.as_ref().map(|c| c.name.clone()),
+                                doc_comment: None,
+                            };
+                            matched_method = Some((receiver_ext, dm, is_Composable));
+                        }
+                    } else if let Some(cap) = re_java_method.captures(trimmed) {
+                        let ret_type = cap.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+                        let fn_name = cap.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
+                        let params = cap.get(3).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+                        if !matches!(fn_name.as_str(), "if" | "for" | "while" | "switch" | "catch") {
+                            let dm = DartMethod {
+                                is_private: trimmed.starts_with("private "),
+                                is_async: false,
+                                is_static: trimmed.contains("static "),
+                                name: fn_name,
+                                return_type: ret_type,
+                                params,
+                                line: line_num,
+                                line_end: None,
+                                parent_class: active_class.as_ref().map(|c| c.name.clone()),
+                                doc_comment: None,
+                            };
+                            matched_method = Some((None, dm, false));
+                        }
+                    }
+
+                    if let Some((receiver_ext, mut m, is_composable)) = matched_method {
+                        if let Some(ext_type) = receiver_ext {
+                            extensions.push(DartExtensionInfo {
+                                name: format!("{}.{}", ext_type, m.name),
+                                on_type: ext_type,
+                                methods: vec![m.clone()],
+                                properties: Vec::new(),
+                                line: line_num,
+                                line_end: Some(line_num),
+                                is_private: m.is_private,
+                            });
+                        }
+                        if is_composable && top_level {
+                            classes.push(DartClass {
+                                name: m.name.clone(),
+                                r#type: "widget".to_string(),
+                                line: line_num,
+                                line_end: None,
+                                extends_class: Some("Composable".to_string()),
+                                mixins: Vec::new(),
+                                implements: Vec::new(),
+                                is_abstract: false,
+                                is_private: m.is_private,
+                                methods: Vec::new(),
+                                properties: Vec::new(),
+                                doc_comment: None,
+                            });
+                        }
+                        let opens_brace = trimmed.contains('{');
+                        let closes_same_line = opens_brace && {
+                            let o = trimmed.chars().filter(|&c| c == '{').count();
+                            let c = trimmed.chars().filter(|&c| c == '}').count();
+                            o > 0 && o == c
+                        };
+                        if closes_same_line || trimmed.ends_with(';') {
+                            m.line_end = Some(line_num);
+                            if is_composable {
+                                compose_ranges.push((line_num, line_num));
+                            }
+                            if in_class {
+                                if let Some(ref mut cls) = active_class {
+                                    cls.methods.push(m);
+                                }
+                            } else {
+                                functions.push(m);
+                            }
+                        } else {
+                            // Store whether this method is a Composable via doc_comment marker if needed
+                            if is_composable {
+                                m.doc_comment = Some("@Composable".to_string());
+                            }
+                            active_method = Some(ActiveMethodState {
+                                method: m,
+                                is_class_member: in_class,
+                                is_extension_member: false,
+                                base_brace_depth: brace_depth,
+                                has_opened_brace: opens_brace,
+                                is_arrow_expr: !opens_brace && trimmed.contains('='),
+                            });
+                        }
+                    } else if is_kotlin {
+                        if let Some(cap) = re_kt_prop.captures(trimmed) {
+                            let kw = cap.get(1).map(|m| m.as_str()).unwrap_or("val");
+                            let prop_name = cap.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
+                            let prop_type = cap.get(3).map(|m| m.as_str().trim().to_string()).unwrap_or_else(|| "Any".to_string());
+                            let prop_val = cap.get(4).map(|m| m.as_str().trim().to_string());
+                            let is_const = trimmed.contains("const ");
+                            let is_final = kw == "val" || is_const;
+                            let is_private = trimmed.starts_with("private ");
+                            if in_class {
+                                let prop = DartPropertyInfo {
+                                    name: prop_name,
+                                    r#type: prop_type,
+                                    class_name: active_class.as_ref().map(|c| c.name.clone()),
+                                    is_final,
+                                    is_const,
+                                    is_static: false,
+                                    is_private,
+                                    is_getter: false,
+                                    is_setter: false,
+                                    line: line_num,
+                                };
+                                if let Some(ref mut cls) = active_class {
+                                    cls.properties.push(prop.clone());
+                                }
+                                properties.push(prop);
+                            } else if top_level {
+                                variables.push(DartVariableInfo {
+                                    name: prop_name,
+                                    r#type: prop_type,
+                                    value: prop_val,
+                                    line: line_num,
+                                    is_const,
+                                    is_final,
+                                    is_private,
+                                    is_top_level: true,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            if brace_depth >= 1 {
+                let caller_cls = active_class.as_ref().map(|c| c.name.as_str());
+                let caller_fn = active_method.as_ref().map(|m| m.method.name.as_str());
+                Self::extract_line_function_calls(
+                    trimmed,
+                    raw_trimmed,
+                    line_num,
+                    caller_cls,
+                    caller_fn,
+                    &mut function_calls,
+                );
+            }
+
+            let open_braces = trimmed.chars().filter(|&c| c == '{').count();
+            let close_braces = trimmed.chars().filter(|&c| c == '}').count();
+
+            if let Some(ref mut m_state) = active_method {
+                if open_braces > 0 {
+                    m_state.has_opened_brace = true;
+                }
+            }
+
+            brace_depth = (brace_depth + open_braces).saturating_sub(close_braces);
+
+            if let Some(m_state) = active_method.take() {
+                let finished = if m_state.is_arrow_expr {
+                    !trimmed.ends_with('=') && !trimmed.ends_with(',')
+                } else {
+                    m_state.has_opened_brace && brace_depth <= m_state.base_brace_depth
+                };
+
+                if finished {
+                    let mut m = m_state.method;
+                    m.line_end = Some(line_num);
+                    if m.doc_comment.as_deref() == Some("@Composable") || m.return_type == "Composable" {
+                        compose_ranges.push((m.line, line_num));
+                    }
+                    if m_state.is_class_member {
+                        if let Some(ref mut cls) = active_class {
+                            cls.methods.push(m);
+                        }
+                    } else {
+                        functions.push(m);
+                    }
+                } else {
+                    active_method = Some(m_state);
+                }
+            }
+
+            if let Some(mut cls) = active_class.take() {
+                if brace_depth <= class_brace_depth && (open_braces > 0 || close_braces > 0) {
+                    cls.line_end = Some(line_num);
+                    classes.push(cls);
+                } else {
+                    active_class = Some(cls);
+                }
+            }
+
+            if let Some(mut enm) = active_enum.take() {
+                if brace_depth <= enum_brace_depth && (open_braces > 0 || close_braces > 0) {
+                    enm.line_end = Some(line_num);
+                    enums.push(enm);
+                } else {
+                    active_enum = Some(enm);
+                }
+            }
+        }
+
+        if let Some(mut cls) = active_class {
+            cls.line_end = Some(total_lines);
+            classes.push(cls);
+        }
+        if let Some(mut enm) = active_enum {
+            enm.line_end = Some(total_lines);
+            enums.push(enm);
+        }
+
+        // Extract Jetpack Compose UI widget trees from @Composable functions
+        for (start_l, end_l) in compose_ranges {
+            let start_idx = start_l.saturating_sub(1);
+            let end_idx = end_l.min(total_lines);
+            if start_idx < end_idx {
+                let mut tree = Self::parse_widget_tree_slice(
+                    &raw_lines[start_idx..end_idx],
+                    &masked_lines[start_idx..end_idx],
+                    start_l,
+                );
+                widgets.append(&mut tree);
+            }
+        }
+
+        DartParsedAst {
+            classes,
+            functions,
+            enums,
+            widgets,
+            mixins,
+            extensions,
+            typedefs,
+            variables,
+            constructors,
+            properties,
+            annotations,
+            function_calls,
+            imports,
+            import_details,
+            exports: Vec::new(),
+            total_lines,
+        }
+    }
+
+    /// Native Rust parser for Android XML (Manifest, Layouts, Resources) and HTML
+    pub fn parse_xml(file_path: &str, source: &str) -> DartParsedAst {
+        let lower_path = file_path.replace('\\', "/").to_ascii_lowercase();
+        let raw_lines: Vec<&str> = source.lines().collect();
+        let total_lines = raw_lines.len();
+
+        let mut classes = Vec::new();
+        let mut widgets = Vec::new();
+        let mut variables = Vec::new();
+        let mut imports = Vec::new();
+        let mut import_details = Vec::new();
+
+        // 1. AndroidManifest.xml
+        if lower_path.ends_with("androidmanifest.xml") {
+            let re_perm = Regex::new(r#"<uses-permission[^>]*android:name\s*=\s*["']([^"']+)["']"#).unwrap();
+            let re_comp = Regex::new(r#"<(activity|service|receiver|provider|application)[^>]*android:name\s*=\s*["']([^"']+)["']"#).unwrap();
+            for (idx, line) in raw_lines.iter().enumerate() {
+                let line_num = idx + 1;
+                for cap in re_perm.captures_iter(line) {
+                    if let Some(m) = cap.get(1) {
+                        let perm = m.as_str().to_string();
+                        imports.push(perm.clone());
+                        import_details.push(DartImportInfo {
+                            path: perm,
+                            alias: None,
+                            show_names: Vec::new(),
+                            hide_names: Vec::new(),
+                            line: line_num,
+                        });
+                    }
+                }
+                for cap in re_comp.captures_iter(line) {
+                    let kind = cap.get(1).map(|m| m.as_str()).unwrap_or("component");
+                    let name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+                    if !name.is_empty() {
+                        classes.push(DartClass {
+                            name: name.to_string(),
+                            r#type: if kind == "activity" { "widget".to_string() } else { "class".to_string() },
+                            line: line_num,
+                            line_end: Some(line_num),
+                            extends_class: Some(kind.to_string()),
+                            mixins: Vec::new(),
+                            implements: Vec::new(),
+                            is_abstract: false,
+                            is_private: false,
+                            methods: Vec::new(),
+                            properties: Vec::new(),
+                            doc_comment: None,
+                        });
+                    }
+                }
+            }
+        } else if lower_path.contains("/values") || source.contains("<resources") {
+            // 2. Android Resource XML (strings.xml, colors.xml, dimens.xml, styles.xml)
+            let re_res = Regex::new(r#"<(string|color|dimen|style|bool|integer|plurals|string-array)\s+[^>]*name\s*=\s*["']([^"']+)["'][^>]*>([^<]*)"#).unwrap();
+            for (idx, line) in raw_lines.iter().enumerate() {
+                let line_num = idx + 1;
+                for cap in re_res.captures_iter(line) {
+                    let rtype = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                    let rname = cap.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
+                    let rval = cap.get(3).map(|m| m.as_str().trim().to_string()).filter(|s| !s.is_empty());
+                    variables.push(DartVariableInfo {
+                        name: rname,
+                        r#type: rtype,
+                        value: rval,
+                        line: line_num,
+                        is_const: true,
+                        is_final: true,
+                        is_private: false,
+                        is_top_level: true,
+                    });
+                }
+            }
+        } else {
+            // 3. Android Layout XML or HTML hierarchy -> nested `DartWidgetInfo`
+            let re_tag = Regex::new(r#"(?s)<(/?)([a-zA-Z0-9_.:-]+)([^>]*?)(/?)>"#).unwrap();
+            let re_attr = Regex::new(r#"([a-zA-Z0-9_:-]+)\s*=\s*["']([^"']*)["']"#).unwrap();
+            let mut stack: Vec<DartWidgetInfo> = Vec::new();
+
+            for cap in re_tag.captures_iter(source) {
+                let full_match = match cap.get(0) {
+                    Some(m) => m,
+                    None => continue,
+                };
+                let is_closing = cap.get(1).map_or(false, |m| m.as_str() == "/");
+                let raw_tag = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+                let attrs_str = cap.get(3).map(|m| m.as_str()).unwrap_or("");
+                let is_self_closing = cap.get(4).map_or(false, |m| m.as_str() == "/")
+                    || matches!(raw_tag.to_ascii_lowercase().as_str(), "br" | "hr" | "img" | "input" | "meta" | "link");
+
+                if raw_tag.starts_with('?') || raw_tag.starts_with('!') {
+                    continue;
+                }
+
+                let line_num = source[..full_match.start()].bytes().filter(|&b| b == b'\n').count() + 1;
+                let short_name = raw_tag.rsplit('.').next().unwrap_or(raw_tag).to_string();
+
+                if is_closing {
+                    if let Some(finished) = stack.pop() {
+                        if let Some(parent) = stack.last_mut() {
+                            parent.children.push(finished);
+                        } else {
+                            widgets.push(finished);
+                        }
+                    }
+                    continue;
+                }
+
+                let mut props = Vec::new();
+                for acap in re_attr.captures_iter(attrs_str) {
+                    let aname = acap.get(1).map(|m| m.as_str()).unwrap_or("");
+                    let aval = acap.get(2).map(|m| m.as_str()).unwrap_or("");
+                    if !aname.starts_with("xmlns") {
+                        props.push(DartWidgetProperty {
+                            name: aname.to_string(),
+                            value: aval.to_string(),
+                        });
+                    }
+                }
+
+                let node = DartWidgetInfo {
+                    name: short_name.clone(),
+                    line: line_num,
+                    children: Vec::new(),
+                    properties: props,
+                };
+
+                if is_self_closing {
+                    if let Some(parent) = stack.last_mut() {
+                        parent.children.push(node);
+                    } else {
+                        widgets.push(node);
+                    }
+                } else {
+                    stack.push(node);
+                }
+            }
+
+            while let Some(finished) = stack.pop() {
+                if let Some(parent) = stack.last_mut() {
+                    parent.children.push(finished);
+                } else {
+                    widgets.push(finished);
+                }
+            }
+        }
+
+        DartParsedAst {
+            classes,
+            functions: Vec::new(),
+            enums: Vec::new(),
+            widgets,
+            mixins: Vec::new(),
+            extensions: Vec::new(),
+            typedefs: Vec::new(),
+            variables,
+            constructors: Vec::new(),
+            properties: Vec::new(),
+            annotations: Vec::new(),
+            function_calls: Vec::new(),
+            imports,
+            import_details,
+            exports: Vec::new(),
+            total_lines,
+        }
+    }
+
+    /// Native Rust parser for Gradle build scripts (`.gradle`, `.gradle.kts`)
+    pub fn parse_gradle(_file_path: &str, source: &str) -> DartParsedAst {
+        let raw_lines: Vec<&str> = source.lines().collect();
+        let total_lines = raw_lines.len();
+        let mut imports = Vec::new();
+        let mut import_details = Vec::new();
+        let mut variables = Vec::new();
+
+        let re_dep = Regex::new(
+            r#"\b(?:implementation|api|kapt|ksp|compileOnly|runtimeOnly|testImplementation|androidTestImplementation|debugImplementation)\s*\(?\s*["']([^"']+)["']"#,
+        ).unwrap();
+        let re_catalog = Regex::new(
+            r#"\b(?:implementation|api|kapt|ksp|compileOnly|runtimeOnly|testImplementation|androidTestImplementation)\s*\(\s*(libs\.[a-zA-Z0-9_.]+)\s*\)"#,
+        ).unwrap();
+        let re_sdk = Regex::new(
+            r#"\b(namespace|applicationId|compileSdk|minSdk|targetSdk|versionCode|versionName)\s*(?:=|\s)\s*([^\s/]+)"#,
+        ).unwrap();
+
+        for (idx, line) in raw_lines.iter().enumerate() {
+            let line_num = idx + 1;
+            let trimmed = line.trim();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            for cap in re_dep.captures_iter(trimmed) {
+                if let Some(m) = cap.get(1) {
+                    let dep = m.as_str().to_string();
+                    imports.push(dep.clone());
+                    import_details.push(DartImportInfo {
+                        path: dep,
+                        alias: None,
+                        show_names: Vec::new(),
+                        hide_names: Vec::new(),
+                        line: line_num,
+                    });
+                }
+            }
+            for cap in re_catalog.captures_iter(trimmed) {
+                if let Some(m) = cap.get(1) {
+                    let dep = m.as_str().to_string();
+                    imports.push(dep.clone());
+                    import_details.push(DartImportInfo {
+                        path: dep,
+                        alias: None,
+                        show_names: Vec::new(),
+                        hide_names: Vec::new(),
+                        line: line_num,
+                    });
+                }
+            }
+            if let Some(cap) = re_sdk.captures(trimmed) {
+                let key = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                let val = cap
+                    .get(2)
+                    .map(|m| m.as_str().trim_matches(|c| c == '"' || c == '\'').to_string());
+                variables.push(DartVariableInfo {
+                    name: key,
+                    r#type: "GradleConfig".to_string(),
+                    value: val,
+                    line: line_num,
+                    is_const: true,
+                    is_final: true,
+                    is_private: false,
+                    is_top_level: true,
+                });
+            }
+        }
+
+        DartParsedAst {
+            total_lines,
+            imports,
+            import_details,
+            variables,
+            ..Default::default()
+        }
+    }
+
+    /// Native Rust parser for TypeScript, JavaScript, and React (`.ts`, `.tsx`, `.js`, `.jsx`)
+    pub fn parse_js_ts(file_path: &str, source: &str) -> DartParsedAst {
+        let lower_path = file_path.to_ascii_lowercase();
+        let is_jsx_ext = lower_path.ends_with(".tsx") || lower_path.ends_with(".jsx");
+        let raw_lines: Vec<&str> = source.lines().collect();
+        let total_lines = raw_lines.len();
+
+        let mut classes = Vec::new();
+        let mut functions = Vec::new();
+        let mut enums = Vec::new();
+        let mut widgets = Vec::new();
+        let mut mixins = Vec::new();
+        let mut typedefs = Vec::new();
+        let mut variables = Vec::new();
+        let mut constructors = Vec::new();
+        let mut properties = Vec::new();
+        let mut annotations = Vec::new();
+        let mut function_calls = Vec::new();
+        let mut imports = Vec::new();
+        let mut import_details = Vec::new();
+        let mut exports = Vec::new();
+
+        let mut in_block_comment = false;
+        let mut masked_lines: Vec<String> = Vec::with_capacity(total_lines);
+        for &l in &raw_lines {
+            masked_lines.push(Self::sanitize_line(l, &mut in_block_comment));
+        }
+
+        let re_import_from = Regex::new(r#"^import\s+(?:type\s+)?(.+?)\s+from\s+['"]([^'"]+)['"]"#).unwrap();
+        let re_import_side = Regex::new(r#"^import\s+['"]([^'"]+)['"]"#).unwrap();
+        let re_require = Regex::new(r#"\brequire\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap();
+        let re_export_from = Regex::new(r#"^export\s+(?:\*|\{[^}]*\})\s+from\s+['"]([^'"]+)['"]"#).unwrap();
+        let re_iface = Regex::new(r#"^(?:export\s+)?(?:declare\s+)?interface\s+([A-Za-z_$][A-Za-z0-9_$]*)(?:<[^>]+>)?(?:\s+extends\s+([^{]+))?"#).unwrap();
+        let re_type = Regex::new(r#"^(?:export\s+)?(?:declare\s+)?type\s+([A-Za-z_$][A-Za-z0-9_$]*)(?:<[^>]+>)?\s*=\s*(.+)$"#).unwrap();
+        let re_enum = Regex::new(r#"^(?:export\s+)?(?:const\s+)?enum\s+([A-Za-z_$][A-Za-z0-9_$]*)"#).unwrap();
+        let re_class = Regex::new(r#"^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][A-Za-z0-9_$]*)(?:<[^>]+>)?(?:\s+extends\s+([A-Za-z0-9_$.<>]+))?(?:\s+implements\s+([^{]+))?"#).unwrap();
+        let re_func = Regex::new(r#"^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*(?:<[^>]+>)?\s*\(([^)]*)\)(?:\s*:\s*([^{;]+))?"#).unwrap();
+        let re_arrow_fn = Regex::new(r#"^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*(?::\s*[^=]+)?\s*=\s*(?:React\.(?:memo|forwardRef)\s*\(\s*)?(?:async\s+)?(?:\(([^)]*)\)|([A-Za-z_$][A-Za-z0-9_$]*))\s*(?::\s*[^=]+)?\s*=>"#).unwrap();
+        let re_var = Regex::new(r#"^(?:export\s+)?(const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*(?::\s*([^=;]+))?\s*=\s*(.+)$"#).unwrap();
+        let re_cls_method = Regex::new(r#"^(?:(?:public|private|protected|static|readonly|abstract|async|override|get|set)\s+)*([A-Za-z_$#][A-Za-z0-9_$]*)\s*(?:<[^>]+>)?\s*\(([^)]*)\)(?:\s*:\s*([^{;]+))?\s*\{"#).unwrap();
+        let re_cls_prop = Regex::new(r#"^(?:(public|private|protected|static|readonly)\s+)*([A-Za-z_$#][A-Za-z0-9_$]*)\??\s*(?::\s*([^=;]+))?(?:\s*=\s*[^;]+)?;"#).unwrap();
+
+        let mut brace_depth: usize = 0;
+        let mut active_class: Option<DartClass> = None;
+        let mut class_brace_depth: usize = 0;
+        let mut active_enum: Option<DartEnum> = None;
+        let mut enum_brace_depth: usize = 0;
+        let mut enum_values_finished = false;
+        let mut active_method: Option<ActiveMethodState> = None;
+
+        for i in 0..total_lines {
+            let line_num = i + 1;
+            let raw_line = raw_lines[i];
+            let raw_trimmed = raw_line.trim();
+            let sanitized = &masked_lines[i];
+            let trimmed = sanitized.trim();
+
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // Imports & Exports
+            if raw_trimmed.starts_with("import ") {
+                if let Some(cap) = re_import_from.captures(raw_trimmed) {
+                    let clause = cap.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+                    let path = cap.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
+                    let mut alias = None;
+                    let mut show_names = Vec::new();
+                    if let Some(as_idx) = clause.find("* as ") {
+                        alias = Some(clause[as_idx + 5..].trim().to_string());
+                    } else if let Some(open_b) = clause.find('{') {
+                        if let Some(close_b) = clause.find('}') {
+                            for item in clause[open_b + 1..close_b].split(',') {
+                                let clean = item.split(" as ").next().unwrap_or(item).trim();
+                                if !clean.is_empty() {
+                                    show_names.push(clean.to_string());
+                                }
+                            }
+                        }
+                    } else if !clause.is_empty() {
+                        alias = Some(clause.trim().to_string());
+                    }
+                    if !path.is_empty() {
+                        if !imports.contains(&path) {
+                            imports.push(path.clone());
+                        }
+                        import_details.push(DartImportInfo {
+                            path,
+                            alias,
+                            show_names,
+                            hide_names: Vec::new(),
+                            line: line_num,
+                        });
+                    }
+                } else if let Some(cap) = re_import_side.captures(raw_trimmed) {
+                    if let Some(m) = cap.get(1) {
+                        let path = m.as_str().to_string();
+                        if !imports.contains(&path) {
+                            imports.push(path.clone());
+                        }
+                        import_details.push(DartImportInfo {
+                            path,
+                            alias: None,
+                            show_names: Vec::new(),
+                            hide_names: Vec::new(),
+                            line: line_num,
+                        });
+                    }
+                }
+            } else if let Some(cap) = re_require.captures(raw_trimmed) {
+                if let Some(m) = cap.get(1) {
+                    let path = m.as_str().to_string();
+                    if !imports.contains(&path) {
+                        imports.push(path.clone());
+                        import_details.push(DartImportInfo {
+                            path,
+                            alias: None,
+                            show_names: Vec::new(),
+                            hide_names: Vec::new(),
+                            line: line_num,
+                        });
+                    }
+                }
+            }
+
+            if raw_trimmed.starts_with("export ") {
+                if let Some(cap) = re_export_from.captures(raw_trimmed) {
+                    if let Some(m) = cap.get(1) {
+                        exports.push(m.as_str().to_string());
+                    }
+                }
+            }
+
+            if raw_trimmed.starts_with('@') {
+                let anno_name: String = raw_trimmed[1..]
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
+                    .collect();
+                if !anno_name.is_empty() {
+                    let next_line = masked_lines.get(i + 1).map(|s| s.trim()).unwrap_or("");
+                    let (target, target_name) = Self::infer_annotation_target(next_line);
+                    annotations.push(DartAnnotationInfo {
+                        name: anno_name,
+                        target,
+                        target_name,
+                        line: line_num,
+                    });
+                }
+            }
+
+            if active_class.is_none() && active_enum.is_none() && brace_depth == 0 {
+                if let Some(cap) = re_iface.captures(trimmed) {
+                    let name = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                    let on = cap.get(2).map(|m| Self::strip_generics(m.as_str()));
+                    mixins.push(DartMixinInfo {
+                        is_private: !raw_trimmed.starts_with("export "),
+                        name,
+                        on,
+                        line: line_num,
+                        line_end: None,
+                    });
+                } else if let Some(cap) = re_type.captures(trimmed) {
+                    let name = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                    let sig = cap
+                        .get(2)
+                        .map(|m| m.as_str().trim_end_matches(';').trim().to_string())
+                        .unwrap_or_default();
+                    typedefs.push(DartTypedefInfo {
+                        is_private: !raw_trimmed.starts_with("export "),
+                        name,
+                        signature: sig,
+                        line: line_num,
+                    });
+                } else if let Some(cap) = re_enum.captures(trimmed) {
+                    let name = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                    let mut enm = DartEnum {
+                        is_private: !raw_trimmed.starts_with("export "),
+                        name,
+                        values: Vec::new(),
+                        line: line_num,
+                        line_end: None,
+                        doc_comment: None,
+                    };
+                    enum_brace_depth = brace_depth;
+                    enum_values_finished = false;
+                    if let Some(brace_pos) = trimmed.find('{') {
+                        let after_brace = &trimmed[brace_pos + 1..];
+                        let inside = after_brace.split('}').next().unwrap_or(after_brace);
+                        Self::extract_enum_values(inside, &mut enm.values, &mut enum_values_finished);
+                    }
+                    active_enum = Some(enm);
+                } else if let Some(cap) = re_class.captures(trimmed) {
+                    let name = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                    let extends_class = cap.get(2).map(|m| Self::strip_generics(m.as_str()));
+                    let implements = cap
+                        .get(3)
+                        .map(|m| Self::split_top_level_commas(m.as_str()))
+                        .unwrap_or_default();
+                    let is_react_comp = extends_class.as_ref().map_or(false, |ext| {
+                        ext.contains("Component") || ext.contains("PureComponent") || ext.contains("HTMLElement")
+                    });
+                    class_brace_depth = brace_depth;
+                    active_class = Some(DartClass {
+                        name,
+                        r#type: if is_react_comp { "widget".to_string() } else { "class".to_string() },
+                        line: line_num,
+                        line_end: None,
+                        extends_class,
+                        mixins: Vec::new(),
+                        implements,
+                        is_abstract: trimmed.contains("abstract "),
+                        is_private: !raw_trimmed.starts_with("export "),
+                        methods: Vec::new(),
+                        properties: Vec::new(),
+                        doc_comment: None,
+                    });
+                }
+            } else if let Some(ref mut enm) = active_enum {
+                if brace_depth == enum_brace_depth + 1 && !enum_values_finished {
+                    let clean_seg = trimmed.split('=').next().unwrap_or(trimmed);
+                    Self::extract_enum_values(clean_seg, &mut enm.values, &mut enum_values_finished);
+                }
+            }
+
+            if active_method.is_none() {
+                let in_class = active_class.is_some() && brace_depth == class_brace_depth + 1;
+                let top_level = active_class.is_none() && active_enum.is_none() && brace_depth == 0;
+
+                if top_level {
+                    if let Some(cap) = re_func.captures(trimmed) {
+                        let fn_name = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                        let params = cap.get(2).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+                        let ret_type = cap
+                            .get(3)
+                            .map(|m| m.as_str().trim().to_string())
+                            .unwrap_or_else(|| "any".to_string());
+                        let is_pascal = fn_name.chars().next().map_or(false, |c| c.is_ascii_uppercase());
+                        if is_pascal && is_jsx_ext {
+                            classes.push(DartClass {
+                                name: fn_name.clone(),
+                                r#type: "widget".to_string(),
+                                line: line_num,
+                                line_end: None,
+                                extends_class: Some("React.FC".to_string()),
+                                mixins: Vec::new(),
+                                implements: Vec::new(),
+                                is_abstract: false,
+                                is_private: !raw_trimmed.starts_with("export "),
+                                methods: Vec::new(),
+                                properties: Vec::new(),
+                                doc_comment: None,
+                            });
+                        }
+                        let m = DartMethod {
+                            name: fn_name,
+                            return_type: ret_type,
+                            params,
+                            line: line_num,
+                            line_end: None,
+                            is_private: !raw_trimmed.starts_with("export "),
+                            is_async: trimmed.contains("async "),
+                            is_static: false,
+                            parent_class: None,
+                            doc_comment: None,
+                        };
+                        let opens_brace = trimmed.contains('{');
+                        active_method = Some(ActiveMethodState {
+                            method: m,
+                            is_class_member: false,
+                            is_extension_member: false,
+                            base_brace_depth: brace_depth,
+                            has_opened_brace: opens_brace,
+                            is_arrow_expr: false,
+                        });
+                    } else if let Some(cap) = re_arrow_fn.captures(trimmed) {
+                        let fn_name = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                        let params = cap
+                            .get(2)
+                            .or_else(|| cap.get(3))
+                            .map(|m| m.as_str().trim().to_string())
+                            .unwrap_or_default();
+                        let is_pascal = fn_name.chars().next().map_or(false, |c| c.is_ascii_uppercase());
+                        if is_pascal && (is_jsx_ext || raw_trimmed.contains("React.memo") || raw_trimmed.contains("forwardRef")) {
+                            classes.push(DartClass {
+                                name: fn_name.clone(),
+                                r#type: "widget".to_string(),
+                                line: line_num,
+                                line_end: None,
+                                extends_class: Some("React.FC".to_string()),
+                                mixins: Vec::new(),
+                                implements: Vec::new(),
+                                is_abstract: false,
+                                is_private: !raw_trimmed.starts_with("export "),
+                                methods: Vec::new(),
+                                properties: Vec::new(),
+                                doc_comment: None,
+                            });
+                        }
+                        let opens_brace = trimmed.contains('{');
+                        let m = DartMethod {
+                            name: fn_name,
+                            return_type: if is_pascal && is_jsx_ext { "JSX.Element".to_string() } else { "any".to_string() },
+                            params,
+                            line: line_num,
+                            line_end: if !opens_brace { Some(line_num) } else { None },
+                            is_private: !raw_trimmed.starts_with("export "),
+                            is_async: trimmed.contains("async "),
+                            is_static: false,
+                            parent_class: None,
+                            doc_comment: None,
+                        };
+                        if opens_brace {
+                            active_method = Some(ActiveMethodState {
+                                method: m,
+                                is_class_member: false,
+                                is_extension_member: false,
+                                base_brace_depth: brace_depth,
+                                has_opened_brace: true,
+                                is_arrow_expr: false,
+                            });
+                        } else {
+                            functions.push(m);
+                        }
+                    } else if let Some(cap) = re_var.captures(trimmed) {
+                        let kw = cap.get(1).map(|m| m.as_str()).unwrap_or("const");
+                        let vname = cap.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
+                        let vtype = cap.get(3).map(|m| m.as_str().trim().to_string()).unwrap_or_else(|| "any".to_string());
+                        let vval = cap.get(4).map(|m| m.as_str().trim_end_matches(';').trim().to_string());
+                        variables.push(DartVariableInfo {
+                            name: vname,
+                            r#type: vtype,
+                            value: vval,
+                            line: line_num,
+                            is_const: kw == "const",
+                            is_final: kw == "const",
+                            is_private: !raw_trimmed.starts_with("export "),
+                            is_top_level: true,
+                        });
+                    }
+                } else if in_class {
+                    let cls_name = active_class.as_ref().map(|c| c.name.clone()).unwrap_or_default();
+                    if let Some(cap) = re_cls_method.captures(trimmed) {
+                        let m_name = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                        let params = cap.get(2).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+                        let ret_type = cap.get(3).map(|m| m.as_str().trim().to_string()).unwrap_or_else(|| "any".to_string());
+                        if !matches!(m_name.as_str(), "if" | "for" | "while" | "switch" | "catch") {
+                            if m_name == "constructor" {
+                                constructors.push(DartConstructorInfo {
+                                    name: cls_name.clone(),
+                                    class_name: cls_name.clone(),
+                                    is_factory: false,
+                                    is_const: false,
+                                    params: params.clone(),
+                                    line: line_num,
+                                });
+                            }
+                            let m = DartMethod {
+                                is_private: m_name.starts_with('#') || m_name.starts_with('_') || trimmed.starts_with("private "),
+                                is_async: trimmed.contains("async "),
+                                is_static: trimmed.contains("static "),
+                                name: m_name,
+                                return_type: ret_type,
+                                params,
+                                line: line_num,
+                                line_end: None,
+                                parent_class: Some(cls_name),
+                                doc_comment: None,
+                            };
+                            active_method = Some(ActiveMethodState {
+                                method: m,
+                                is_class_member: true,
+                                is_extension_member: false,
+                                base_brace_depth: brace_depth,
+                                has_opened_brace: true,
+                                is_arrow_expr: false,
+                            });
+                        }
+                    } else if let Some(cap) = re_cls_prop.captures(trimmed) {
+                        let pname = cap.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
+                        let ptype = cap.get(3).map(|m| m.as_str().trim().to_string()).unwrap_or_else(|| "any".to_string());
+                        if !pname.is_empty() {
+                            let prop = DartPropertyInfo {
+                                is_private: pname.starts_with('#') || pname.starts_with('_') || trimmed.starts_with("private "),
+                                name: pname,
+                                r#type: ptype,
+                                class_name: Some(cls_name),
+                                is_final: trimmed.contains("readonly "),
+                                is_const: false,
+                                is_static: trimmed.contains("static "),
+                                is_getter: false,
+                                is_setter: false,
+                                line: line_num,
+                            };
+                            if let Some(ref mut cls) = active_class {
+                                cls.properties.push(prop.clone());
+                            }
+                            properties.push(prop);
+                        }
+                    }
+                }
+            }
+
+            if brace_depth >= 1 {
+                let caller_cls = active_class.as_ref().map(|c| c.name.as_str());
+                let caller_fn = active_method.as_ref().map(|m| m.method.name.as_str());
+                Self::extract_line_function_calls(
+                    trimmed,
+                    raw_trimmed,
+                    line_num,
+                    caller_cls,
+                    caller_fn,
+                    &mut function_calls,
+                );
+            }
+
+            let open_braces = trimmed.chars().filter(|&c| c == '{').count();
+            let close_braces = trimmed.chars().filter(|&c| c == '}').count();
+
+            if let Some(ref mut m_state) = active_method {
+                if open_braces > 0 {
+                    m_state.has_opened_brace = true;
+                }
+            }
+
+            brace_depth = (brace_depth + open_braces).saturating_sub(close_braces);
+
+            if let Some(m_state) = active_method.take() {
+                if m_state.has_opened_brace && brace_depth <= m_state.base_brace_depth {
+                    let mut m = m_state.method;
+                    m.line_end = Some(line_num);
+                    if m_state.is_class_member {
+                        if let Some(ref mut cls) = active_class {
+                            cls.methods.push(m);
+                        }
+                    } else {
+                        functions.push(m);
+                    }
+                } else {
+                    active_method = Some(m_state);
+                }
+            }
+
+            if let Some(mut cls) = active_class.take() {
+                if brace_depth <= class_brace_depth && (open_braces > 0 || close_braces > 0) {
+                    cls.line_end = Some(line_num);
+                    classes.push(cls);
+                } else {
+                    active_class = Some(cls);
+                }
+            }
+
+            if let Some(mut enm) = active_enum.take() {
+                if brace_depth <= enum_brace_depth && (open_braces > 0 || close_braces > 0) {
+                    enm.line_end = Some(line_num);
+                    enums.push(enm);
+                } else {
+                    active_enum = Some(enm);
+                }
+            }
+        }
+
+        if let Some(mut cls) = active_class {
+            cls.line_end = Some(total_lines);
+            classes.push(cls);
+        }
+        if let Some(mut enm) = active_enum {
+            enm.line_end = Some(total_lines);
+            enums.push(enm);
+        }
+
+        // Extract JSX/TSX component tree in .tsx / .jsx files
+        if is_jsx_ext {
+            widgets = Self::parse_jsx_widget_tree(&raw_lines);
+        }
+
+        DartParsedAst {
+            classes,
+            functions,
+            enums,
+            widgets,
+            mixins,
+            extensions: Vec::new(),
+            typedefs,
+            variables,
+            constructors,
+            properties,
+            annotations,
+            function_calls,
+            imports,
+            import_details,
+            exports,
+            total_lines,
+        }
+    }
+
+    /// Builds a nested `Vec<DartWidgetInfo>` tree from JSX/TSX elements in `.tsx` / `.jsx` files
+    pub fn parse_jsx_widget_tree(raw_lines: &[&str]) -> Vec<DartWidgetInfo> {
+        let mut root_widgets: Vec<DartWidgetInfo> = Vec::new();
+        let mut stack: Vec<DartWidgetInfo> = Vec::new();
+        let re_jsx = Regex::new(r#"<(/?)([A-Za-z][A-Za-z0-9_.]*)([^>]*?)(/?)>"#).unwrap();
+        let re_prop = Regex::new(r#"([a-zA-Z0-9_-]+)\s*=\s*(?:["']([^"']*)["']|\{([^}]*)\})"#).unwrap();
+
+        const TS_GENERICS_BLACKLIST: &[&str] = &[
+            "Array", "Promise", "Record", "Partial", "Required", "Readonly", "Pick", "Omit",
+            "Exclude", "Extract", "Map", "Set", "WeakMap", "WeakSet", "React", "FC",
+            "Component", "RefObject", "MutableRefObject", "Dispatch", "SetStateAction",
+            "HTMLInputElement", "HTMLDivElement", "HTMLButtonElement", "HTMLElement",
+            "MouseEvent", "ChangeEvent", "FormEvent", "KeyboardEvent", "string", "number",
+            "boolean", "any", "void", "unknown", "never",
+        ];
+
+        for (idx, &line) in raw_lines.iter().enumerate() {
+            let line_num = idx + 1;
+            let trimmed = line.trim();
+            if trimmed.starts_with("//") || trimmed.starts_with("import ") || trimmed.starts_with("export type ") || trimmed.starts_with("interface ") || trimmed.starts_with("type ") {
+                continue;
+            }
+
+            for cap in re_jsx.captures_iter(trimmed) {
+                let is_closing = cap.get(1).map_or(false, |m| m.as_str() == "/");
+                let tag_name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+                let attrs_str = cap.get(3).map(|m| m.as_str()).unwrap_or("");
+                let is_self_closing = cap.get(4).map_or(false, |m| m.as_str() == "/")
+                    || matches!(tag_name, "img" | "input" | "br" | "hr" | "meta" | "link");
+
+                if TS_GENERICS_BLACKLIST.contains(&tag_name) || attrs_str.contains(',') {
+                    continue;
+                }
+
+                if is_closing {
+                    if let Some(top) = stack.last() {
+                        if top.name == tag_name {
+                            let finished = stack.pop().unwrap();
+                            if let Some(parent) = stack.last_mut() {
+                                parent.children.push(finished);
+                            } else {
+                                root_widgets.push(finished);
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                let mut props = Vec::new();
+                for pcap in re_prop.captures_iter(attrs_str) {
+                    let pname = pcap.get(1).map(|m| m.as_str()).unwrap_or("");
+                    let pval = pcap
+                        .get(2)
+                        .or_else(|| pcap.get(3))
+                        .map(|m| m.as_str().trim())
+                        .unwrap_or("");
+                    if !pname.is_empty() {
+                        props.push(DartWidgetProperty {
+                            name: pname.to_string(),
+                            value: pval.to_string(),
+                        });
+                    }
+                }
+
+                let node = DartWidgetInfo {
+                    name: tag_name.to_string(),
+                    line: line_num,
+                    children: Vec::new(),
+                    properties: props,
+                };
+
+                if is_self_closing {
+                    if let Some(parent) = stack.last_mut() {
+                        parent.children.push(node);
+                    } else {
+                        root_widgets.push(node);
+                    }
+                } else {
+                    stack.push(node);
+                }
+            }
+        }
+
+        while let Some(finished) = stack.pop() {
+            if let Some(parent) = stack.last_mut() {
+                parent.children.push(finished);
+            } else {
+                root_widgets.push(finished);
+            }
+        }
+
+        root_widgets
+    }
+
+    /// Outline parser for Markdown (`.md`), CSS/SCSS (`.css`, `.scss`), and JSON (`.json`)
+    pub fn parse_auxiliary(file_path: &str, source: &str) -> DartParsedAst {
+        let lower = file_path.to_ascii_lowercase();
+        let raw_lines: Vec<&str> = source.lines().collect();
+        let total_lines = raw_lines.len();
+        let mut classes = Vec::new();
+        let mut variables = Vec::new();
+
+        if lower.ends_with(".md") {
+            let re_heading = Regex::new(r"^(#{1,6})\s+(.+)$").unwrap();
+            for (idx, line) in raw_lines.iter().enumerate() {
+                if let Some(cap) = re_heading.captures(line.trim()) {
+                    let level = cap.get(1).map_or(1, |m| m.as_str().len());
+                    let title = cap.get(2).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+                    classes.push(DartClass {
+                        name: title,
+                        r#type: format!("H{}", level),
+                        line: idx + 1,
+                        line_end: Some(idx + 1),
+                        ..Default::default()
+                    });
+                }
+            }
+        } else if lower.ends_with(".css") || lower.ends_with(".scss") {
+            let re_sel = Regex::new(r"^([.#a-zA-Z][^{]+)\{").unwrap();
+            let re_var = Regex::new(r"^(--[a-zA-Z0-9_-]+)\s*:\s*([^;]+);").unwrap();
+            for (idx, line) in raw_lines.iter().enumerate() {
+                let t = line.trim();
+                if let Some(cap) = re_var.captures(t) {
+                    variables.push(DartVariableInfo {
+                        name: cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default(),
+                        r#type: "css-var".to_string(),
+                        value: cap.get(2).map(|m| m.as_str().trim().to_string()),
+                        line: idx + 1,
+                        is_const: true,
+                        is_final: true,
+                        is_private: false,
+                        is_top_level: true,
+                    });
+                } else if let Some(cap) = re_sel.captures(t) {
+                    let sel = cap.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+                    if !sel.starts_with('@') {
+                        classes.push(DartClass {
+                            name: sel,
+                            r#type: "selector".to_string(),
+                            line: idx + 1,
+                            line_end: Some(idx + 1),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        } else if lower.ends_with(".json") {
+            let re_key = Regex::new(r#"^\s{1,4}"([^"]+)"\s*:"#).unwrap();
+            for (idx, line) in raw_lines.iter().enumerate() {
+                if let Some(cap) = re_key.captures(line) {
+                    let k = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                    classes.push(DartClass {
+                        name: k,
+                        r#type: "property".to_string(),
+                        line: idx + 1,
+                        line_end: Some(idx + 1),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+
+        DartParsedAst {
+            classes,
+            variables,
+            total_lines,
+            ..Default::default()
+        }
+    }
 }

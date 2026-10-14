@@ -2,6 +2,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { BM25Document, BM25Search } from './bm25Search';
 import { DartParser, DartFileInfo, WarningInfo, WidgetInfo } from './dartParser';
+import { AndroidParser } from './androidParser';
+import { JsTsParser } from './jsTsParser';
 
 // Load `vscode` dynamically so RustBridge works both inside VS Code Extension Host
 // and in standalone Node.js processes (such as `mcp-server.ts` and CLI test runners).
@@ -25,12 +27,13 @@ export interface EngineStatus {
 }
 
 /**
- * RustBridge provides a dual-engine architecture with Graceful Fallback:
- * - High-speed Pure Rust WebAssembly (WASM) engine extracting all 14 symbol categories
- *   including nested `WidgetInfo` trees (`widgets`), `imports`, `constructors`, `properties`,
- *   `functionCalls`, `mixins`, `extensions`, `typedefs`, `variables`, and `annotations` in a single pass.
+ * RustBridge provides a Multi-Language Dual-Engine architecture with Graceful Fallback:
+ * - High-speed Pure Rust WebAssembly (WASM) engine supporting:
+ *   1. Flutter / Dart (`.dart`)
+ *   2. Android Native (`.kt`, `.java`, Jetpack Compose `@Composable`, `.xml` layouts/manifests/resources, `.gradle`, `.kts`)
+ *   3. Web / TypeScript / React (`.ts`, `.tsx`, `.js`, `.jsx`, React functional/class components & JSX/TSX trees)
  * - Persistent `WasmSearchIndex` in WASM memory for sub-millisecond BM25 queries.
- * - 100% transparent fallback to TypeScript `DartParser` / `BM25Search` if WASM is not compiled.
+ * - 100% transparent fallback to TypeScript `DartParser`, `AndroidParser`, `JsTsParser`, and `BM25Search` if WASM is not compiled.
  */
 export class RustBridge {
   private static instance: RustBridge | null = null;
@@ -40,7 +43,9 @@ export class RustBridge {
   private wasmSearchIndex: any = null;
   private wasmLoaded: boolean = false;
   private wasmVersion: string = '';
-  private tsFallbackParser: DartParser = new DartParser();
+  private tsFallbackDartParser: DartParser = new DartParser();
+  private tsFallbackAndroidParser: AndroidParser = new AndroidParser();
+  private tsFallbackJsTsParser: JsTsParser = new JsTsParser();
 
   private constructor() {
     this.initWasm();
@@ -68,7 +73,7 @@ export class RustBridge {
           if (this.wasmModule && typeof this.wasmModule.get_core_version === 'function') {
             this.wasmLoaded = true;
             this.wasmVersion = this.wasmModule.get_core_version();
-            console.error(`[RustBridge] 🦀 Rust WASM core loaded successfully (v${this.wasmVersion})`);
+            console.error(`[RustBridge] 🦀 Multi-Language Rust WASM core loaded successfully (v${this.wasmVersion})`);
             return;
           }
         }
@@ -105,7 +110,7 @@ export class RustBridge {
     } else if (configured === 'rust') {
       if (this.wasmLoaded) {
         active = 'rust';
-        details = `Rust WASM core active (v${this.wasmVersion}).`;
+        details = `Multi-Language Rust WASM core active (v${this.wasmVersion}).`;
       } else {
         active = 'javascript';
         details = 'Rust configured but WASM module not found. Fell back to JavaScript.';
@@ -113,7 +118,7 @@ export class RustBridge {
     } else {
       if (this.wasmLoaded) {
         active = 'rust';
-        details = `Auto-selected Rust WASM core (v${this.wasmVersion}).`;
+        details = `Auto-selected Multi-Language Rust WASM core (v${this.wasmVersion}).`;
       } else {
         active = 'javascript';
         details = 'WASM not yet compiled; running seamlessly on TypeScript/JavaScript engine.';
@@ -127,6 +132,32 @@ export class RustBridge {
       wasmVersion: this.wasmVersion,
       details,
     };
+  }
+
+  private fallbackParseByExtension(filePath: string, sourceCode: string): DartFileInfo {
+    const lower = filePath.toLowerCase();
+    if (
+      lower.endsWith('.kt') ||
+      lower.endsWith('.java') ||
+      lower.endsWith('.xml') ||
+      lower.endsWith('.gradle') ||
+      lower.endsWith('.kts')
+    ) {
+      return this.tsFallbackAndroidParser.parse(filePath, sourceCode);
+    }
+    if (
+      lower.endsWith('.ts') ||
+      lower.endsWith('.tsx') ||
+      lower.endsWith('.js') ||
+      lower.endsWith('.jsx') ||
+      lower.endsWith('.md') ||
+      lower.endsWith('.css') ||
+      lower.endsWith('.scss') ||
+      lower.endsWith('.json')
+    ) {
+      return this.tsFallbackJsTsParser.parse(filePath, sourceCode);
+    }
+    return this.tsFallbackDartParser.parse(filePath, sourceCode);
   }
 
   /**
@@ -223,53 +254,67 @@ export class RustBridge {
   }
 
   /**
-   * Scan code for warnings using Rust WASM if available, falling back to DartParser
+   * Scan code for warnings across Dart, Kotlin/Java/XML, and TS/React using Rust WASM if available
    */
   public scanWarnings(filePath: string, sourceCode: string): WarningInfo[] {
     const status = this.getStatus();
 
-    if (status.activeEngine === 'rust' && this.wasmModule && typeof this.wasmModule.scan_warnings_json === 'function') {
+    if (status.activeEngine === 'rust' && this.wasmModule) {
       try {
-        const rawJson = this.wasmModule.scan_warnings_json(sourceCode);
-        const parsed = JSON.parse(rawJson);
-        if (Array.isArray(parsed)) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          return parsed.map((w: any) => ({
-            type: w.type,
-            message: w.message,
-            line: w.line,
-            codeSnippet: w.code_snippet,
-            suggestion: w.suggestion,
-          }));
+        const rawJson =
+          typeof this.wasmModule.scan_file_warnings_json === 'function'
+            ? this.wasmModule.scan_file_warnings_json(filePath, sourceCode)
+            : typeof this.wasmModule.scan_warnings_json === 'function'
+            ? this.wasmModule.scan_warnings_json(sourceCode)
+            : null;
+        if (rawJson) {
+          const parsed = JSON.parse(rawJson);
+          if (Array.isArray(parsed)) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            return parsed.map((w: any) => ({
+              type: w.type,
+              message: w.message,
+              line: w.line,
+              codeSnippet: w.code_snippet,
+              suggestion: w.suggestion,
+            }));
+          }
         }
       } catch (err) {
-        console.warn('[RustBridge] Rust warning scanner failed, falling back to TypeScript DartParser', err);
+        console.warn('[RustBridge] Rust warning scanner failed, falling back to TypeScript parser', err);
       }
     }
 
-    return this.tsFallbackParser.parse(filePath, sourceCode).warnings;
+    return this.fallbackParseByExtension(filePath, sourceCode).warnings;
   }
 
   /**
-   * Parse Dart AST structure using Pure Rust WASM if available, falling back to DartParser
+   * Parse AST structure for any supported language using Pure Rust WASM if available
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   public parseDartAst(filePath: string, sourceCode: string): any {
     const status = this.getStatus();
 
-    if (status.activeEngine === 'rust' && this.wasmModule && typeof this.wasmModule.parse_dart_ast_json === 'function') {
+    if (status.activeEngine === 'rust' && this.wasmModule) {
       try {
-        const rawJson = this.wasmModule.parse_dart_ast_json(sourceCode);
-        const parsed = JSON.parse(rawJson);
-        if (parsed && Array.isArray(parsed.classes)) {
-          return parsed;
+        const rawJson =
+          typeof this.wasmModule.parse_file_ast_json === 'function'
+            ? this.wasmModule.parse_file_ast_json(filePath, sourceCode)
+            : typeof this.wasmModule.parse_dart_ast_json === 'function'
+            ? this.wasmModule.parse_dart_ast_json(sourceCode)
+            : null;
+        if (rawJson) {
+          const parsed = JSON.parse(rawJson);
+          if (parsed && Array.isArray(parsed.classes)) {
+            return parsed;
+          }
         }
       } catch (err) {
-        console.warn('[RustBridge] Rust AST parser failed, falling back to TypeScript DartParser', err);
+        console.warn('[RustBridge] Rust AST parser failed, falling back to TypeScript parser', err);
       }
     }
 
-    return this.tsFallbackParser.parse(filePath, sourceCode);
+    return this.fallbackParseByExtension(filePath, sourceCode);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -289,22 +334,30 @@ export class RustBridge {
   }
 
   /**
-   * Single-pass Pure Rust WASM parser producing a full `DartFileInfo` (including nested `WidgetInfo` trees,
-   * `imports`, `constructors`, `properties`, `functionCalls`, `mixins`, `extensions`, `typedefs`, `variables`,
-   * and `annotations`) without needing a second pass in TypeScript!
-   * Falls back transparently to TypeScript `DartParser` only when WASM is unavailable.
+   * Multi-Language Single-Pass Pure Rust WASM parser producing a full `DartFileInfo`
+   * for `.dart`, `.kt`, `.java`, `.xml`, `.gradle`, `.gradle.kts`, `.ts`, `.tsx`, `.js`, `.jsx`, `.md`, `.css`, `.json`.
+   * Falls back transparently to TypeScript (`DartParser`, `AndroidParser`, `JsTsParser`) when WASM is unavailable.
    */
-  public parseDartToInfo(
+  public parseFileToInfo(
     filePath: string,
     sourceCode: string,
     _options?: { pureAstOnly?: boolean }
   ): DartFileInfo {
     const status = this.getStatus();
     const cleanPath = filePath.replace(/\\/g, '/');
+    const isDart = cleanPath.toLowerCase().endsWith('.dart');
 
-    if (status.activeEngine === 'rust' && this.wasmModule && typeof this.wasmModule.parse_dart_ast_json === 'function') {
+    if (
+      status.activeEngine === 'rust' &&
+      this.wasmModule &&
+      (typeof this.wasmModule.parse_file_ast_json === 'function' ||
+        (isDart && typeof this.wasmModule.parse_dart_ast_json === 'function'))
+    ) {
       try {
-        const rawJson = this.wasmModule.parse_dart_ast_json(sourceCode);
+        const rawJson =
+          typeof this.wasmModule.parse_file_ast_json === 'function'
+            ? this.wasmModule.parse_file_ast_json(cleanPath, sourceCode)
+            : this.wasmModule.parse_dart_ast_json(sourceCode);
         const parsed = JSON.parse(rawJson);
         if (parsed && Array.isArray(parsed.classes)) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -574,10 +627,21 @@ export class RustBridge {
           };
         }
       } catch (err) {
-        console.warn('[RustBridge] Rust AST parser failed, falling back to TypeScript DartParser', err);
+        console.warn('[RustBridge] Rust Multi-Language AST parser failed, falling back to TypeScript parser', err);
       }
     }
 
-    return this.tsFallbackParser.parse(cleanPath, sourceCode);
+    return this.fallbackParseByExtension(cleanPath, sourceCode);
+  }
+
+  /**
+   * Backwards-compatible alias for `parseFileToInfo`
+   */
+  public parseDartToInfo(
+    filePath: string,
+    sourceCode: string,
+    options?: { pureAstOnly?: boolean }
+  ): DartFileInfo {
+    return this.parseFileToInfo(filePath, sourceCode, options);
   }
 }

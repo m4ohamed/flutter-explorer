@@ -210,7 +210,7 @@ impl McpServerState {
             }
         }
 
-        let ast = PureDartParser::parse(&code);
+        let ast = PureDartParser::parse_by_extension(&rel_path, &code);
 
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(ref conn) = self.db_conn {
@@ -264,15 +264,53 @@ impl McpServerState {
             .replace('\\', "/")
     }
 
+    fn detect_project_mode(&self) -> &'static str {
+        if self.project_root.join("pubspec.yaml").exists() {
+            "flutter"
+        } else if self.project_root.join("build.gradle").exists()
+            || self.project_root.join("build.gradle.kts").exists()
+            || self.project_root.join("settings.gradle").exists()
+            || self.project_root.join("settings.gradle.kts").exists()
+            || self.project_root.join("app").join("src").join("main").exists()
+        {
+            "android"
+        } else if self.project_root.join("package.json").exists()
+            || self.project_root.join("tsconfig.json").exists()
+        {
+            "web"
+        } else {
+            "flutter"
+        }
+    }
+
     fn find_dart_files(&self) -> Vec<PathBuf> {
         let mut results = Vec::new();
-        let lib_dir = self.project_root.join("lib");
-        if lib_dir.exists() {
-            Self::walk_dir(&lib_dir, &mut results, Some("dart"));
-        } else {
-            Self::walk_dir(&self.project_root, &mut results, Some("dart"));
+        let mode = self.detect_project_mode();
+        match mode {
+            "flutter" => {
+                let lib_dir = self.project_root.join("lib");
+                if lib_dir.exists() {
+                    Self::walk_dir(&lib_dir, &mut results, Some("dart"));
+                } else {
+                    Self::walk_dir(&self.project_root, &mut results, Some("dart"));
+                }
+                let android_app_dir = self.project_root.join("android").join("app");
+                if android_app_dir.exists() {
+                    Self::walk_dir(&android_app_dir, &mut results, Some("android"));
+                }
+            }
+            "android" => {
+                Self::walk_dir(&self.project_root, &mut results, Some("android"));
+            }
+            "web" => {
+                Self::walk_dir(&self.project_root, &mut results, Some("web"));
+            }
+            _ => {
+                Self::walk_dir(&self.project_root, &mut results, Some("code"));
+            }
         }
         results.sort();
+        results.dedup();
         results
     }
 
@@ -321,7 +359,26 @@ impl McpServerState {
                         Self::walk_dir(&path, results, ext_filter);
                     }
                 } else if let Some(target_ext) = ext_filter {
-                    if path.extension().map_or(false, |ext| ext == target_ext) {
+                    let ext_lower = path
+                        .extension()
+                        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+                        .unwrap_or_default();
+                    let matched = match target_ext {
+                        "dart" | "code" => matches!(
+                            ext_lower.as_str(),
+                            "dart" | "kt" | "java" | "xml" | "gradle" | "kts" | "ts" | "tsx" | "js" | "jsx"
+                        ),
+                        "android" => matches!(
+                            ext_lower.as_str(),
+                            "kt" | "java" | "xml" | "gradle" | "kts"
+                        ),
+                        "web" => matches!(
+                            ext_lower.as_str(),
+                            "ts" | "tsx" | "js" | "jsx"
+                        ),
+                        other => ext_lower == other,
+                    };
+                    if matched {
                         results.push(path);
                     }
                 } else {
@@ -2357,11 +2414,14 @@ fn main() {
                         let files = state.files_for_optional_path(path_arg, Some("dart"));
 
                         let mock_patterns = [
-                            ("TODO", "TODO comment detected"),
+                            ("TODO", "TODO comment or stub detected"),
                             ("FIXME", "FIXME comment detected"),
                             ("Lorem ipsum", "Dummy placeholder text"),
                             ("setState(() {})", "Empty setState callback"),
                             ("onPressed: () {}", "Empty onPressed callback"),
+                            ("onClick = {}", "Empty Jetpack Compose onClick callback"),
+                            ("setOnClickListener {}", "Empty Android View click listener"),
+                            ("onClick={() => {}}", "Empty React onClick handler"),
                             ("throw UnimplementedError", "Unimplemented stub"),
                             ("Placeholder(", "Placeholder widget in UI"),
                         ];
@@ -4146,9 +4206,9 @@ fn main() {
 
                         for file in files {
                             if let Ok(code) = fs::read_to_string(&file) {
-                                let warnings = scanner.scan_warnings(&code);
+                                let rel_path = state.relative_path_str(&file);
+                                let warnings = scanner.scan_warnings_for_file(&rel_path, &code);
                                 if !warnings.is_empty() {
-                                    let rel_path = state.relative_path_str(&file);
                                     all_warnings.push(json!({
                                         "filePath": rel_path,
                                         "warnings": warnings
