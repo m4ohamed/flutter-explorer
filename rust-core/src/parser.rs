@@ -1,4 +1,177 @@
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::sync::OnceLock;
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DartWidgetProperty {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DartWidgetInfo {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub line: usize,
+    #[serde(default)]
+    pub children: Vec<DartWidgetInfo>,
+    #[serde(default)]
+    pub properties: Vec<DartWidgetProperty>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DartImportInfo {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub alias: Option<String>,
+    #[serde(default, alias = "showNames")]
+    pub show_names: Vec<String>,
+    #[serde(default, alias = "hideNames")]
+    pub hide_names: Vec<String>,
+    #[serde(default)]
+    pub line: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DartPropertyInfo {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub r#type: String,
+    #[serde(default, alias = "className")]
+    pub class_name: Option<String>,
+    #[serde(default, alias = "isFinal")]
+    pub is_final: bool,
+    #[serde(default, alias = "isConst")]
+    pub is_const: bool,
+    #[serde(default, alias = "isStatic")]
+    pub is_static: bool,
+    #[serde(default, alias = "isPrivate")]
+    pub is_private: bool,
+    #[serde(default, alias = "isGetter")]
+    pub is_getter: bool,
+    #[serde(default, alias = "isSetter")]
+    pub is_setter: bool,
+    #[serde(default)]
+    pub line: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DartConstructorInfo {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, alias = "className")]
+    pub class_name: String,
+    #[serde(default, alias = "isFactory")]
+    pub is_factory: bool,
+    #[serde(default, alias = "isConst")]
+    pub is_const: bool,
+    #[serde(default)]
+    pub params: String,
+    #[serde(default)]
+    pub line: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DartVariableInfo {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub r#type: String,
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub line: usize,
+    #[serde(default, alias = "isConst")]
+    pub is_const: bool,
+    #[serde(default, alias = "isFinal")]
+    pub is_final: bool,
+    #[serde(default, alias = "isPrivate")]
+    pub is_private: bool,
+    #[serde(default, alias = "isTopLevel")]
+    pub is_top_level: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DartTypedefInfo {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub signature: String,
+    #[serde(default)]
+    pub line: usize,
+    #[serde(default, alias = "isPrivate")]
+    pub is_private: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DartMixinInfo {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub on: Option<String>,
+    #[serde(default)]
+    pub line: usize,
+    #[serde(default, alias = "lineEnd")]
+    pub line_end: Option<usize>,
+    #[serde(default, alias = "isPrivate")]
+    pub is_private: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DartExtensionInfo {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, alias = "onType")]
+    pub on_type: String,
+    #[serde(default)]
+    pub methods: Vec<DartMethod>,
+    #[serde(default)]
+    pub properties: Vec<DartPropertyInfo>,
+    #[serde(default)]
+    pub line: usize,
+    #[serde(default, alias = "lineEnd")]
+    pub line_end: Option<usize>,
+    #[serde(default, alias = "isPrivate")]
+    pub is_private: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DartAnnotationInfo {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub target: String,
+    #[serde(default, alias = "targetName")]
+    pub target_name: String,
+    #[serde(default)]
+    pub line: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DartFunctionCall {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub line: usize,
+    #[serde(default, alias = "callerClass")]
+    pub caller_class: Option<String>,
+    #[serde(default, alias = "callerFunction")]
+    pub caller_function: Option<String>,
+    #[serde(default)]
+    pub context: String,
+    #[serde(default, alias = "isStatic")]
+    pub is_static: bool,
+    #[serde(default, alias = "isChained")]
+    pub is_chained: bool,
+    #[serde(default)]
+    pub receiver: Option<String>,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DartMethod {
@@ -46,6 +219,8 @@ pub struct DartClass {
     pub is_private: bool,
     #[serde(default)]
     pub methods: Vec<DartMethod>,
+    #[serde(default)]
+    pub properties: Vec<DartPropertyInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doc_comment: Option<String>,
 }
@@ -66,6 +241,27 @@ pub struct DartEnum {
     pub doc_comment: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawImportEntry {
+    Str(String),
+    Obj(DartImportInfo),
+}
+
+fn deserialize_imports<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let items: Vec<RawImportEntry> = Vec::deserialize(deserializer).unwrap_or_default();
+    Ok(items
+        .into_iter()
+        .map(|item| match item {
+            RawImportEntry::Str(s) => s,
+            RawImportEntry::Obj(o) => o.path,
+        })
+        .collect())
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DartParsedAst {
     #[serde(default)]
@@ -74,20 +270,82 @@ pub struct DartParsedAst {
     pub functions: Vec<DartMethod>,
     #[serde(default)]
     pub enums: Vec<DartEnum>,
+    #[serde(default)]
+    pub widgets: Vec<DartWidgetInfo>,
+    #[serde(default)]
+    pub mixins: Vec<DartMixinInfo>,
+    #[serde(default)]
+    pub extensions: Vec<DartExtensionInfo>,
+    #[serde(default)]
+    pub typedefs: Vec<DartTypedefInfo>,
+    #[serde(default)]
+    pub variables: Vec<DartVariableInfo>,
+    #[serde(default)]
+    pub constructors: Vec<DartConstructorInfo>,
+    #[serde(default)]
+    pub properties: Vec<DartPropertyInfo>,
+    #[serde(default)]
+    pub annotations: Vec<DartAnnotationInfo>,
+    #[serde(default, alias = "functionCalls")]
+    pub function_calls: Vec<DartFunctionCall>,
+    #[serde(default, deserialize_with = "deserialize_imports")]
+    pub imports: Vec<String>,
+    #[serde(default, alias = "importDetails")]
+    pub import_details: Vec<DartImportInfo>,
+    #[serde(default)]
+    pub exports: Vec<String>,
     #[serde(default, alias = "linesCount")]
     pub total_lines: usize,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub imports: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exports: Vec<String>,
 }
 
 struct ActiveMethodState {
     method: DartMethod,
     is_class_member: bool,
+    is_extension_member: bool,
     base_brace_depth: usize,
     has_opened_brace: bool,
     is_arrow_expr: bool,
+}
+
+struct WidgetStackItem {
+    widget: DartWidgetInfo,
+    indent: usize,
+}
+
+fn widget_call_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?:\b|return\s+|=>\s+)(_?[A-Z][A-Za-z0-9_]*)(?:<[^>]*>)?(?:\.([A-Za-z0-9_]+))?\s*\(").unwrap()
+    })
+}
+
+fn fn_call_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?:([a-zA-Z_][a-zA-Z0-9_]*)\.)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(").unwrap()
+    })
+}
+
+fn non_widget_types() -> &'static HashSet<&'static str> {
+    static SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    SET.get_or_init(|| {
+        [
+            "Navigator", "AppTheme", "Theme", "DurationFormatter", "Localizations",
+            "Clipboard", "HapticFeedback", "Uuid", "DateFormat", "HiveService",
+            "BadgeHelper", "_DS", "ReportPdfGenerator", "ShareParams", "XFile",
+            "AsyncValue", "AsyncData", "AsyncLoading", "AsyncError",
+            "TextStyle", "Border", "BorderRadius", "Radius", "BoxDecoration", "EdgeInsets",
+            "File", "Uint8List", "ByteData", "Platform", "TargetPlatform", "WidgetsBinding",
+            "SystemChrome", "MediaQuery", "ScaffoldMessenger", "FocusScope", "FocusManager",
+            "String", "int", "double", "bool", "num", "List", "Map", "Set",
+            "Future", "Stream", "Duration", "DateTime", "TextEditingController",
+            "GlobalKey", "AnimationController", "ScrollController", "TabController",
+            "PageController", "FocusNode", "Color", "Colors", "Paint", "Canvas",
+            "Path", "Offset", "Size", "Rect", "Key", "ValueKey", "ObjectKey", "UniqueKey",
+        ]
+        .into_iter()
+        .collect()
+    })
 }
 
 pub struct PureDartParser;
@@ -100,12 +358,32 @@ impl PureDartParser {
         let mut classes = Vec::new();
         let mut functions = Vec::new();
         let mut enums = Vec::new();
+        let mut widgets = Vec::new();
+        let mut mixins = Vec::new();
+        let mut extensions = Vec::new();
+        let mut typedefs = Vec::new();
+        let mut variables = Vec::new();
+        let mut constructors = Vec::new();
+        let mut properties = Vec::new();
+        let mut annotations = Vec::new();
+        let mut function_calls = Vec::new();
         let mut imports = Vec::new();
+        let mut import_details = Vec::new();
         let mut exports = Vec::new();
+
+        let mut sanitized_lines: Vec<String> = Vec::with_capacity(total_lines);
+        let mut in_block_comment = false;
+        for raw in &lines {
+            sanitized_lines.push(Self::sanitize_line(raw, &mut in_block_comment));
+        }
 
         let mut current_class: Option<DartClass> = None;
         let mut class_brace_depth: usize = 0;
         let mut class_has_opened = false;
+
+        let mut current_ext: Option<DartExtensionInfo> = None;
+        let mut ext_brace_depth: usize = 0;
+        let mut ext_has_opened = false;
 
         let mut current_enum: Option<DartEnum> = None;
         let mut enum_brace_depth: usize = 0;
@@ -113,17 +391,15 @@ impl PureDartParser {
         let mut enum_values_finished = false;
 
         let mut current_method: Option<ActiveMethodState> = None;
-
         let mut brace_level: usize = 0;
-        let mut in_block_comment = false;
         let mut pending_doc_lines: Vec<String> = Vec::new();
 
-        for (idx, raw_line) in lines.iter().enumerate() {
+        for idx in 0..total_lines {
             let line_num = idx + 1;
+            let raw_line = lines[idx];
             let trimmed_raw = raw_line.trim();
 
-            // Collect documentation comments (`/// ...`)
-            if !in_block_comment && trimmed_raw.starts_with("///") {
+            if trimmed_raw.starts_with("///") {
                 let doc_text = trimmed_raw.trim_start_matches("///").trim().to_string();
                 if !doc_text.is_empty() {
                     pending_doc_lines.push(doc_text);
@@ -131,34 +407,49 @@ impl PureDartParser {
                 continue;
             }
 
-            // Skip standard single-line comments
-            if !in_block_comment && trimmed_raw.starts_with("//") {
+            if trimmed_raw.starts_with("//") {
                 continue;
             }
 
-            // Extract import/export paths from raw line before string contents are stripped
-            if !in_block_comment && brace_level == 0 {
+            // Top-level imports / exports
+            if brace_level == 0 {
                 if trimmed_raw.starts_with("import ") {
-                    if let Some(path_str) = Self::extract_quoted_uri(trimmed_raw) {
-                        imports.push(path_str);
+                    if let Some(info) = Self::parse_import_line(trimmed_raw, line_num) {
+                        imports.push(info.path.clone());
+                        import_details.push(info);
                     }
                 } else if trimmed_raw.starts_with("export ") {
-                    if let Some(path_str) = Self::extract_quoted_uri(trimmed_raw) {
-                        exports.push(path_str);
+                    if let Some(uri) = Self::extract_quoted_uri(trimmed_raw) {
+                        exports.push(uri);
                     }
                 }
             }
 
-            // Strip strings and comments so braces inside literals or comments don't corrupt nesting
-            let clean_line = Self::sanitize_line(trimmed_raw, &mut in_block_comment);
-            let line = clean_line.trim();
+            let line = sanitized_lines[idx].trim();
             if line.is_empty() {
                 continue;
             }
 
-            // Preserve annotations (`@override`, `@immutable`) without clearing doc comments
-            if line.starts_with('@') && !line.contains('{') && !line.contains(';') {
-                continue;
+            // Annotations (`@override`, `@immutable`, `@freezed`)
+            if let Some(rest) = line.strip_prefix('@') {
+                let anno_name = rest
+                    .split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if !anno_name.is_empty() {
+                    let next_line = sanitized_lines.get(idx + 1).map(|s| s.trim()).unwrap_or("");
+                    let (target, target_name) = Self::infer_annotation_target(next_line);
+                    annotations.push(DartAnnotationInfo {
+                        name: anno_name.to_string(),
+                        target,
+                        target_name,
+                        line: line_num,
+                    });
+                }
+                if !line.contains('{') && !line.contains(';') {
+                    continue;
+                }
             }
 
             let open_braces = line.chars().filter(|&c| c == '{').count();
@@ -174,10 +465,25 @@ impl PureDartParser {
                 }
             };
 
-            // 1. Detect Class / Mixin declarations at top-level
-            if current_class.is_none() && current_enum.is_none() && brace_level == 0 {
-                if let Some(mut cls) = Self::try_parse_class(line, line_num) {
+            // 1. Top-level declarations (Class, Mixin, Extension, Enum, Typedef)
+            if current_class.is_none() && current_ext.is_none() && current_enum.is_none() && brace_level == 0 {
+                if let Some(td) = Self::try_parse_typedef(line, line_num) {
+                    typedefs.push(td);
+                } else if let Some(ext) = Self::try_parse_extension(line, line_num) {
+                    ext_brace_depth = brace_level;
+                    ext_has_opened = open_braces > 0;
+                    current_ext = Some(ext);
+                } else if let Some(mut cls) = Self::try_parse_class(line, line_num) {
                     cls.doc_comment = take_doc_comment(&mut pending_doc_lines);
+                    if cls.r#type == "mixin" {
+                        mixins.push(DartMixinInfo {
+                            name: cls.name.clone(),
+                            on: cls.extends_class.clone(),
+                            line: line_num,
+                            line_end: None,
+                            is_private: cls.is_private,
+                        });
+                    }
                     class_brace_depth = brace_level;
                     class_has_opened = open_braces > 0;
                     current_class = Some(cls);
@@ -210,44 +516,140 @@ impl PureDartParser {
                 }
             }
 
-            // 2. Detect Methods (only at class member level) or Top-level Functions (at brace_level == 0)
+            // 2. Class / Extension member level OR Top-level Function / Variable level
             let at_class_member_level = current_class.is_some()
                 && class_has_opened
                 && brace_level == class_brace_depth + 1
                 && current_method.is_none();
-            let at_top_function_level = current_class.is_none()
+            let at_ext_member_level = current_ext.is_some()
+                && ext_has_opened
+                && brace_level == ext_brace_depth + 1
+                && current_method.is_none();
+            let at_top_level = current_class.is_none()
+                && current_ext.is_none()
                 && current_enum.is_none()
                 && brace_level == 0
                 && current_method.is_none();
 
-            if at_class_member_level || at_top_function_level {
-                let parent_cls_name = current_class.as_ref().map(|c| c.name.clone());
-                if let Some(mut method) = Self::try_parse_method(line, line_num, parent_cls_name.as_deref()) {
-                    method.doc_comment = take_doc_comment(&mut pending_doc_lines);
-                    method.parent_class = parent_cls_name;
+            if at_class_member_level || at_ext_member_level {
+                let container_name = current_class
+                    .as_ref()
+                    .map(|c| c.name.clone())
+                    .or_else(|| current_ext.as_ref().map(|e| e.name.clone()));
 
-                    let is_single_line_complete = (open_braces > 0 && open_braces == close_braces)
-                        || (open_braces == 0 && line.ends_with(';'));
+                // Check Constructor first if inside a class
+                let mut matched_member = false;
+                if let Some(ref cls_name) = container_name {
+                    if at_class_member_level {
+                        if let Some(ctor) = Self::try_parse_constructor(line, line_num, cls_name) {
+                            constructors.push(ctor);
+                            matched_member = true;
+                        }
+                    }
+                }
 
-                    if is_single_line_complete {
-                        method.line_end = Some(line_num);
-                        if at_class_member_level {
+                // Check Method / Getter / Setter
+                if !matched_member {
+                    if let Some(mut method) = Self::try_parse_method(line, line_num, container_name.as_deref()) {
+                        method.doc_comment = take_doc_comment(&mut pending_doc_lines);
+                        method.parent_class = container_name.clone();
+                        matched_member = true;
+
+                        // If it's a getter or setter, also record it in `properties`
+                        if line.contains(" get ") || line.starts_with("get ") || line.contains(" set ") || line.starts_with("set ") {
+                            let is_getter = line.contains(" get ") || line.starts_with("get ");
+                            let prop = DartPropertyInfo {
+                                name: method.name.clone(),
+                                r#type: method.return_type.clone(),
+                                class_name: container_name.clone(),
+                                is_final: false,
+                                is_const: false,
+                                is_static: method.is_static,
+                                is_private: method.is_private,
+                                is_getter,
+                                is_setter: !is_getter,
+                                line: line_num,
+                            };
+                            properties.push(prop.clone());
+                            if let Some(ref mut cls) = current_class {
+                                cls.properties.push(prop);
+                            } else if let Some(ref mut ext) = current_ext {
+                                ext.properties.push(prop);
+                            }
+                        }
+
+                        let is_single_line_complete = (open_braces > 0 && open_braces == close_braces)
+                            || (open_braces == 0 && line.ends_with(';'));
+
+                        if is_single_line_complete {
+                            method.line_end = Some(line_num);
                             if let Some(ref mut cls) = current_class {
                                 cls.methods.push(method);
+                            } else if let Some(ref mut ext) = current_ext {
+                                ext.methods.push(method);
                             }
                         } else {
-                            functions.push(method);
+                            current_method = Some(ActiveMethodState {
+                                method,
+                                is_class_member: at_class_member_level,
+                                is_extension_member: at_ext_member_level,
+                                base_brace_depth: brace_level,
+                                has_opened_brace: open_braces > 0,
+                                is_arrow_expr: line.contains("=>") && open_braces == 0,
+                            });
                         }
+                    }
+                }
+
+                // Check Class Field / Property declaration
+                if !matched_member {
+                    if let Some(prop) = Self::try_parse_field_property(line, line_num, container_name.as_deref()) {
+                        if let Some(ref mut cls) = current_class {
+                            cls.properties.push(prop.clone());
+                        } else if let Some(ref mut ext) = current_ext {
+                            ext.properties.push(prop.clone());
+                        }
+                        properties.push(prop);
+                    }
+                }
+            } else if at_top_level {
+                if let Some(mut method) = Self::try_parse_method(line, line_num, None) {
+                    method.doc_comment = take_doc_comment(&mut pending_doc_lines);
+                    let is_single_line_complete = (open_braces > 0 && open_braces == close_braces)
+                        || (open_braces == 0 && line.ends_with(';'));
+                    if is_single_line_complete {
+                        method.line_end = Some(line_num);
+                        functions.push(method);
                     } else {
                         current_method = Some(ActiveMethodState {
                             method,
-                            is_class_member: at_class_member_level,
+                            is_class_member: false,
+                            is_extension_member: false,
                             base_brace_depth: brace_level,
                             has_opened_brace: open_braces > 0,
                             is_arrow_expr: line.contains("=>") && open_braces == 0,
                         });
                     }
+                } else if let Some(var_info) = Self::try_parse_top_variable(line, line_num) {
+                    variables.push(var_info);
                 }
+            }
+
+            // 3. Extract function calls inside methods/functions
+            if current_method.is_some() {
+                let caller_cls = current_class
+                    .as_ref()
+                    .map(|c| c.name.clone())
+                    .or_else(|| current_ext.as_ref().map(|e| e.name.clone()));
+                let caller_fn = current_method.as_ref().map(|m| m.method.name.clone());
+                Self::extract_line_function_calls(
+                    line,
+                    trimmed_raw,
+                    line_num,
+                    caller_cls.as_deref(),
+                    caller_fn.as_deref(),
+                    &mut function_calls,
+                );
             }
 
             if !pending_doc_lines.is_empty() {
@@ -266,6 +668,9 @@ impl PureDartParser {
                 if current_class.is_some() {
                     class_has_opened = true;
                 }
+                if current_ext.is_some() {
+                    ext_has_opened = true;
+                }
                 if current_enum.is_some() {
                     enum_has_opened = true;
                 }
@@ -274,7 +679,7 @@ impl PureDartParser {
                 }
             }
 
-            // 3. Check if active method / function ended on this line
+            // 4. Check if active method / function ended on this line
             if let Some(ref m_state) = current_method {
                 let ended_by_brace = m_state.has_opened_brace
                     && close_braces > 0
@@ -293,13 +698,17 @@ impl PureDartParser {
                         if let Some(ref mut cls) = current_class {
                             cls.methods.push(finished.method);
                         }
+                    } else if finished.is_extension_member {
+                        if let Some(ref mut ext) = current_ext {
+                            ext.methods.push(finished.method);
+                        }
                     } else {
                         functions.push(finished.method);
                     }
                 }
             }
 
-            // 4. Check if current enum ended
+            // 5. Check if current enum ended
             if let Some(ref mut enm) = current_enum {
                 if enum_has_opened && close_braces > 0 && brace_level <= enum_brace_depth {
                     enm.line_end = Some(line_num);
@@ -309,7 +718,21 @@ impl PureDartParser {
                 }
             }
 
-            // 5. Check if current class ended
+            // 6. Check if current extension ended
+            if let Some(ref mut ext) = current_ext {
+                if ext_has_opened && close_braces > 0 && brace_level <= ext_brace_depth {
+                    if let Some(mut unclosed_method) = current_method.take() {
+                        unclosed_method.method.line_end = Some(line_num);
+                        ext.methods.push(unclosed_method.method);
+                    }
+                    ext.line_end = Some(line_num);
+                    extensions.push(ext.clone());
+                    current_ext = None;
+                    ext_has_opened = false;
+                }
+            }
+
+            // 7. Check if current class ended
             if let Some(ref mut cls) = current_class {
                 if class_has_opened && close_braces > 0 && brace_level <= class_brace_depth {
                     if let Some(mut unclosed_method) = current_method.take() {
@@ -331,6 +754,10 @@ impl PureDartParser {
                 if let Some(ref mut cls) = current_class {
                     cls.methods.push(unclosed_method.method);
                 }
+            } else if unclosed_method.is_extension_member {
+                if let Some(ref mut ext) = current_ext {
+                    ext.methods.push(unclosed_method.method);
+                }
             } else {
                 functions.push(unclosed_method.method);
             }
@@ -339,19 +766,253 @@ impl PureDartParser {
             cls.line_end = Some(total_lines);
             classes.push(cls);
         }
+        if let Some(mut ext) = current_ext {
+            ext.line_end = Some(total_lines);
+            extensions.push(ext);
+        }
         if let Some(mut enm) = current_enum {
             enm.line_end = Some(total_lines);
             enums.push(enm);
+        }
+
+        // 8. Build nested WidgetInfo trees from `build()` methods across all classes
+        for cls in &classes {
+            for m in &cls.methods {
+                if m.name == "build" {
+                    let start_idx = m.line.saturating_sub(1);
+                    let end_idx = m.line_end.unwrap_or(total_lines).min(total_lines);
+                    if start_idx < end_idx {
+                        let method_widgets = Self::parse_widget_tree_slice(
+                            &lines[start_idx..end_idx],
+                            &sanitized_lines[start_idx..end_idx],
+                            m.line,
+                        );
+                        widgets.extend(method_widgets);
+                    }
+                }
+            }
         }
 
         DartParsedAst {
             classes,
             functions,
             enums,
-            total_lines,
+            widgets,
+            mixins,
+            extensions,
+            typedefs,
+            variables,
+            constructors,
+            properties,
+            annotations,
+            function_calls,
             imports,
+            import_details,
             exports,
+            total_lines,
         }
+    }
+
+    /// Builds a nested `Vec<DartWidgetInfo>` hierarchy from the lines of a `build()` method
+    pub fn parse_widget_tree_slice(
+        raw_lines: &[&str],
+        masked_lines: &[String],
+        start_line: usize,
+    ) -> Vec<DartWidgetInfo> {
+        let mut root_widgets: Vec<DartWidgetInfo> = Vec::new();
+        let mut stack: Vec<WidgetStackItem> = Vec::new();
+        let re = widget_call_regex();
+        let excluded = non_widget_types();
+
+        const NON_WIDGET_SUFFIXES: &[&str] = &[
+            "Entity", "Model", "Exception", "Error", "State", "Result", "Params",
+            "Provider", "Repository", "Source", "Service", "Helper", "Util", "Utils", "Data",
+        ];
+        const STATIC_HELPER_METHODS: &[&str] = &[
+            "of", "lerp", "copyWith", "maybeOf", "sizeOf", "paddingOf", "values",
+            "parse", "tryParse", "fromJson", "toJson", "push", "pop", "format",
+            "formatDecimalDays", "formatDuration", "successColor", "lightImpact",
+            "setData", "getData", "get", "set", "watch", "read", "select", "show",
+            "showDialog", "showSnackBar",
+        ];
+
+        for i in 0..masked_lines.len() {
+            let orig_line = raw_lines[i];
+            let orig_trimmed = orig_line.trim();
+            if orig_trimmed.is_empty()
+                || orig_trimmed.starts_with("//")
+                || orig_trimmed.starts_with("/*")
+                || orig_trimmed.starts_with('*')
+                || orig_trimmed.starts_with("import ")
+                || orig_trimmed.starts_with("export ")
+            {
+                continue;
+            }
+
+            let m_line = &masked_lines[i];
+            let trimmed_masked = m_line.trim();
+            if trimmed_masked.is_empty() {
+                continue;
+            }
+
+            // Skip the `Widget build(BuildContext context)` signature line itself unless it's a one-liner `=>`
+            if i == 0 && trimmed_masked.contains("build(") && !trimmed_masked.contains("=>") {
+                continue;
+            }
+
+            let base_indent = m_line.len() - m_line.trim_start().len();
+
+            for cap in re.captures_iter(trimmed_masked) {
+                let full_match = match cap.get(0) {
+                    Some(m) => m,
+                    None => continue,
+                };
+                let name = match cap.get(1) {
+                    Some(m) => m.as_str(),
+                    None => continue,
+                };
+                let dot_method = cap.get(2).map(|m| m.as_str());
+
+                if excluded.contains(name) {
+                    continue;
+                }
+                if NON_WIDGET_SUFFIXES.iter().any(|suf| name.ends_with(suf)) {
+                    continue;
+                }
+                if let Some(dm) = dot_method {
+                    if STATIC_HELPER_METHODS.contains(&dm) {
+                        continue;
+                    }
+                }
+
+                // Compute effective column indent so multiple widgets on the same line nest properly
+                let effective_indent = base_indent + full_match.start();
+
+                // Extract optional first positional detail (e.g. `Text('Hello')` or `Icon(Icons.add)`)
+                let mut props = Vec::new();
+                if let Some(name_pos) = orig_trimmed.find(name) {
+                    let after_name = &orig_trimmed[name_pos + name.len()..];
+                    if let Some(open_p) = after_name.find('(') {
+                        let rem = after_name[open_p + 1..].trim();
+                        if rem.starts_with(")") && rem[1..].trim_start().starts_with("=>") {
+                            continue;
+                        }
+                        if let Some(lit) = Self::extract_leading_string_literal(rem) {
+                            if !lit.is_empty() {
+                                props.push(DartWidgetProperty {
+                                    name: "detail".to_string(),
+                                    value: lit,
+                                });
+                            }
+                        } else if rem.starts_with("Icons.") {
+                            let icon_val: String = rem
+                                .chars()
+                                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
+                                .collect();
+                            if !icon_val.is_empty() {
+                                props.push(DartWidgetProperty {
+                                    name: "detail".to_string(),
+                                    value: icon_val,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                let widget = DartWidgetInfo {
+                    name: name.to_string(),
+                    line: start_line + i,
+                    children: Vec::new(),
+                    properties: props,
+                };
+
+                // Pop completed sibling/child widgets whose indent >= effective_indent
+                while let Some(top) = stack.last() {
+                    if top.indent >= effective_indent {
+                        let finished = stack.pop().unwrap();
+                        if let Some(parent) = stack.last_mut() {
+                            parent.widget.children.push(finished.widget);
+                        } else {
+                            root_widgets.push(finished.widget);
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                stack.push(WidgetStackItem {
+                    widget,
+                    indent: effective_indent,
+                });
+            }
+        }
+
+        // Flush remaining stack items into their parents
+        while let Some(finished) = stack.pop() {
+            if let Some(parent) = stack.last_mut() {
+                parent.widget.children.push(finished.widget);
+            } else {
+                root_widgets.push(finished.widget);
+            }
+        }
+
+        root_widgets
+    }
+
+    fn extract_leading_string_literal(rem: &str) -> Option<String> {
+        let first = rem.chars().next()?;
+        if first != '\'' && first != '"' {
+            return None;
+        }
+        let rest = &rem[first.len_utf8()..];
+        let end_idx = rest.find(first)?;
+        Some(rest[..end_idx].to_string())
+    }
+
+    fn parse_import_line(raw_line: &str, line_num: usize) -> Option<DartImportInfo> {
+        let path = Self::extract_quoted_uri(raw_line)?;
+        let no_semi = raw_line.trim_end_matches(';').trim();
+
+        let mut alias = None;
+        if let Some(as_idx) = no_semi.find(" as ") {
+            let after_as = no_semi[as_idx + 4..].trim();
+            let alias_tok = after_as.split_whitespace().next().unwrap_or("").trim();
+            if !alias_tok.is_empty() {
+                alias = Some(alias_tok.to_string());
+            }
+        }
+
+        let mut show_names = Vec::new();
+        if let Some(show_idx) = no_semi.find(" show ") {
+            let after_show = no_semi[show_idx + 6..].trim();
+            let end = after_show.find(" hide ").unwrap_or(after_show.len());
+            for s in after_show[..end].split(',') {
+                let t = s.trim();
+                if !t.is_empty() {
+                    show_names.push(t.to_string());
+                }
+            }
+        }
+
+        let mut hide_names = Vec::new();
+        if let Some(hide_idx) = no_semi.find(" hide ") {
+            let after_hide = no_semi[hide_idx + 6..].trim();
+            let end = after_hide.find(" show ").unwrap_or(after_hide.len());
+            for s in after_hide[..end].split(',') {
+                let t = s.trim();
+                if !t.is_empty() {
+                    hide_names.push(t.to_string());
+                }
+            }
+        }
+
+        Some(DartImportInfo {
+            path,
+            alias,
+            show_names,
+            hide_names,
+            line: line_num,
+        })
     }
 
     fn extract_quoted_uri(line: &str) -> Option<String> {
@@ -369,6 +1030,264 @@ impl PureDartParser {
         None
     }
 
+    fn infer_annotation_target(next_line: &str) -> (String, String) {
+        if next_line.contains("class ") || next_line.starts_with("enum ") || next_line.starts_with("mixin ") {
+            let words: Vec<&str> = next_line.split_whitespace().collect();
+            for i in 0..words.len() {
+                if matches!(words[i], "class" | "enum" | "mixin") {
+                    if let Some(&name) = words.get(i + 1) {
+                        let clean = name.split(|c: char| c == '<' || c == '{').next().unwrap_or(name);
+                        return ("class".to_string(), clean.to_string());
+                    }
+                }
+            }
+        }
+        if let Some(paren_idx) = next_line.find('(') {
+            let before = next_line[..paren_idx].trim();
+            if let Some(last_tok) = before.split_whitespace().last() {
+                let clean = last_tok.split('<').next().unwrap_or(last_tok);
+                return ("function".to_string(), clean.to_string());
+            }
+        }
+        ("member".to_string(), String::new())
+    }
+
+    fn try_parse_typedef(line: &str, line_num: usize) -> Option<DartTypedefInfo> {
+        let after = line.strip_prefix("typedef ")?.trim();
+        if let Some(eq_idx) = after.find('=') {
+            let left = after[..eq_idx].trim();
+            let name = left.split('<').next().unwrap_or(left).trim();
+            let sig = after[eq_idx + 1..].trim_end_matches(';').trim();
+            if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                return Some(DartTypedefInfo {
+                    name: name.to_string(),
+                    signature: sig.to_string(),
+                    line: line_num,
+                    is_private: name.starts_with('_'),
+                });
+            }
+        }
+        None
+    }
+
+    fn try_parse_extension(line: &str, line_num: usize) -> Option<DartExtensionInfo> {
+        let after = line.strip_prefix("extension ")?.trim();
+        let before_brace = after.split('{').next().unwrap_or(after).trim();
+        let on_idx = before_brace.find(" on ")?;
+        let raw_name = before_brace[..on_idx].trim();
+        let name = if raw_name.is_empty() {
+            format!("UnnamedExtension_{}", line_num)
+        } else {
+            raw_name.split('<').next().unwrap_or(raw_name).trim().to_string()
+        };
+        let on_type = before_brace[on_idx + 4..].trim().to_string();
+        let is_private = name.starts_with('_');
+
+        Some(DartExtensionInfo {
+            name,
+            on_type,
+            methods: Vec::new(),
+            properties: Vec::new(),
+            line: line_num,
+            line_end: None,
+            is_private,
+        })
+    }
+
+    fn try_parse_constructor(line: &str, line_num: usize, class_name: &str) -> Option<DartConstructorInfo> {
+        let mut s = line;
+        let is_const = if let Some(r) = s.strip_prefix("const ") {
+            s = r.trim_start();
+            true
+        } else {
+            false
+        };
+        let is_factory = if let Some(r) = s.strip_prefix("factory ") {
+            s = r.trim_start();
+            true
+        } else {
+            false
+        };
+
+        if !s.starts_with(class_name) {
+            return None;
+        }
+        let after_cls = &s[class_name.len()..];
+        let paren_idx = after_cls.find('(')?;
+        let prefix = after_cls[..paren_idx].trim();
+
+        let ctor_name = if prefix.is_empty() {
+            class_name.to_string()
+        } else if let Some(named) = prefix.strip_prefix('.') {
+            if named.chars().all(|c| c.is_alphanumeric() || c == '_') && !named.is_empty() {
+                named.to_string()
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        };
+
+        let close_paren = s.rfind(')')?;
+        let open_paren_abs = class_name.len() + paren_idx;
+        let params = if close_paren > open_paren_abs {
+            s[open_paren_abs + 1..close_paren].trim().to_string()
+        } else {
+            String::new()
+        };
+
+        Some(DartConstructorInfo {
+            name: ctor_name,
+            class_name: class_name.to_string(),
+            is_factory,
+            is_const,
+            params,
+            line: line_num,
+        })
+    }
+
+    fn try_parse_field_property(
+        line: &str,
+        line_num: usize,
+        class_name: Option<&str>,
+    ) -> Option<DartPropertyInfo> {
+        if !line.ends_with(';') || line.contains("=>") {
+            return None;
+        }
+        let before_eq = line.split('=').next().unwrap_or(line).trim_end_matches(';').trim();
+        if before_eq.contains('(') || before_eq.contains(')') || before_eq.contains('{') {
+            return None;
+        }
+
+        let mut tokens: Vec<&str> = before_eq.split_whitespace().collect();
+        if tokens.is_empty() {
+            return None;
+        }
+
+        let is_static = if tokens.first() == Some(&"static") {
+            tokens.remove(0);
+            true
+        } else {
+            false
+        };
+        if tokens.first() == Some(&"late") {
+            tokens.remove(0);
+        }
+        let is_final = if tokens.first() == Some(&"final") {
+            tokens.remove(0);
+            true
+        } else {
+            false
+        };
+        let is_const = if tokens.first() == Some(&"const") {
+            tokens.remove(0);
+            true
+        } else {
+            false
+        };
+        if tokens.first() == Some(&"var") {
+            tokens.remove(0);
+        }
+
+        if tokens.is_empty() {
+            return None;
+        }
+
+        let name = (*tokens.last()?).to_string();
+        if name.is_empty()
+            || !name.chars().all(|c| c.is_alphanumeric() || c == '_')
+            || matches!(name.as_str(), "return" | "break" | "continue" | "rethrow" | "super" | "this")
+        {
+            return None;
+        }
+
+        let r#type = if tokens.len() > 1 {
+            tokens[..tokens.len() - 1].join(" ")
+        } else if is_final || is_const {
+            "dynamic".to_string()
+        } else {
+            return None;
+        };
+
+        Some(DartPropertyInfo {
+             is_private: name.starts_with('_'),
+            name,
+            r#type,
+            class_name: class_name.map(|s| s.to_string()),
+            is_final,
+            is_const,
+            is_static,
+            is_getter: false,
+            is_setter: false,
+            line: line_num,
+        })
+    }
+
+    fn try_parse_top_variable(line: &str, line_num: usize) -> Option<DartVariableInfo> {
+        if !line.starts_with("final ")
+            && !line.starts_with("const ")
+            && !line.starts_with("var ")
+            && !line.starts_with("late ")
+        {
+            return None;
+        }
+        let prop = Self::try_parse_field_property(line, line_num, None)?;
+        Some(DartVariableInfo {
+            name: prop.name,
+            r#type: prop.r#type,
+            value: None,
+            line: line_num,
+            is_const: prop.is_const,
+            is_final: prop.is_final,
+            is_private: prop.is_private,
+            is_top_level: true,
+        })
+    }
+
+    fn extract_line_function_calls(
+        sanitized_line: &str,
+        raw_trimmed: &str,
+        line_num: usize,
+        caller_class: Option<&str>,
+        caller_function: Option<&str>,
+        out: &mut Vec<DartFunctionCall>,
+    ) {
+        const IGNORED_CALLS: &[&str] = &[
+            "if", "for", "while", "switch", "catch", "return", "await", "async",
+            "throw", "assert", "super", "this", "print", "setState", "Scaffold",
+            "Container", "Text", "Column", "Row", "Stack", "Padding", "SizedBox",
+            "Expanded", "Flexible", "Center", "Align", "Icon",
+        ];
+        let re = fn_call_regex();
+        for cap in re.captures_iter(sanitized_line) {
+            let receiver = cap.get(1).map(|m| m.as_str().to_string());
+            let fn_name = match cap.get(2) {
+                Some(m) => m.as_str(),
+                None => continue,
+            };
+            if IGNORED_CALLS.contains(&fn_name) {
+                continue;
+            }
+            if Some(fn_name) == caller_function {
+                continue;
+            }
+            let is_static = receiver
+                .as_ref()
+                .map_or(true, |r| r.chars().next().map_or(false, |c| c.is_ascii_uppercase()));
+            let is_chained = receiver.is_some();
+            out.push(DartFunctionCall {
+                name: fn_name.to_string(),
+                line: line_num,
+                caller_class: caller_class.map(|s| s.to_string()),
+                caller_function: caller_function.map(|s| s.to_string()),
+                context: raw_trimmed.chars().take(160).collect(),
+                is_static,
+                is_chained,
+                receiver,
+            });
+        }
+    }
+
     fn sanitize_line(line: &str, in_block_comment: &mut bool) -> String {
         let chars: Vec<char> = line.chars().collect();
         let mut out = String::with_capacity(line.len());
@@ -383,8 +1302,10 @@ impl PureDartParser {
             if *in_block_comment {
                 if c == '*' && next == Some('/') {
                     *in_block_comment = false;
+                    out.push_str("  ");
                     i += 2;
                 } else {
+                    out.push(' ');
                     i += 1;
                 }
                 continue;
@@ -392,12 +1313,15 @@ impl PureDartParser {
 
             if in_single_quote {
                 if c == '\\' {
+                    out.push_str("  ");
                     i += 2;
                     continue;
                 }
                 if c == '\'' {
                     in_single_quote = false;
                     out.push('\'');
+                } else {
+                    out.push(' ');
                 }
                 i += 1;
                 continue;
@@ -405,12 +1329,15 @@ impl PureDartParser {
 
             if in_double_quote {
                 if c == '\\' {
+                    out.push_str("  ");
                     i += 2;
                     continue;
                 }
                 if c == '"' {
                     in_double_quote = false;
                     out.push('"');
+                } else {
+                    out.push(' ');
                 }
                 i += 1;
                 continue;
@@ -421,6 +1348,7 @@ impl PureDartParser {
             }
             if c == '/' && next == Some('*') {
                 *in_block_comment = true;
+                out.push_str("  ");
                 i += 2;
                 continue;
             }
@@ -596,6 +1524,7 @@ impl PureDartParser {
             is_abstract,
             is_private,
             methods: Vec::new(),
+            properties: Vec::new(),
             doc_comment: None,
         })
     }

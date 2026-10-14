@@ -19,7 +19,7 @@ mod watcher;
 use bm25::{BM25Document, BM25DocumentFields, BM25Engine};
 #[cfg(not(target_arch = "wasm32"))]
 use db::NativeSqliteCache;
-use parser::{DartParsedAst, PureDartParser};
+use parser::{DartParsedAst, DartWidgetInfo, PureDartParser};
 use scanner::CodeScanner;
 #[cfg(not(target_arch = "wasm32"))]
 use watcher::{FileWatchEvent, NativeFileWatcher, WatcherHandle};
@@ -80,11 +80,6 @@ fn memory_leak_patterns() -> &'static Vec<ControllerPatterns> {
             })
             .collect()
     })
-}
-
-fn widget_ctor_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\b([A-Z][A-Za-z0-9_]*)\s*\(").unwrap())
 }
 
 struct McpServerState {
@@ -427,6 +422,28 @@ fn atomic_write_file(target: &Path, content: &str) -> io::Result<()> {
         fs::write(target, content).map_err(|_| rename_err)?;
     }
     Ok(())
+}
+
+fn measure_widget_tree_depth(nodes: &[DartWidgetInfo]) -> (usize, String) {
+    let mut best_depth = 0usize;
+    let mut best_path = String::new();
+    for node in nodes {
+        let (child_depth, child_path) = measure_widget_tree_depth(&node.children);
+        let current_depth = 1 + child_depth;
+        if current_depth > best_depth {
+            best_depth = current_depth;
+            best_path = if child_path.is_empty() {
+                node.name.clone()
+            } else {
+                format!("{} > {}", node.name, child_path)
+            };
+        }
+    }
+    (best_depth, best_path)
+}
+
+fn count_widget_nodes(nodes: &[DartWidgetInfo]) -> usize {
+    nodes.iter().map(|n| 1 + count_widget_nodes(&n.children)).sum()
 }
 
 fn classify_arch_layer(rel_path: &str) -> &'static str {
@@ -1295,10 +1312,19 @@ fn main() {
                                             "classesCount": ast.classes.len(),
                                             "functionsCount": ast.functions.len(),
                                             "enumsCount": ast.enums.len(),
+                                            "widgetsCount": count_widget_nodes(&ast.widgets),
                                             "importsCount": ast.imports.len(),
                                             "classes": ast.classes,
                                             "functions": ast.functions,
                                             "enums": ast.enums,
+                                            "widgets": ast.widgets,
+                                            "mixins": ast.mixins,
+                                            "extensions": ast.extensions,
+                                            "typedefs": ast.typedefs,
+                                            "variables": ast.variables,
+                                            "constructors": ast.constructors,
+                                            "properties": ast.properties,
+                                            "annotations": ast.annotations,
                                             "imports": ast.imports,
                                             "exports": ast.exports
                                         })).unwrap_or_else(|_| "{}".to_string())
@@ -1752,53 +1778,22 @@ fn main() {
                         })
                     }
                     "flutter_analyze_widget_depth" => {
-                        let max_depth = args.get("maxDepth").and_then(|v| v.as_u64()).unwrap_or(6) as usize;
+                        let max_depth = args.get("maxDepth").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
                         let path_arg = args.get("path").and_then(|v| v.as_str());
                         let files = state.files_for_optional_path(path_arg, Some("dart"));
-                        let re_widget = widget_ctor_regex();
 
                         let mut violations = Vec::new();
                         let mut max_observed = 0usize;
-                        let mut analyzed_files = 0usize;
+                        let mut analyzed_widgets = 0usize;
 
                         for file in files {
-                            if let Ok(code) = fs::read_to_string(&file) {
-                                if !code.contains("Widget build(") {
+                            let rel = state.relative_path_str(&file);
+                            if let Some((_, ast)) = state.get_or_parse_ast(&file) {
+                                if ast.widgets.is_empty() {
                                     continue;
                                 }
-                                analyzed_files += 1;
-                                let rel = state.relative_path_str(&file);
-                                let mut stack: Vec<String> = Vec::new();
-                                let mut file_max = 0usize;
-                                let mut deepest_path = String::new();
-
-                                for line in code.lines() {
-                                    let trimmed = line.trim();
-                                    if trimmed.starts_with("//") {
-                                        continue;
-                                    }
-                                    if let Some(cap) = re_widget.captures(trimmed) {
-                                        if let Some(w_name) = cap.get(1) {
-                                            let open_parens = trimmed.chars().filter(|&c| c == '(').count();
-                                            let close_parens = trimmed.chars().filter(|&c| c == ')').count();
-                                            if open_parens > close_parens {
-                                                stack.push(w_name.as_str().to_string());
-                                                if stack.len() > file_max {
-                                                    file_max = stack.len();
-                                                    deepest_path = stack.join(" > ");
-                                                }
-                                            }
-                                        }
-                                    }
-                                    let open_p = trimmed.chars().filter(|&c| c == '(').count();
-                                    let close_p = trimmed.chars().filter(|&c| c == ')').count();
-                                    if close_p > open_p {
-                                        for _ in 0..(close_p - open_p) {
-                                            stack.pop();
-                                        }
-                                    }
-                                }
-
+                                analyzed_widgets += ast.widgets.len();
+                                let (file_max, deepest_path) = measure_widget_tree_depth(&ast.widgets);
                                 if file_max > max_observed {
                                     max_observed = file_max;
                                 }
@@ -1807,11 +1802,12 @@ fn main() {
                                         "file": rel,
                                         "maxDepth": file_max,
                                         "deepestPath": deepest_path,
-                                        "recommendation": "Extract deeply nested subtrees into dedicated StatelessWidget classes or helper methods."
+                                        "recommendation": "Extract deeply nested widget subtrees into dedicated StatelessWidget classes."
                                     }));
                                 }
                             }
                         }
+                        let analyzed_files = analyzed_widgets;
 
                         json!({
                             "content": [{

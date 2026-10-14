@@ -1719,16 +1719,36 @@ export class IndexManager {
 
       const totalFiles = Math.max(rustResults.length, regexResults.length, sdkResults.length);
 
-      // Rust Metrics
+      // Rust Metrics (Full 14-Category Parity including WidgetInfo Trees)
       let totalClassesRust = 0;
       let totalMethodsRust = 0;
       let totalFunctionsRust = 0;
       let totalEnumsRust = 0;
+      let totalWidgetsTopRust = 0;
+      let totalWidgetsAllRust = 0;
+      let totalPropsRust = 0;
+      let totalCtorsRust = 0;
+      let totalAnnosRust = 0;
+      let totalCallsRust = 0;
+      let totalVarsRust = 0;
+      let totalTypedefsRust = 0;
+      let totalMixinsRust = 0;
+      let totalExtsRust = 0;
 
       for (const r of rustResults) {
         totalClassesRust += r.classes?.length || 0;
         totalFunctionsRust += r.functions?.length || 0;
         totalEnumsRust += r.enums?.length || 0;
+        totalWidgetsTopRust += r.widgets?.length || 0;
+        totalWidgetsAllRust += collectWidgets(r.widgets || []).length;
+        totalPropsRust += r.properties?.length || 0;
+        totalCtorsRust += r.constructors?.length || 0;
+        totalAnnosRust += r.annotations?.length || 0;
+        totalCallsRust += r.functionCalls?.length || 0;
+        totalVarsRust += r.variables?.length || 0;
+        totalTypedefsRust += r.typedefs?.length || 0;
+        totalMixinsRust += r.mixins?.length || 0;
+        totalExtsRust += r.extensions?.length || 0;
         r.classes?.forEach(c => totalMethodsRust += c.methods?.length || 0);
       }
 
@@ -1863,16 +1883,16 @@ export class IndexManager {
       reportContent += `| ⚡ **Total Functions (Combined)** | **${totalMethodsRust + totalFunctionsRust}** | **${totalMethodsRegex + totalFunctionsRegex}** | ${sdkRan ? `**${totalMethodsSDK + totalFunctionsSDK}**` : 'N/A'} | ⚡ Functions (${totalMethodsRegex + totalFunctionsRegex}) |\n`;
       reportContent += `| &nbsp;&nbsp;&nbsp;&nbsp;↳ *Class Methods* | **${totalMethodsRust}** | **${totalMethodsRegex}** | ${sdkRan ? `**${totalMethodsSDK}**` : 'N/A'} | *(Method bodies)* |\n`;
       reportContent += `| &nbsp;&nbsp;&nbsp;&nbsp;↳ *Top-Level Functions* | **${totalFunctionsRust}** | **${totalFunctionsRegex}** | ${sdkRan ? `**${totalFunctionsSDK}**` : 'N/A'} | *(Top-level declarations)* |\n`;
-      reportContent += `| 🧩 **Widgets (Top-Level / Nodes)** | N/A *(AST mode)* | **${totalWidgetsTopRegex}** / **${totalWidgetsAllRegex}** | ${sdkRan ? `**${totalWidgetsTopSDK}** / **${totalWidgetsAllSDK}**` : 'N/A'} | 🧩 Widgets (${totalWidgetsTopRegex}) |\n`;
-      reportContent += `| 🛠️ **Constructors (Ctors)** | N/A *(AST mode)* | **${totalCtorsRegex}** | ${sdkRan ? `**${totalCtorsSDK}**` : 'N/A'} | 🛠️ Ctors (${totalCtorsRegex}) |\n`;
-      reportContent += `| 🔑 **Properties (Props)** | N/A *(AST mode)* | **${totalPropsRegex}** | ${sdkRan ? `**${totalPropsSDK}**` : 'N/A'} | 🔑 Props (${totalPropsRegex}) |\n`;
-      reportContent += `| 🏷️ **Annotations (Annos)** | N/A *(AST mode)* | **${totalAnnosRegex}** | ${sdkRan ? `**${totalAnnosSDK}**` : 'N/A'} | 🏷️ Annos (${totalAnnosRegex}) |\n`;
-      reportContent += `| 📞 **Function Calls (Calls)** | N/A *(AST mode)* | **${totalCallsRegex}** | ${sdkRan ? `**${totalCallsSDK}**` : 'N/A'} | 📞 Calls (${totalCallsRegex}) |\n`;
-      reportContent += `| 💎 **Variables (Vars)** | N/A *(AST mode)* | **${totalVarsRegex}** | ${sdkRan ? `**${totalVarsSDK}**` : 'N/A'} | 💎 Vars (${totalVarsRegex}) |\n`;
+      reportContent += `| 🧩 **Widgets (Top-Level / Nodes)** | **${totalWidgetsTopRust}** / **${totalWidgetsAllRust}** | **${totalWidgetsTopRegex}** / **${totalWidgetsAllRegex}** | ${sdkRan ? `**${totalWidgetsTopSDK}** / **${totalWidgetsAllSDK}**` : 'N/A'} | 🧩 Widgets (${totalWidgetsTopRegex}) |\n`;
+      reportContent += `| 🛠️ **Constructors (Ctors)** | **${totalCtorsRust}** | **${totalCtorsRegex}** | ${sdkRan ? `**${totalCtorsSDK}**` : 'N/A'} | 🛠️ Ctors (${totalCtorsRegex}) |\n`;
+      reportContent += `| 🔑 **Properties (Props)** | **${totalPropsRust}** | **${totalPropsRegex}** | ${sdkRan ? `**${totalPropsSDK}**` : 'N/A'} | 🔑 Props (${totalPropsRegex}) |\n`;
+      reportContent += `| 🏷️ **Annotations (Annos)** | **${totalAnnosRust}** | **${totalAnnosRegex}** | ${sdkRan ? `**${totalAnnosSDK}**` : 'N/A'} | 🏷️ Annos (${totalAnnosRegex}) |\n`;
+      reportContent += `| 📞 **Function Calls (Calls)** | **${totalCallsRust}** | **${totalCallsRegex}** | ${sdkRan ? `**${totalCallsSDK}**` : 'N/A'} | 📞 Calls (${totalCallsRegex}) |\n`;
+      reportContent += `| 💎 **Variables (Vars)** | **${totalVarsRust}** | **${totalVarsRegex}** | ${sdkRan ? `**${totalVarsSDK}**` : 'N/A'} | 💎 Vars (${totalVarsRegex}) |\n`;
       reportContent += `| 🟣 **Enums** | **${totalEnumsRust}** | **${totalEnumsRegex}** | ${sdkRan ? `**${totalEnumsSDK}**` : 'N/A'} | 🟣 Enums (${totalEnumsRegex}) |\n`;
-      reportContent += `| 🏷️ **Type Aliases (Type)** | N/A *(AST mode)* | **${totalTypedefsRegex}** | ${sdkRan ? `**${totalTypedefsSDK}**` : 'N/A'} | 🏷️ Type (${totalTypedefsRegex}) |\n`;
-      reportContent += `| 🟠 **Mixins** | N/A *(AST mode)* | **${totalMixinsRegex}** | ${sdkRan ? `**${totalMixinsSDK}**` : 'N/A'} | 🟠 Mixins (${totalMixinsRegex}) |\n`;
-      reportContent += `| 🧬 **Extensions (Ext)** | N/A *(AST mode)* | **${totalExtsRegex}** | ${sdkRan ? `**${totalExtsSDK}**` : 'N/A'} | 🧬 Ext (${totalExtsRegex}) |\n\n`;
+      reportContent += `| 🏷️ **Type Aliases (Type)** | **${totalTypedefsRust}** | **${totalTypedefsRegex}** | ${sdkRan ? `**${totalTypedefsSDK}**` : 'N/A'} | 🏷️ Type (${totalTypedefsRegex}) |\n`;
+      reportContent += `| 🟠 **Mixins** | **${totalMixinsRust}** | **${totalMixinsRegex}** | ${sdkRan ? `**${totalMixinsSDK}**` : 'N/A'} | 🟠 Mixins (${totalMixinsRegex}) |\n`;
+      reportContent += `| 🧬 **Extensions (Ext)** | **${totalExtsRust}** | **${totalExtsRegex}** | ${sdkRan ? `**${totalExtsSDK}**` : 'N/A'} | 🧬 Ext (${totalExtsRegex}) |\n\n`;
 
       if (diffs.length === 0) {
         reportContent += `## 🎉 Perfect Engine Alignment!\n\nAll enabled engines analyzed the workspace symbols in complete unison. No discrepancies were detected!\n\n`;

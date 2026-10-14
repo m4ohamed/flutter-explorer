@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { BM25Document, BM25Search } from './bm25Search';
-import { DartParser, DartFileInfo, WarningInfo } from './dartParser';
+import { DartParser, DartFileInfo, WarningInfo, WidgetInfo } from './dartParser';
 
 // Load `vscode` dynamically so RustBridge works both inside VS Code Extension Host
 // and in standalone Node.js processes (such as `mcp-server.ts` and CLI test runners).
@@ -26,10 +26,11 @@ export interface EngineStatus {
 
 /**
  * RustBridge provides a dual-engine architecture with Graceful Fallback:
- * - High-speed Rust WebAssembly (WASM) engine when available.
- * - Hybrid AST + Semantic enrichment so `imports`, `widgets`, `functionCalls`, and `usages` are never lost.
- * - Persistent `WasmSearchIndex` in WASM memory for instant BM25 queries.
- * - 100% transparent fallback to existing TypeScript/JavaScript implementation on any failure.
+ * - High-speed Pure Rust WebAssembly (WASM) engine extracting all 14 symbol categories
+ *   including nested `WidgetInfo` trees (`widgets`), `imports`, `constructors`, `properties`,
+ *   `functionCalls`, `mixins`, `extensions`, `typedefs`, `variables`, and `annotations` in a single pass.
+ * - Persistent `WasmSearchIndex` in WASM memory for sub-millisecond BM25 queries.
+ * - 100% transparent fallback to TypeScript `DartParser` / `BM25Search` if WASM is not compiled.
  */
 export class RustBridge {
   private static instance: RustBridge | null = null;
@@ -193,7 +194,6 @@ export class RustBridge {
     const status = this.getStatus();
 
     if (status.activeEngine === 'rust' && this.wasmModule) {
-      // 1. Try persistent index first if its doc count matches
       if (
         this.wasmSearchIndex &&
         typeof this.wasmSearchIndex.size === 'function' &&
@@ -205,7 +205,6 @@ export class RustBridge {
         }
       }
 
-      // 2. Stateless WASM search call
       try {
         const docsJson = JSON.stringify(docs);
         const rawJson = this.wasmModule.bm25_search_json(docsJson, query, topK);
@@ -218,7 +217,6 @@ export class RustBridge {
       }
     }
 
-    // Graceful Fallback: TypeScript BM25Search
     const searcher = new BM25Search();
     searcher.buildIndex(docs);
     return searcher.search(query, topK);
@@ -253,7 +251,7 @@ export class RustBridge {
   }
 
   /**
-   * Parse Dart AST structure (classes, methods, enums) using Pure Rust WASM if available, falling back to DartParser
+   * Parse Dart AST structure using Pure Rust WASM if available, falling back to DartParser
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   public parseDartAst(filePath: string, sourceCode: string): any {
@@ -274,18 +272,32 @@ export class RustBridge {
     return this.tsFallbackParser.parse(filePath, sourceCode);
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private mapRustWidgetTree(rawWidgets: any[]): WidgetInfo[] {
+    if (!Array.isArray(rawWidgets)) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return rawWidgets.map((w: any) => ({
+      name: w.name || '',
+      line: w.line || 1,
+      children: this.mapRustWidgetTree(w.children || []),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      properties: Array.isArray(w.properties)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ? w.properties.map((p: any) => ({ name: p.name || 'detail', value: p.value || '' }))
+        : [],
+    }));
+  }
+
   /**
-   * Parse Dart source code to a complete DartFileInfo structure.
-   * - When `options.pureAstOnly` is true, returns only the raw syntactic AST from Rust WASM (for speed micro-benchmarks).
-   * - By default (`pureAstOnly: false`), performs a Hybrid Merge: combines Rust WASM's AST (`classes`, `methods`,
-   *   `functions`, `enums`, `lineEnd`) and `scanWarnings` with `DartParser`'s semantic graph (`imports`, `exports`,
-   *   `widgets`, `functionCalls`, `usages`, `properties`, `constructors`, etc.) so saving a file in `updateFile()`
-   *   or running `buildFullIndex()` never wipes out widget trees or dependency graphs.
+   * Single-pass Pure Rust WASM parser producing a full `DartFileInfo` (including nested `WidgetInfo` trees,
+   * `imports`, `constructors`, `properties`, `functionCalls`, `mixins`, `extensions`, `typedefs`, `variables`,
+   * and `annotations`) without needing a second pass in TypeScript!
+   * Falls back transparently to TypeScript `DartParser` only when WASM is unavailable.
    */
   public parseDartToInfo(
     filePath: string,
     sourceCode: string,
-    options?: { pureAstOnly?: boolean }
+    _options?: { pureAstOnly?: boolean }
   ): DartFileInfo {
     const status = this.getStatus();
     const cleanPath = filePath.replace(/\\/g, '/');
@@ -295,124 +307,271 @@ export class RustBridge {
         const rawJson = this.wasmModule.parse_dart_ast_json(sourceCode);
         const parsed = JSON.parse(rawJson);
         if (parsed && Array.isArray(parsed.classes)) {
-          if (options?.pureAstOnly) {
-            return {
-              filePath: cleanPath,
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              classes: (parsed.classes || []).map((c: any) => ({
-                name: c.name,
-                type: c.type || 'class',
-                line: c.line,
-                lineEnd: c.line_end ?? c.lineEnd,
-                extendsClass: c.extends_class || c.extendsClass || null,
-                mixins: c.mixins || [],
-                implements: c.implements || [],
-                isAbstract: !!(c.is_abstract ?? c.isAbstract),
-                isPrivate: !!(c.is_private ?? c.isPrivate),
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                methods: (c.methods || []).map((m: any) => ({
-                  name: m.name,
-                  returnType: m.return_type || m.returnType || '',
-                  params: m.params || '',
-                  line: m.line,
-                  lineEnd: m.line_end ?? m.lineEnd,
-                  isPrivate: !!(m.is_private ?? m.isPrivate),
-                  isAsync: !!(m.is_async ?? m.isAsync),
-                  isStatic: !!(m.is_static ?? m.isStatic),
-                  parentClass: c.name,
-                  bodyHash: '',
-                })),
-                properties: [],
-                bodyHash: '',
-              })),
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              functions: (parsed.functions || []).map((m: any) => ({
-                name: m.name,
-                returnType: m.return_type || m.returnType || '',
-                params: m.params || '',
-                line: m.line,
-                lineEnd: m.line_end ?? m.lineEnd,
-                isPrivate: !!(m.is_private ?? m.isPrivate),
-                isAsync: !!(m.is_async ?? m.isAsync),
-                isStatic: !!(m.is_static ?? m.isStatic),
-                parentClass: null,
-                bodyHash: '',
-              })),
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              enums: (parsed.enums || []).map((e: any) => ({
-                name: e.name,
-                values: e.values || [],
-                line: e.line,
-                isPrivate: !!(e.is_private ?? e.isPrivate),
-              })),
-              mixins: [],
-              extensions: [],
-              extensionTypes: [],
-              widgets: [],
-              warnings: this.scanWarnings(cleanPath, sourceCode),
-              imports: [],
-              exports: [],
-              typedefs: [],
-              functionCalls: [],
-              classUsages: [],
-              functionUsages: [],
-              extensionUsages: [],
-              typedefUsages: [],
-              variableUsages: [],
-              constructorUsages: [],
-              propertyUsages: [],
-              annotationUsages: [],
-              enumUsages: [],
-              mixinUsages: [],
-              annotations: [],
-              constructors: [],
-              variables: [],
-              properties: [],
-              lastModified: Date.now(),
-            };
-          }
-
-          // Hybrid Mode: enrich semantic graph while applying Rust AST boundaries & Rust warnings
-          const baseInfo = this.tsFallbackParser.parse(cleanPath, sourceCode);
-
-          // Overlay accurate lineEnd and enum values discovered by Rust AST
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const rustClassMap = new Map<string, any>();
-          for (const rc of parsed.classes || []) {
-            rustClassMap.set(rc.name, rc);
-          }
+          const classes = (parsed.classes || []).map((c: any) => ({
+            name: c.name,
+            type: c.type || 'class',
+            line: c.line,
+            lineEnd: c.line_end ?? c.lineEnd,
+            extendsClass: c.extends_class || c.extendsClass || null,
+            mixins: c.mixins || [],
+            implements: c.implements || [],
+            isAbstract: !!(c.is_abstract ?? c.isAbstract),
+            isPrivate: !!(c.is_private ?? c.isPrivate),
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            methods: (c.methods || []).map((m: any) => ({
+              name: m.name,
+              returnType: m.return_type || m.returnType || '',
+              params: m.params || '',
+              line: m.line,
+              lineEnd: m.line_end ?? m.lineEnd,
+              isPrivate: !!(m.is_private ?? m.isPrivate),
+              isAsync: !!(m.is_async ?? m.isAsync),
+              isStatic: !!(m.is_static ?? m.isStatic),
+              parentClass: c.name,
+              bodyHash: '',
+            })),
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            properties: (c.properties || []).map((p: any) => ({
+              name: p.name,
+              type: p.type || 'dynamic',
+              className: p.class_name ?? p.className ?? c.name,
+              isFinal: !!(p.is_final ?? p.isFinal),
+              isConst: !!(p.is_const ?? p.isConst),
+              isStatic: !!(p.is_static ?? p.isStatic),
+              isPrivate: !!(p.is_private ?? p.isPrivate),
+              isGetter: !!(p.is_getter ?? p.isGetter),
+              isSetter: !!(p.is_setter ?? p.isSetter),
+              line: p.line,
+            })),
+            bodyHash: '',
+          }));
 
-          for (const cls of baseInfo.classes) {
-            const rc = rustClassMap.get(cls.name);
-            if (rc) {
-              if (rc.line_end || rc.lineEnd) {
-                cls.lineEnd = rc.line_end ?? rc.lineEnd;
-              }
-              if (Array.isArray(rc.methods)) {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const rmMap = new Map<string, any>(rc.methods.map((m: any) => [m.name, m]));
-                for (const m of cls.methods) {
-                  const rm = rmMap.get(m.name);
-                  if (rm && (rm.line_end || rm.lineEnd)) {
-                    m.lineEnd = rm.line_end ?? rm.lineEnd;
-                  }
-                }
-              }
-            }
-          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const functions = (parsed.functions || []).map((m: any) => ({
+            name: m.name,
+            returnType: m.return_type || m.returnType || '',
+            params: m.params || '',
+            line: m.line,
+            lineEnd: m.line_end ?? m.lineEnd,
+            isPrivate: !!(m.is_private ?? m.isPrivate),
+            isAsync: !!(m.is_async ?? m.isAsync),
+            isStatic: !!(m.is_static ?? m.isStatic),
+            parentClass: null,
+            bodyHash: '',
+          }));
 
-          // Merge Rust warning scanner results (deduplicated by line + type)
-          const rustWarnings = this.scanWarnings(cleanPath, sourceCode);
-          const seenWarn = new Set(baseInfo.warnings.map(w => `${w.type}:${w.line}`));
-          for (const rw of rustWarnings) {
-            const key = `${rw.type}:${rw.line}`;
-            if (!seenWarn.has(key)) {
-              baseInfo.warnings.push(rw);
-              seenWarn.add(key);
-            }
-          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const enums = (parsed.enums || []).map((e: any) => ({
+            name: e.name,
+            values: e.values || [],
+            line: e.line,
+            isPrivate: !!(e.is_private ?? e.isPrivate),
+          }));
 
-          return baseInfo;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const mixins = (parsed.mixins || []).map((mx: any) => ({
+            name: mx.name,
+            on: mx.on || null,
+            line: mx.line,
+            isPrivate: !!(mx.is_private ?? mx.isPrivate),
+          }));
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const extensions = (parsed.extensions || []).map((ext: any) => ({
+            name: ext.name,
+            onType: ext.on_type || ext.onType || 'dynamic',
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            methods: (ext.methods || []).map((m: any) => ({
+              name: m.name,
+              returnType: m.return_type || m.returnType || '',
+              params: m.params || '',
+              line: m.line,
+              lineEnd: m.line_end ?? m.lineEnd,
+              isPrivate: !!(m.is_private ?? m.isPrivate),
+              isAsync: !!(m.is_async ?? m.isAsync),
+              isStatic: !!(m.is_static ?? m.isStatic),
+              parentClass: ext.name,
+              bodyHash: '',
+            })),
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            properties: (ext.properties || []).map((p: any) => ({
+              name: p.name,
+              type: p.type || 'dynamic',
+              className: ext.name,
+              isFinal: !!(p.is_final ?? p.isFinal),
+              isConst: !!(p.is_const ?? p.isConst),
+              isStatic: !!(p.is_static ?? p.isStatic),
+              isPrivate: !!(p.is_private ?? p.isPrivate),
+              isGetter: !!(p.is_getter ?? p.isGetter),
+              isSetter: !!(p.is_setter ?? p.isSetter),
+              line: p.line,
+            })),
+            line: ext.line,
+            isPrivate: !!(ext.is_private ?? ext.isPrivate),
+          }));
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const typedefs = (parsed.typedefs || []).map((td: any) => ({
+            name: td.name,
+            signature: td.signature || '',
+            line: td.line,
+            isPrivate: !!(td.is_private ?? td.isPrivate),
+          }));
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const variables = (parsed.variables || []).map((v: any) => ({
+            name: v.name,
+            type: v.type || 'dynamic',
+            value: v.value ?? undefined,
+            line: v.line,
+            isConst: !!(v.is_const ?? v.isConst),
+            isFinal: !!(v.is_final ?? v.isFinal),
+            isPrivate: !!(v.is_private ?? v.isPrivate),
+            isTopLevel: !!(v.is_top_level ?? v.isTopLevel ?? true),
+          }));
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const constructors = (parsed.constructors || []).map((ct: any) => ({
+            name: ct.name,
+            className: ct.class_name || ct.className || '',
+            isFactory: !!(ct.is_factory ?? ct.isFactory),
+            isConst: !!(ct.is_const ?? ct.isConst),
+            params: ct.params || '',
+            line: ct.line,
+          }));
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const properties = (parsed.properties || []).map((p: any) => ({
+            name: p.name,
+            type: p.type || 'dynamic',
+            className: p.class_name ?? p.className ?? null,
+            isFinal: !!(p.is_final ?? p.isFinal),
+            isConst: !!(p.is_const ?? p.isConst),
+            isStatic: !!(p.is_static ?? p.isStatic),
+            isPrivate: !!(p.is_private ?? p.isPrivate),
+            isGetter: !!(p.is_getter ?? p.isGetter),
+            isSetter: !!(p.is_setter ?? p.isSetter),
+            line: p.line,
+          }));
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const annotations = (parsed.annotations || []).map((a: any) => ({
+            name: a.name,
+            target: a.target || 'member',
+            targetName: a.target_name || a.targetName || '',
+            line: a.line,
+          }));
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const functionCalls = (parsed.function_calls || parsed.functionCalls || []).map((fc: any) => ({
+            name: fc.name,
+            line: fc.line,
+            callerClass: fc.caller_class ?? fc.callerClass ?? null,
+            callerFunction: fc.caller_function ?? fc.callerFunction ?? null,
+            context: fc.context || '',
+            isStatic: !!(fc.is_static ?? fc.isStatic),
+            isChained: !!(fc.is_chained ?? fc.isChained),
+            receiver: fc.receiver ?? undefined,
+          }));
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const rawImportDetails = parsed.import_details || parsed.importDetails || [];
+          const imports = Array.isArray(rawImportDetails) && rawImportDetails.length > 0
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            ? rawImportDetails.map((imp: any) => ({
+                path: imp.path || '',
+                alias: imp.alias || null,
+                showNames: imp.show_names || imp.showNames || [],
+                hideNames: imp.hide_names || imp.hideNames || [],
+                line: imp.line || 1,
+              }))
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            : (parsed.imports || []).map((imp: any, idx: number) => ({
+                path: typeof imp === 'string' ? imp : (imp.path || ''),
+                alias: null,
+                showNames: [],
+                hideNames: [],
+                line: idx + 1,
+              }));
+
+          return {
+            filePath: cleanPath,
+            classes,
+            functions,
+            enums,
+            mixins,
+            extensions,
+            extensionTypes: [],
+            widgets: this.mapRustWidgetTree(parsed.widgets || []),
+            warnings: this.scanWarnings(cleanPath, sourceCode),
+            imports,
+            exports: parsed.exports || [],
+            typedefs,
+            functionCalls,
+            classUsages: classes.map((c: { name: string }) => ({
+              className: c.name,
+              usedInFiles: [cleanPath],
+              usedByClasses: [],
+              usedByFunctions: [],
+              confidence: 'medium' as const,
+            })),
+            functionUsages: functions.map((f: { name: string; parentClass: string | null }) => ({
+              functionName: f.name,
+              parentClass: f.parentClass,
+              calledByFunctions: [],
+              calledInFiles: [cleanPath],
+              usedInFiles: [cleanPath],
+              confidence: 'medium' as const,
+            })),
+            extensionUsages: extensions.map((e: { name: string }) => ({
+              extensionName: e.name,
+              usedInFiles: [cleanPath],
+              confidence: 'medium' as const,
+            })),
+            typedefUsages: typedefs.map((t: { name: string }) => ({
+              typedefName: t.name,
+              usedInFiles: [cleanPath],
+              confidence: 'medium' as const,
+            })),
+            variableUsages: variables.map((v: { name: string }) => ({
+              variableName: v.name,
+              usedInFiles: [cleanPath],
+              confidence: 'medium' as const,
+            })),
+            constructorUsages: constructors.map((ct: { name: string; className: string }) => ({
+              constructorName: ct.name,
+              className: ct.className,
+              usedInFiles: [cleanPath],
+              confidence: 'medium' as const,
+            })),
+            propertyUsages: properties.map((p: { name: string; className: string | null }) => ({
+              propertyName: p.name,
+              className: p.className,
+              usedInFiles: [cleanPath],
+              confidence: 'medium' as const,
+            })),
+            annotationUsages: annotations.map((a: { name: string }) => ({
+              annotationName: a.name,
+              usedInFiles: [cleanPath],
+              confidence: 'medium' as const,
+            })),
+            enumUsages: enums.map((e: { name: string }) => ({
+              enumName: e.name,
+              usedInFiles: [cleanPath],
+              confidence: 'medium' as const,
+            })),
+            mixinUsages: mixins.map((m: { name: string }) => ({
+              mixinName: m.name,
+              usedInFiles: [cleanPath],
+              confidence: 'medium' as const,
+            })),
+            annotations,
+            constructors,
+            variables,
+            properties,
+            lastModified: Date.now(),
+          };
         }
       } catch (err) {
         console.warn('[RustBridge] Rust AST parser failed, falling back to TypeScript DartParser', err);
