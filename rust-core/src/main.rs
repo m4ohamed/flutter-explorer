@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
+use std::net::{SocketAddr, TcpStream};
+use std::time::Duration;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -444,6 +446,233 @@ fn measure_widget_tree_depth(nodes: &[DartWidgetInfo]) -> (usize, String) {
 
 fn count_widget_nodes(nodes: &[DartWidgetInfo]) -> usize {
     nodes.iter().map(|n| 1 + count_widget_nodes(&n.children)).sum()
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PackageConfigEntry {
+    name: String,
+    root_uri: String,
+    package_uri: String,
+    actual_dir: PathBuf,
+}
+
+fn load_package_config(project_root: &Path) -> Vec<PackageConfigEntry> {
+    let config_path = project_root.join(".dart_tool").join("package_config.json");
+    let content = match fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let parsed: Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let dart_tool_dir = project_root.join(".dart_tool");
+    let mut entries = Vec::new();
+
+    if let Some(pkgs) = parsed.get("packages").and_then(|v| v.as_array()) {
+        for pkg in pkgs {
+            let name = pkg.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let root_uri = pkg.get("rootUri").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let package_uri = pkg.get("packageUri").and_then(|v| v.as_str()).unwrap_or("lib/").to_string();
+            if name.is_empty() || root_uri.is_empty() {
+                continue;
+            }
+            let actual_dir = if let Some(stripped) = root_uri.strip_prefix("file:///") {
+                let decoded = stripped.replace("%20", " ");
+                if cfg!(windows) {
+                    PathBuf::from(decoded.replace('/', "\\"))
+                } else {
+                    PathBuf::from(format!("/{}", decoded))
+                }
+            } else if let Some(stripped) = root_uri.strip_prefix("file://") {
+                PathBuf::from(stripped.replace("%20", " "))
+            } else {
+                dart_tool_dir.join(&root_uri)
+            };
+            entries.push(PackageConfigEntry {
+                name,
+                root_uri,
+                package_uri,
+                actual_dir,
+            });
+        }
+    }
+    entries
+}
+
+fn discover_vm_service_uri(project_root: &Path, override_uri: Option<&str>) -> Option<String> {
+    if let Some(u) = override_uri.filter(|s| !s.trim().is_empty()) {
+        return Some(u.trim().to_string());
+    }
+    if let Ok(env_u) = std::env::var("DART_VM_SERVICE_URI") {
+        if !env_u.trim().is_empty() {
+            return Some(env_u.trim().to_string());
+        }
+    }
+    let dart_tool = project_root.join(".dart_tool");
+    for candidate in [
+        "dart_tooling_daemon.json",
+        "flutter_service.json",
+        "vm_service_uri.txt",
+    ] {
+        let p = dart_tool.join(candidate);
+        if let Ok(raw) = fs::read_to_string(&p) {
+            let trimmed = raw.trim();
+            if trimmed.starts_with('{') {
+                if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
+                    for key in ["uri", "vmServiceUri", "toolingDaemonUri"] {
+                        if let Some(u) = val.get(key).and_then(|v| v.as_str()) {
+                            return Some(u.to_string());
+                        }
+                    }
+                }
+            } else if trimmed.starts_with("http") || trimmed.starts_with("ws") {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Calls the local Dart VM Service over HTTP GET JSON-RPC using `std::net::TcpStream`
+fn vm_service_http_call(base_uri: &str, method: &str, query_params: &[(&str, &str)]) -> Result<Value, String> {
+    let normalized = base_uri
+        .trim()
+        .replacen("ws://", "http://", 1)
+        .replacen("wss://", "https://", 1);
+    let without_ws = normalized.trim_end_matches("/ws").trim_end_matches('/');
+    let after_scheme = without_ws
+        .strip_prefix("http://")
+        .or_else(|| without_ws.strip_prefix("https://"))
+        .ok_or_else(|| format!("Unsupported VM Service URI: {}", base_uri))?;
+
+    let (host_port, base_path) = match after_scheme.find('/') {
+        Some(idx) => (&after_scheme[..idx], &after_scheme[idx..]),
+        None => (after_scheme, ""),
+    };
+
+    let mut q_str = String::new();
+    for (i, (k, v)) in query_params.iter().enumerate() {
+        q_str.push(if i == 0 { '?' } else { '&' });
+        q_str.push_str(k);
+        q_str.push('=');
+        q_str.push_str(&v.replace(' ', "%20"));
+    }
+
+    let full_path = format!("{}/{}{}", base_path.trim_end_matches('/'), method, q_str);
+    let addr_str = if host_port.contains(':') {
+        host_port.replace("localhost", "127.0.0.1")
+    } else {
+        format!("{}:80", host_port.replace("localhost", "127.0.0.1"))
+    };
+
+    let sock_addr: SocketAddr = addr_str
+        .parse()
+        .map_err(|e| format!("Invalid VM Service socket address '{}': {}", addr_str, e))?;
+
+    let mut stream = TcpStream::connect_timeout(&sock_addr, Duration::from_millis(2500))
+        .map_err(|e| format!("Failed to connect to VM Service at {}: {}", addr_str, e))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(4000)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(2500)));
+
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+        full_path, host_port
+    );
+    stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+
+    let mut resp_bytes = Vec::new();
+    let _ = stream.read_to_end(&mut resp_bytes);
+    let resp_str = String::from_utf8_lossy(&resp_bytes);
+
+    let body = resp_str
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b.trim())
+        .unwrap_or("");
+    serde_json::from_str::<Value>(body)
+        .map_err(|e| format!("Failed to parse VM Service response: {}", e))
+}
+
+fn vm_service_find_main_isolate(base_uri: &str) -> Result<String, String> {
+    let vm_resp = vm_service_http_call(base_uri, "getVM", &[])?;
+    let isolates = vm_resp
+        .get("result")
+        .and_then(|r| r.get("isolates"))
+        .and_then(|i| i.as_array())
+        .ok_or_else(|| "No isolates array in getVM response".to_string())?;
+
+    for iso in isolates {
+        if let Some(id) = iso.get("id").and_then(|v| v.as_str()) {
+            let name = iso.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            if name == "main" {
+                return Ok(id.to_string());
+            }
+        }
+    }
+    isolates
+        .first()
+        .and_then(|i| i.get("id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "No active Dart isolate found".to_string())
+}
+
+fn widget_subtree_signature(node: &DartWidgetInfo) -> (usize, String) {
+    if node.children.is_empty() {
+        return (1, node.name.clone());
+    }
+    let mut total_nodes = 1usize;
+    let mut child_sigs = Vec::with_capacity(node.children.len());
+    for child in &node.children {
+        let (cnt, sig) = widget_subtree_signature(child);
+        total_nodes += cnt;
+        child_sigs.push(sig);
+    }
+    (total_nodes, format!("{}({})", node.name, child_sigs.join(",")))
+}
+
+fn collect_widget_subtrees(
+    nodes: &[DartWidgetInfo],
+    file_rel: &str,
+    min_nodes: usize,
+    clusters: &mut BTreeMap<String, (usize, Vec<Value>)>,
+    total_analyzed: &mut usize,
+) {
+    for node in nodes {
+        *total_analyzed += 1;
+        let (cnt, sig) = widget_subtree_signature(node);
+        if cnt >= min_nodes {
+            let entry = clusters.entry(sig).or_insert_with(|| (cnt, Vec::new()));
+            entry.1.push(json!({
+                "file": file_rel,
+                "rootWidget": node.name,
+                "line": node.line
+            }));
+        }
+        collect_widget_subtrees(&node.children, file_rel, min_nodes, clusters, total_analyzed);
+    }
+}
+
+fn extract_icu_placeholders(text: &str) -> BTreeMap<String, ()> {
+    let mut result = BTreeMap::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '{' {
+            let mut j = i + 1;
+            let mut ident = String::new();
+            while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '_') {
+                ident.push(chars[j]);
+                j += 1;
+            }
+            if !ident.is_empty() && j < chars.len() && (chars[j] == '}' || chars[j] == ',') {
+                result.insert(ident, ());
+            }
+        }
+        i += 1;
+    }
+    result
 }
 
 fn classify_arch_layer(rel_path: &str) -> &'static str {
@@ -913,6 +1142,266 @@ fn main() {
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
+                            }
+                        },
+                        {
+                            "name": "flutter_get_detailed_graph",
+                            "description": "Get a detailed relationship graph (inheritance, calls, imports, widgets, mixins, extensions) for the project or a specific file",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "focusFile": { "type": "string", "description": "Optional: focus the graph on a specific file and its neighbors" },
+                                    "depth": { "type": "integer", "description": "Traversal depth around focusFile (default: 1)" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "flutter_get_impact_analysis",
+                            "description": "Analyze the blast radius of a file: find all application entry points (UI/main/events) and dependent files affected by changes to this file",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "relativePath": { "type": "string", "description": "Relative path of the file to analyze (e.g. lib/core/utils.dart)" },
+                                    "filePath": { "type": "string", "description": "Alias for relativePath" },
+                                    "path": { "type": "string", "description": "Alias for relativePath" },
+                                    "maxDepth": { "type": "integer", "description": "Maximum search depth (default: 25)" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "flutter_get_git_blast_radius",
+                            "description": "Automatically calculate blast radius and affected entry points/execution flows from current Git diff changes",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "maxDepth": { "type": "integer", "description": "Max traversal depth (default: 25)" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "flutter_analyze_logic_flow",
+                            "description": "Analyze a function or method's logic, Cyclomatic Complexity, and return a step-by-step execution flow",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "functionName": { "type": "string", "description": "Name of the function or method to analyze" },
+                                    "filePath": { "type": "string", "description": "Optional relative path to the file" },
+                                    "relativePath": { "type": "string", "description": "Alias for filePath" },
+                                    "path": { "type": "string", "description": "Alias for filePath" },
+                                    "parentClass": { "type": "string", "description": "Optional parent class name" }
+                                },
+                                "required": ["functionName"]
+                            }
+                        },
+                        {
+                            "name": "flutter_validate_architecture_rules",
+                            "description": "Validate Clean Architecture layer boundary rules (e.g. Domain must not depend on Data/UI, Core must not depend on Features)",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "customRules": {
+                                        "type": "array",
+                                        "description": "Optional custom layer boundary rules",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "name": { "type": "string" },
+                                                "fromLayer": { "type": "string" },
+                                                "forbiddenLayers": { "type": "array", "items": { "type": "string" } },
+                                                "description": { "type": "string" }
+                                            },
+                                            "required": ["name", "fromLayer", "forbiddenLayers", "description"]
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "flutter_detect_duplicate_widgets",
+                            "description": "Detect duplicate or near-identical widget subtrees across project files and generate proposals for extracting reusable custom widgets",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "minNodeCount": { "type": "integer", "description": "Minimum number of widgets in a subtree to consider for duplication (default: 3)" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "flutter_read_fragment",
+                            "description": "Read a code fragment by element name (class, function, method, enum) with surrounding comments and optional context lines",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string", "description": "Name of the element to read" },
+                                    "elementType": { "type": "string", "enum": ["class", "function", "method", "enum"], "description": "Optional type of element" },
+                                    "filePath": { "type": "string", "description": "Optional relative path to the file" },
+                                    "relativePath": { "type": "string", "description": "Alias for filePath" },
+                                    "path": { "type": "string", "description": "Alias for filePath" },
+                                    "parentClass": { "type": "string", "description": "Optional parent class name" },
+                                    "includeContext": { "type": "boolean", "description": "Include surrounding context lines (default: false)" },
+                                    "contextLines": { "type": "integer", "description": "Number of context lines before/after (default: 3)" }
+                                },
+                                "required": ["name"]
+                            }
+                        },
+                        {
+                            "name": "flutter_get_hints",
+                            "description": "Get context-aware workflow suggestions and smart optimization hints based on recent tool usage and project analysis",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "lastToolUsed": { "type": "string", "description": "The name of the tool that was just called" },
+                                    "lastResult": { "type": "object", "description": "Optional result of the last tool call" },
+                                    "filePath": { "type": "string", "description": "Optional file path for targeted code hints" }
+                                },
+                                "required": ["lastToolUsed"]
+                            }
+                        },
+                        {
+                            "name": "flutter_search_packages",
+                            "description": "Search across all cached third-party Dart/Flutter package dependencies in .pub-cache or Flutter SDK",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "query": { "type": "string", "description": "Search term or regex pattern" },
+                                    "packageName": { "type": "string", "description": "Optional package name to limit search (e.g. 'dio' or 'flutter')" },
+                                    "isRegex": { "type": "boolean", "description": "Whether query is a regex (default: false)" },
+                                    "caseSensitive": { "type": "boolean", "description": "Case-sensitive match (default: false)" },
+                                    "maxResults": { "type": "integer", "description": "Max number of matches to return (default: 50)" }
+                                },
+                                "required": ["query"]
+                            }
+                        },
+                        {
+                            "name": "flutter_read_package_source",
+                            "description": "Read the source code of any cached third-party package or Flutter SDK library by package URI (e.g. package:flutter/material.dart)",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "uri": { "type": "string", "description": "Package URI (e.g. package:flutter/widgets.dart or package:dio/dio.dart)" },
+                                    "startLine": { "type": "integer", "description": "Starting line number (1-based, default: 1)" },
+                                    "lineCount": { "type": "integer", "description": "Number of lines to read (default: 100)" }
+                                },
+                                "required": ["uri"]
+                            }
+                        },
+                        {
+                            "name": "flutter_pub_dev_search",
+                            "description": "Search for packages on pub.dev (with automatic local .pub-cache fallback) to discover libraries and latest versions",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "query": { "type": "string", "description": "Search query for pub.dev (e.g. 'state management' or 'sqlite')" },
+                                    "page": { "type": "integer", "description": "Page number (default: 1)" }
+                                },
+                                "required": ["query"]
+                            }
+                        },
+                        {
+                            "name": "flutter_get_pub_package_info",
+                            "description": "Get detailed metrics and metadata for a package from pub.dev (or local cache fallback), including points, likes, version, and dependencies",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "packageName": { "type": "string", "description": "Package name on pub.dev (e.g. 'riverpod' or 'dio')" }
+                                },
+                                "required": ["packageName"]
+                            }
+                        },
+                        {
+                            "name": "flutter_run_intl_generate",
+                            "description": "Generate Flutter localization Dart files (l10n.dart / gen-l10n) from project ARB files",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "flutter_validate_icu_translations",
+                            "description": "Validate ICU syntax, placeholder consistency ({name}), and plural/select balance across all ARB translation files",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "flutter_auto_translate_missing",
+                            "description": "Generate structured translation payload for missing keys across locales, or batch apply translated keys",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "action": { "type": "string", "enum": ["generate_payload", "batch_apply"], "description": "Action: generate_payload or batch_apply" },
+                                    "sourceLocale": { "type": "string", "description": "Base locale (default: 'en')" },
+                                    "translationsToApply": {
+                                        "type": "array",
+                                        "description": "Translations to batch apply when action is 'batch_apply'",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "key": { "type": "string" },
+                                                "translations": { "type": "object" },
+                                                "description": { "type": "string" }
+                                            },
+                                            "required": ["key", "translations"]
+                                        }
+                                    }
+                                },
+                                "required": ["action"]
+                            }
+                        },
+                        {
+                            "name": "flutter_hot_reload",
+                            "description": "Trigger Hot Reload (ext.flutter.reassemble / reloadSources) on the running Flutter app via the Dart VM Service",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "vmServiceUri": { "type": "string", "description": "Optional VM Service URI. If omitted, automatically discovered." }
+                                }
+                            }
+                        },
+                        {
+                            "name": "flutter_hot_restart",
+                            "description": "Trigger a full Hot Restart on the running Flutter application via the Dart VM Service",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "vmServiceUri": { "type": "string", "description": "Optional VM Service URI. If omitted, automatically discovered." }
+                                }
+                            }
+                        },
+                        {
+                            "name": "flutter_get_runtime_errors",
+                            "description": "Fetch real-time Flutter runtime errors, isolate exception state, and diagnostics from the running application",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "vmServiceUri": { "type": "string", "description": "Optional VM Service URI. If omitted, automatically discovered." }
+                                }
+                            }
+                        },
+                        {
+                            "name": "flutter_inspect_live_widgets",
+                            "description": "Inspect the live running widget tree and render objects of the active Flutter application via VM Service (with static AST fallback)",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "vmServiceUri": { "type": "string", "description": "Optional VM Service URI. If omitted, automatically discovered." },
+                                    "objectGroup": { "type": "string", "description": "Inspector object group name (default: 'flutter_explorer_group')" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "flutter_simulate_ui_action",
+                            "description": "Simulate user UI interactions (tap, enterText, scroll) on the live running Flutter app via VM Service Flutter Driver extension",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "action": { "type": "string", "enum": ["tap", "enterText", "scroll"], "description": "Type of UI action to simulate" },
+                                    "target": { "type": "string", "description": "Target widget key (#key, key:val, text:val, type:val) or visible text" },
+                                    "value": { "type": "string", "description": "Text value to enter (for enterText) or scroll offset in pixels (for scroll, default: '-300')" },
+                                    "vmUri": { "type": "string", "description": "Optional VM Service URI override" }
+                                },
+                                "required": ["action", "target"]
                             }
                         },
                         {
@@ -1719,16 +2208,16 @@ fn main() {
                                             let to_layer = *file_layer.get(&target_rel).unwrap_or(&"other");
                                             if from_layer == "domain" && (to_layer == "data" || to_layer == "presentation") {
                                                 violations.push(json!({
-                                                    "from": rel,
-                                                    "to": target_rel,
+                                                    "from": rel.clone(),
+                                                    "to": target_rel.clone(),
                                                     "fromLayer": from_layer,
                                                     "toLayer": to_layer,
                                                     "violation": format!("Domain layer file imports from {} layer", to_layer)
                                                 }));
                                             } else if from_layer == "data" && to_layer == "presentation" {
                                                 violations.push(json!({
-                                                    "from": rel,
-                                                    "to": target_rel,
+                                                    "from": rel.clone(),
+                                                    "to": target_rel.clone(),
                                                     "fromLayer": from_layer,
                                                     "toLayer": to_layer,
                                                     "violation": "Data layer file imports from presentation layer"
@@ -2258,6 +2747,1371 @@ fn main() {
                                 })
                             }
                             Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": format!("Failed to invoke build_runner: {}", e) }] }),
+                        }
+                    }
+                    "flutter_get_detailed_graph" => {
+                        let focus_file = args
+                            .get("focusFile")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.replace('\\', "/"));
+                        let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+                        let pkg_name = state.project_package_name();
+                        let files = state.find_dart_files();
+
+                        let mut nodes: Vec<Value> = Vec::new();
+                        let mut edges: Vec<Value> = Vec::new();
+                        let mut seen_nodes: HashSet<String> = HashSet::new();
+
+                        let mut add_node = |id: String, name: String, kind: &str, file: &str, line: usize| {
+                            if seen_nodes.insert(id.clone()) {
+                                nodes.push(json!({
+                                    "id": id,
+                                    "name": name,
+                                    "type": kind,
+                                    "file": file,
+                                    "line": line
+                                }));
+                            }
+                        };
+
+                        let mut add_edge = |src: String, dst: String, kind: &str| {
+                            edges.push(json!({
+                                "source": src.clone(),
+                                "target": dst.clone(),
+                                "from": src,
+                                "to": dst,
+                                "type": kind
+                            }));
+                        };
+
+                        for file in &files {
+                            let rel = state.relative_path_str(file);
+                            let file_id = format!("file:{}", rel);
+                            let base_name = file.file_name().and_then(|n| n.to_str()).unwrap_or(&rel).to_string();
+                            add_node(file_id.clone(), base_name, "file", &rel, 1);
+
+                            if let Some((_, ast)) = state.get_or_parse_ast(file) {
+                                for imp in &ast.imports {
+                                    if let Some(resolved) = state.resolve_dart_import(&rel, imp, pkg_name.as_deref()) {
+                                        let target_id = format!("file:{}", resolved);
+                                        let t_name = Path::new(&resolved)
+                                            .file_name()
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or(&resolved)
+                                            .to_string();
+                                        add_node(target_id.clone(), t_name, "file", &resolved, 1);
+                                        add_edge(file_id.clone(), target_id, "imports");
+                                    }
+                                }
+
+                                for cls in &ast.classes {
+                                    let cls_id = format!("class:{}", cls.name);
+                                    add_node(cls_id.clone(), cls.name.clone(), &cls.r#type, &rel, cls.line);
+                                    add_edge(file_id.clone(), cls_id.clone(), "contains");
+
+                                    if let Some(ref ext) = cls.extends_class {
+                                        add_edge(cls_id.clone(), format!("class:{}", ext), "extends");
+                                    }
+                                    for impl_name in &cls.implements {
+                                        add_edge(cls_id.clone(), format!("class:{}", impl_name), "implements");
+                                    }
+                                    for mx_name in &cls.mixins {
+                                        add_edge(cls_id.clone(), format!("class:{}", mx_name), "mixes_in");
+                                    }
+                                    for m in &cls.methods {
+                                        let m_id = format!("method:{}.{}", cls.name, m.name);
+                                        add_node(m_id.clone(), m.name.clone(), "method", &rel, m.line);
+                                        add_edge(cls_id.clone(), m_id, "contains");
+                                    }
+                                }
+
+                                for fn_item in &ast.functions {
+                                    let fn_id = format!("func:{}", fn_item.name);
+                                    add_node(fn_id.clone(), fn_item.name.clone(), "function", &rel, fn_item.line);
+                                    add_edge(file_id.clone(), fn_id, "contains");
+                                }
+
+                                for enm in &ast.enums {
+                                    let enm_id = format!("enum:{}", enm.name);
+                                    add_node(enm_id.clone(), enm.name.clone(), "enum", &rel, enm.line);
+                                    add_edge(file_id.clone(), enm_id, "contains");
+                                }
+
+                                for call in &ast.function_calls {
+                                    let caller_id = match (&call.caller_class, &call.caller_function) {
+                                        (Some(c), Some(f)) => format!("method:{}.{}", c, f),
+                                        (None, Some(f)) => format!("func:{}", f),
+                                        (Some(c), None) => format!("class:{}", c),
+                                        (None, None) => file_id.clone(),
+                                    };
+                                    let callee_id = if let Some(ref rx) = call.receiver {
+                                        if rx.chars().next().map_or(false, |c| c.is_ascii_uppercase()) {
+                                            format!("method:{}.{}", rx, call.name)
+                                        } else {
+                                            let mut chars = rx.chars();
+                                            let pascal = match chars.next() {
+                                                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                                                None => rx.clone(),
+                                            };
+                                            format!("method:{}.{}", pascal, call.name)
+                                        }
+                                    } else if let Some(ref c) = call.caller_class {
+                                        format!("method:{}.{}", c, call.name)
+                                    } else {
+                                        format!("func:{}", call.name)
+                                    };
+                                    if caller_id != callee_id {
+                                        add_edge(caller_id, callee_id, "calls");
+                                    }
+                                }
+                            }
+                        }
+
+                        if let Some(focus) = focus_file {
+                            let seed_file_id = if focus.starts_with("file:") {
+                                focus.clone()
+                            } else {
+                                format!("file:{}", focus)
+                            };
+                            let mut keep_ids: HashSet<String> = HashSet::new();
+                            keep_ids.insert(seed_file_id.clone());
+                            for n in &nodes {
+                                if n.get("file").and_then(|v| v.as_str()) == Some(focus.as_str()) {
+                                    if let Some(id) = n.get("id").and_then(|v| v.as_str()) {
+                                        keep_ids.insert(id.to_string());
+                                    }
+                                }
+                            }
+
+                            let mut frontier = keep_ids.clone();
+                            for _ in 0..depth {
+                                let mut next_f = HashSet::new();
+                                for e in &edges {
+                                    let s = e.get("source").and_then(|v| v.as_str()).unwrap_or("");
+                                    let t = e.get("target").and_then(|v| v.as_str()).unwrap_or("");
+                                    if frontier.contains(s) && keep_ids.insert(t.to_string()) {
+                                        next_f.insert(t.to_string());
+                                    }
+                                    if frontier.contains(t) && keep_ids.insert(s.to_string()) {
+                                        next_f.insert(s.to_string());
+                                    }
+                                }
+                                frontier = next_f;
+                            }
+
+                            nodes.retain(|n| {
+                                n.get("id")
+                                    .and_then(|v| v.as_str())
+                                    .map_or(false, |id| keep_ids.contains(id))
+                            });
+                            edges.retain(|e| {
+                                let s = e.get("source").and_then(|v| v.as_str()).unwrap_or("");
+                                let t = e.get("target").and_then(|v| v.as_str()).unwrap_or("");
+                                keep_ids.contains(s) && keep_ids.contains(t)
+                            });
+                        }
+
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&json!({
+                                    "nodesCount": nodes.len(),
+                                    "edgesCount": edges.len(),
+                                    "nodes": nodes,
+                                    "edges": edges
+                                })).unwrap_or_else(|_| "{}".to_string())
+                            }]
+                        })
+                    }
+                    "flutter_get_impact_analysis" => {
+                        let raw_path = args
+                            .get("relativePath")
+                            .or_else(|| args.get("filePath"))
+                            .or_else(|| args.get("path"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let max_depth = args.get("maxDepth").and_then(|v| v.as_u64()).unwrap_or(25) as usize;
+
+                        if raw_path.trim().is_empty() {
+                            json!({ "isError": true, "content": [{ "type": "text", "text": "Error: relativePath, filePath, or path is required." }] })
+                        } else {
+                            let target = state.resolve_path(raw_path);
+                            let target_rel = state.relative_path_str(&target);
+                            let pkg_name = state.project_package_name();
+                            let files = state.find_dart_files();
+
+                            let mut reverse_imports: HashMap<String, Vec<String>> = HashMap::new();
+                            let mut file_entrypoints: HashMap<String, Vec<String>> = HashMap::new();
+
+                            for file in &files {
+                                let rel = state.relative_path_str(file);
+                                if let Some((_, ast)) = state.get_or_parse_ast(file) {
+                                    for imp in &ast.imports {
+                                        if let Some(resolved) = state.resolve_dart_import(&rel, imp, pkg_name.as_deref()) {
+                                            reverse_imports.entry(resolved).or_default().push(rel.clone());
+                                        }
+                                    }
+                                    let mut eps = Vec::new();
+                                    for f in &ast.functions {
+                                        if f.name == "main" {
+                                            eps.push(format!("{}:main()", rel));
+                                        }
+                                    }
+                                    for cls in &ast.classes {
+                                        for m in &cls.methods {
+                                            if m.name == "build" || m.name == "initState" || m.name.starts_with("on") {
+                                                eps.push(format!("{}:{}.{}()", rel, cls.name, m.name));
+                                            }
+                                        }
+                                    }
+                                    if !eps.is_empty() {
+                                        file_entrypoints.insert(rel, eps);
+                                    }
+                                }
+                            }
+
+                            // BFS backwards from target_rel up to max_depth
+                            let mut visited: HashSet<String> = HashSet::new();
+                            visited.insert(target_rel.clone());
+                            let mut frontier: Vec<(String, Vec<String>)> = vec![(target_rel.clone(), vec![target_rel.clone()])];
+                            let mut impacted_files = Vec::new();
+                            let mut affected_flows = Vec::new();
+
+                            for depth_step in 1..=max_depth {
+                                if frontier.is_empty() {
+                                    break;
+                                }
+                                let mut next_frontier = Vec::new();
+                                for (curr_file, chain) in frontier {
+                                    if let Some(dependents) = reverse_imports.get(&curr_file) {
+                                        for dep in dependents {
+                                            if visited.insert(dep.clone()) {
+                                                let mut new_chain = chain.clone();
+                                                new_chain.push(dep.clone());
+                                                impacted_files.push(json!({
+                                                    "file": dep.clone(),
+                                                    "hopDistance": depth_step,
+                                                    "importChain": new_chain.clone()
+                                                }));
+                                                if let Some(eps) = file_entrypoints.get(dep) {
+                                                    for ep in eps {
+                                                        affected_flows.push(json!({
+                                                            "entryPoint": ep,
+                                                            "hopDistance": depth_step,
+                                                            "chain": new_chain.clone()
+                                                        }));
+                                                    }
+                                                }
+                                                next_frontier.push((dep.clone(), new_chain));
+                                            }
+                                        }
+                                    }
+                                }
+                                frontier = next_frontier;
+                            }
+
+                            let risk = if impacted_files.len() > 15 {
+                                "critical"
+                            } else if impacted_files.len() > 5 {
+                                "high"
+                            } else if !impacted_files.is_empty() {
+                                "medium"
+                            } else {
+                                "low"
+                            };
+
+                            json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": serde_json::to_string_pretty(&json!({
+                                        "targetFile": target_rel,
+                                        "riskLevel": risk,
+                                        "impactedFilesCount": impacted_files.len(),
+                                        "affectedFlowsCount": affected_flows.len(),
+                                        "impactedFiles": impacted_files,
+                                        "affectedFlows": affected_flows
+                                    })).unwrap_or_else(|_| "{}".to_string())
+                                }]
+                            })
+                        }
+                    }
+                    "flutter_get_git_blast_radius" => {
+                        let max_depth = args.get("maxDepth").and_then(|v| v.as_u64()).unwrap_or(25) as usize;
+                        let git_out = Command::new("git")
+                            .args(["status", "--porcelain"])
+                            .current_dir(&state.project_root)
+                            .output();
+
+                        let mut modified_files = Vec::new();
+                        if let Ok(out) = git_out {
+                            let text = String::from_utf8_lossy(&out.stdout);
+                            for line in text.lines() {
+                                if line.len() > 3 {
+                                    let path_part = line[3..].trim().replace('\\', "/");
+                                    let clean = path_part.split(" -> ").last().unwrap_or(&path_part).to_string();
+                                    if clean.ends_with(".dart") {
+                                        modified_files.push(clean);
+                                    }
+                                }
+                            }
+                        }
+
+                        let pkg_name = state.project_package_name();
+                        let files = state.find_dart_files();
+                        let mut reverse_imports: HashMap<String, Vec<String>> = HashMap::new();
+                        for file in &files {
+                            let rel = state.relative_path_str(file);
+                            if let Some((_, ast)) = state.get_or_parse_ast(file) {
+                                for imp in &ast.imports {
+                                    if let Some(resolved) = state.resolve_dart_import(&rel, imp, pkg_name.as_deref()) {
+                                        reverse_imports.entry(resolved).or_default().push(rel.clone());
+                                    }
+                                }
+                            }
+                        }
+
+                        let mut visited: HashSet<String> = modified_files.iter().cloned().collect();
+                        let mut frontier: Vec<String> = modified_files.clone();
+                        let mut transitively_impacted = Vec::new();
+
+                        for _ in 1..=max_depth {
+                            if frontier.is_empty() {
+                                break;
+                            }
+                            let mut next_f = Vec::new();
+                            for curr in frontier {
+                                if let Some(deps) = reverse_imports.get(&curr) {
+                                    for d in deps {
+                                        if visited.insert(d.clone()) {
+                                            transitively_impacted.push(d.clone());
+                                            next_f.push(d.clone());
+                                        }
+                                    }
+                                }
+                            }
+                            frontier = next_f;
+                        }
+
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&json!({
+                                    "summary": format!("{} modified Dart file(s) affect {} downstream file(s).", modified_files.len(), transitively_impacted.len()),
+                                    "modifiedDartFiles": modified_files,
+                                    "transitivelyImpactedFilesCount": transitively_impacted.len(),
+                                    "transitivelyImpactedFiles": transitively_impacted
+                                })).unwrap_or_else(|_| "{}".to_string())
+                            }]
+                        })
+                    }
+                    "flutter_analyze_logic_flow" => {
+                        let fn_name = args.get("functionName").and_then(|v| v.as_str()).unwrap_or("");
+                        let parent_cls = args.get("parentClass").and_then(|v| v.as_str());
+                        let file_opt = args
+                            .get("filePath")
+                            .or_else(|| args.get("relativePath"))
+                            .or_else(|| args.get("path"))
+                            .and_then(|v| v.as_str());
+
+                        let files = if let Some(fp) = file_opt {
+                            vec![state.resolve_path(fp)]
+                        } else {
+                            state.find_dart_files()
+                        };
+
+                        let mut found_analysis: Option<Value> = None;
+
+                        for file in files {
+                            let rel = state.relative_path_str(&file);
+                            if let Some((code, ast)) = state.get_or_parse_ast(&file) {
+                                let lines: Vec<&str> = code.lines().collect();
+                                let mut target_range: Option<(usize, usize, Option<String>)> = None;
+
+                                for cls in &ast.classes {
+                                    if parent_cls.is_some() && parent_cls != Some(cls.name.as_str()) {
+                                        continue;
+                                    }
+                                    for m in &cls.methods {
+                                        if m.name == fn_name {
+                                            let end = m.line_end.unwrap_or(m.line + 35).min(lines.len());
+                                            target_range = Some((m.line, end, Some(cls.name.clone())));
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if target_range.is_none() && parent_cls.is_none() {
+                                    for f in &ast.functions {
+                                        if f.name == fn_name {
+                                            let end = f.line_end.unwrap_or(f.line + 35).min(lines.len());
+                                            target_range = Some((f.line, end, None));
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if let Some((start_l, end_l, cls_owner)) = target_range {
+                                    let mut steps = Vec::new();
+                                    let mut step_num = 1usize;
+                                    let mut complexity = 1usize;
+                                    let mut async_awaits = 0usize;
+
+                                    for ln_idx in (start_l.saturating_sub(1))..end_l {
+                                        let raw_l = lines[ln_idx].trim();
+                                        if raw_l.is_empty() || raw_l.starts_with("//") {
+                                            continue;
+                                        }
+                                        let ln_no = ln_idx + 1;
+                                        if raw_l.contains("await ") {
+                                            async_awaits += 1;
+                                        }
+
+                                        let step_kind = if raw_l.starts_with("if ")
+                                            || raw_l.starts_with("if(")
+                                            || raw_l.starts_with("else if")
+                                            || raw_l.starts_with("switch")
+                                        {
+                                            complexity += 1;
+                                            if raw_l.contains("== null") || raw_l.contains(".isEmpty") || raw_l.contains("!mounted") {
+                                                Some(("validation", "Guard / validation check"))
+                                            } else {
+                                                Some(("conditional", "Conditional branch"))
+                                            }
+                                        } else if raw_l.starts_with("for ") || raw_l.starts_with("for(") || raw_l.starts_with("while ") {
+                                            complexity += 1;
+                                            Some(("loop", "Iterative loop"))
+                                        } else if raw_l.contains("setState")
+                                            || raw_l.contains("emit(")
+                                            || raw_l.contains("state =")
+                                            || raw_l.contains("notifyListeners()")
+                                        {
+                                            Some(("state_update", "Update reactive UI/controller state"))
+                                        } else if raw_l.contains("http.")
+                                            || raw_l.contains("dio.")
+                                            || raw_l.contains("Firebase")
+                                            || raw_l.contains("Supabase")
+                                        {
+                                            Some(("api_call", "External API / network request"))
+                                        } else if raw_l.contains("Hive")
+                                            || raw_l.contains("SharedPreferences")
+                                            || raw_l.contains("sqflite")
+                                        {
+                                            Some(("data_fetch", "Local storage persistence access"))
+                                        } else if raw_l.contains("Navigator.")
+                                            || raw_l.contains("context.go(")
+                                            || raw_l.contains("context.push(")
+                                            || raw_l.contains("showDialog")
+                                            || raw_l.contains("showSnackBar")
+                                        {
+                                            Some(("notification", "UI navigation / dialog / feedback"))
+                                        } else if raw_l.starts_with("try")
+                                            || raw_l.starts_with("catch")
+                                            || raw_l.contains(" catch ")
+                                            || raw_l.starts_with("throw ")
+                                        {
+                                            if raw_l.contains("catch") {
+                                                complexity += 1;
+                                            }
+                                            Some(("error_handling", "Exception / error handling block"))
+                                        } else if raw_l.starts_with("return ") || raw_l == "return;" {
+                                            Some(("return", "Return result from function"))
+                                        } else {
+                                            None
+                                        };
+
+                                        if let Some((kind, desc)) = step_kind {
+                                            steps.push(json!({
+                                                "step": step_num,
+                                                "type": kind,
+                                                "description": desc,
+                                                "line": ln_no,
+                                                "code": raw_l.chars().take(120).collect::<String>()
+                                            }));
+                                            step_num += 1;
+                                        }
+                                    }
+
+                                    found_analysis = Some(json!({
+                                        "file": rel,
+                                        "functionName": fn_name,
+                                        "parentClass": cls_owner,
+                                        "startLine": start_l,
+                                        "endLine": end_l,
+                                        "cyclomaticComplexity": complexity,
+                                        "asyncAwaitCount": async_awaits,
+                                        "stepsCount": steps.len(),
+                                        "steps": steps
+                                    }));
+                                    break;
+                                }
+                            }
+                        }
+
+                        match found_analysis {
+                            Some(res) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "{}".to_string()) }] }),
+                            None => json!({ "isError": true, "content": [{ "type": "text", "text": format!("Function or method '{}' not found.", fn_name) }] }),
+                        }
+                    }
+                    "flutter_validate_architecture_rules" => {
+                        let files = state.find_dart_files();
+                        let pkg_name = state.project_package_name();
+
+                        let default_rules = vec![
+                            (
+                                "Domain Purity".to_string(),
+                                "domain".to_string(),
+                                vec!["data".to_string(), "presentation".to_string()],
+                                "Domain layer must not depend on Data or Presentation layers.".to_string(),
+                            ),
+                            (
+                                "Data Independence".to_string(),
+                                "data".to_string(),
+                                vec!["presentation".to_string()],
+                                "Data layer must not depend on Presentation/UI layer.".to_string(),
+                            ),
+                            (
+                                "Core Isolation".to_string(),
+                                "core".to_string(),
+                                vec!["presentation".to_string(), "data".to_string()],
+                                "Core utilities must remain independent of feature Presentation/Data layers.".to_string(),
+                            ),
+                        ];
+
+                        let rules: Vec<(String, String, Vec<String>, String)> = if let Some(custom) = args.get("customRules").and_then(|v| v.as_array()) {
+                            let mut parsed_rules = Vec::new();
+                            for r in custom {
+                                let name = r.get("name").and_then(|v| v.as_str()).unwrap_or("Custom Rule").to_string();
+                                let from_l = r.get("fromLayer").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                                let forbidden: Vec<String> = r
+                                    .get("forbiddenLayers")
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| {
+                                        arr.iter()
+                                            .filter_map(|x| x.as_str().map(|s| s.to_lowercase()))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                let desc = r.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                if !from_l.is_empty() && !forbidden.is_empty() {
+                                    parsed_rules.push((name, from_l, forbidden, desc));
+                                }
+                            }
+                            if parsed_rules.is_empty() { default_rules } else { parsed_rules }
+                        } else {
+                            default_rules
+                        };
+
+                        let mut violations = Vec::new();
+
+                        for file in &files {
+                            let rel = state.relative_path_str(file);
+                            let from_layer = classify_arch_layer(&rel);
+                            if let Some((_, ast)) = state.get_or_parse_ast(file) {
+                                for imp_info in &ast.import_details {
+                                    if let Some(target_rel) = state.resolve_dart_import(&rel, &imp_info.path, pkg_name.as_deref()) {
+                                        let to_layer = classify_arch_layer(&target_rel);
+                                        for (r_name, r_from, r_forbidden, r_desc) in &rules {
+                                            let matches_from = from_layer == r_from || rel.to_lowercase().contains(r_from);
+                                            let matches_to = r_forbidden
+                                                .iter()
+                                                .any(|forb| to_layer == forb || target_rel.to_lowercase().contains(forb));
+                                            if matches_from && matches_to {
+                                                violations.push(json!({
+                                                    "ruleName": r_name,
+                                                    "fromFile": rel.clone(),
+                                                    "toFile": target_rel.clone(),
+                                                    "line": imp_info.line,
+                                                    "description": r_desc
+                                                }));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&json!({
+                                    "passed": violations.is_empty(),
+                                    "rulesChecked": rules.len(),
+                                    "violationsCount": violations.len(),
+                                    "violations": violations
+                                })).unwrap_or_else(|_| "{}".to_string())
+                            }]
+                        })
+                    }
+                    "flutter_detect_duplicate_widgets" => {
+                        let min_nodes = args.get("minNodeCount").and_then(|v| v.as_u64()).unwrap_or(3).max(2) as usize;
+                        let files = state.find_dart_files();
+
+                        let mut sig_clusters: BTreeMap<String, (usize, Vec<Value>)> = BTreeMap::new();
+                        let mut analyzed_subtrees = 0usize;
+
+                        for file in files {
+                            let rel = state.relative_path_str(&file);
+                            if let Some((_, ast)) = state.get_or_parse_ast(&file) {
+                                collect_widget_subtrees(
+                                    &ast.widgets,
+                                    &rel,
+                                    min_nodes,
+                                    &mut sig_clusters,
+                                    &mut analyzed_subtrees,
+                                );
+                            }
+                        }
+
+                        let mut clusters_out = Vec::new();
+                        for (sig, (node_count, occurrences)) in sig_clusters {
+                            if occurrences.len() >= 2 {
+                                let root_name = sig.split('(').next().unwrap_or("Custom");
+                                let suggested_name = format!("Reusable{}Widget", root_name);
+                                let occ_len = occurrences.len();
+                                let proposal_msg = format!("Extract this {}-node '{}' subtree (repeated {} times) into a dedicated StatelessWidget '{}'.", node_count, root_name, occ_len, suggested_name);
+                                clusters_out.push(json!({
+                                    "nodeCount": node_count,
+                                    "structureSignature": sig,
+                                    "occurrencesCount": occ_len,
+                                    "occurrences": occurrences,
+                                    "suggestedName": suggested_name,
+                                    "proposal": proposal_msg
+                                }));
+                            }
+                        }
+
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&json!({
+                                    "analyzedSubtreesCount": analyzed_subtrees,
+                                    "clustersCount": clusters_out.len(),
+                                    "clusters": clusters_out
+                                })).unwrap_or_else(|_| "{}".to_string())
+                            }]
+                        })
+                    }
+                    "flutter_read_fragment" => {
+                        let target_name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                        let elem_type = args.get("elementType").and_then(|v| v.as_str());
+                        let parent_cls = args.get("parentClass").and_then(|v| v.as_str());
+                        let include_ctx = args.get("includeContext").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let ctx_lines = args.get("contextLines").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
+                        let file_opt = args
+                            .get("filePath")
+                            .or_else(|| args.get("relativePath"))
+                            .or_else(|| args.get("path"))
+                            .and_then(|v| v.as_str());
+
+                        let files = if let Some(fp) = file_opt {
+                            vec![state.resolve_path(fp)]
+                        } else {
+                            state.find_dart_files()
+                        };
+
+                        let mut fragment: Option<Value> = None;
+
+                        for file in files {
+                            let rel = state.relative_path_str(&file);
+                            if let Some((code, ast)) = state.get_or_parse_ast(&file) {
+                                let lines: Vec<&str> = code.lines().collect();
+                                let mut matched_span: Option<(usize, usize, &str, Option<String>)> = None;
+
+                                if elem_type.is_none() || elem_type == Some("class") {
+                                    for cls in &ast.classes {
+                                        if cls.name == target_name {
+                                            let end = cls.line_end.unwrap_or(cls.line + 40).min(lines.len());
+                                            matched_span = Some((cls.line, end, "class", None));
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if matched_span.is_none() && (elem_type.is_none() || elem_type == Some("method")) {
+                                    for cls in &ast.classes {
+                                        if parent_cls.is_some() && parent_cls != Some(cls.name.as_str()) {
+                                            continue;
+                                        }
+                                        for m in &cls.methods {
+                                            if m.name == target_name {
+                                                let end = m.line_end.unwrap_or(m.line + 25).min(lines.len());
+                                                matched_span = Some((m.line, end, "method", Some(cls.name.clone())));
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if matched_span.is_none() && (elem_type.is_none() || elem_type == Some("function")) {
+                                    for f in &ast.functions {
+                                        if f.name == target_name {
+                                            let end = f.line_end.unwrap_or(f.line + 25).min(lines.len());
+                                            matched_span = Some((f.line, end, "function", None));
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if matched_span.is_none() && (elem_type.is_none() || elem_type == Some("enum")) {
+                                    for enm in &ast.enums {
+                                        if enm.name == target_name {
+                                            let end = enm.line_end.unwrap_or(enm.line + 20).min(lines.len());
+                                            matched_span = Some((enm.line, end, "enum", None));
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if let Some((s_line, e_line, kind, owner)) = matched_span {
+                                    // Include preceding doc comments (`///`) or `@` annotations
+                                    let mut actual_start = s_line.saturating_sub(1);
+                                    while actual_start > 0 {
+                                        let prev = lines[actual_start - 1].trim();
+                                        if prev.starts_with("///") || prev.starts_with('@') {
+                                            actual_start -= 1;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    if include_ctx {
+                                        actual_start = actual_start.saturating_sub(ctx_lines);
+                                    }
+                                    let actual_end = if include_ctx {
+                                        (e_line + ctx_lines).min(lines.len())
+                                    } else {
+                                        e_line.min(lines.len())
+                                    };
+
+                                    let mut numbered = String::new();
+                                    for idx in actual_start..actual_end {
+                                        numbered.push_str(&format!("{:4} | {}\n", idx + 1, lines[idx]));
+                                    }
+
+                                    fragment = Some(json!({
+                                        "file": rel,
+                                        "name": target_name,
+                                        "elementType": kind,
+                                        "parentClass": owner,
+                                        "startLine": actual_start + 1,
+                                        "endLine": actual_end,
+                                        "code": numbered
+                                    }));
+                                    break;
+                                }
+                            }
+                        }
+
+                        match fragment {
+                            Some(f) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&f).unwrap_or_else(|_| "{}".to_string()) }] }),
+                            None => json!({ "isError": true, "content": [{ "type": "text", "text": format!("Element '{}' not found.", target_name) }] }),
+                        }
+                    }
+                    "flutter_get_hints" => {
+                        let last_tool = args.get("lastToolUsed").and_then(|v| v.as_str()).unwrap_or("");
+                        let mut hints = Vec::new();
+
+                        match last_tool {
+                            "flutter_search" => {
+                                hints.push(json!({ "tool": "flutter_read_fragment", "reason": "Read the exact source code and doc comments of the matched symbol" }));
+                                hints.push(json!({ "tool": "flutter_find_references", "reason": "Locate all usages of this symbol across the project" }));
+                                hints.push(json!({ "tool": "flutter_get_detailed_graph", "reason": "Inspect incoming and outgoing relationships for this file" }));
+                            }
+                            "flutter_get_code_block" | "flutter_read_fragment" => {
+                                hints.push(json!({ "tool": "flutter_analyze_logic_flow", "reason": "Analyze Cyclomatic Complexity and execution steps inside this function" }));
+                                hints.push(json!({ "tool": "flutter_get_impact_analysis", "reason": "Calculate the blast radius before editing this file" }));
+                            }
+                            "flutter_edit_file" | "flutter_replace_lines" | "flutter_write_file" => {
+                                hints.push(json!({ "tool": "flutter_run_analyze", "reason": "Verify that the edit introduced zero Dart analyzer errors" }));
+                                hints.push(json!({ "tool": "flutter_hot_reload", "reason": "Apply the code changes immediately to the running Flutter app" }));
+                            }
+                            "flutter_get_missing_translations" => {
+                                hints.push(json!({ "tool": "flutter_auto_translate_missing", "reason": "Batch apply translations across all .arb files" }));
+                                hints.push(json!({ "tool": "flutter_validate_icu_translations", "reason": "Verify placeholder and plural syntax consistency" }));
+                            }
+                            _ => {
+                                hints.push(json!({ "tool": "flutter_get_stats", "reason": "Get a high-level overview of the project's classes, widgets, and cache status" }));
+                                hints.push(json!({ "tool": "flutter_get_architectural_layers", "reason": "Audit Clean Architecture boundaries and Lakos coupling" }));
+                            }
+                        }
+
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&json!({
+                                    "lastToolUsed": last_tool,
+                                    "suggestedNextSteps": hints
+                                })).unwrap_or_else(|_| "{}".to_string())
+                            }]
+                        })
+                    }
+                    "flutter_search_packages" => {
+                        let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+                        let pkg_filter = args.get("packageName").and_then(|v| v.as_str());
+                        let case_sensitive = args.get("caseSensitive").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let max_results = args.get("maxResults").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+
+                        let entries = load_package_config(&state.project_root);
+                        let re_opt = if case_sensitive {
+                            Regex::new(query).ok()
+                        } else {
+                            Regex::new(&format!("(?i){}", query)).ok()
+                        };
+                        let q_lower = query.to_lowercase();
+
+                        let mut results = Vec::new();
+                        let mut searched_pkgs = 0usize;
+
+                        for pkg in entries {
+                            if let Some(pf) = pkg_filter {
+                                if pkg.name != pf {
+                                    continue;
+                                }
+                            }
+                            let lib_dir = pkg.actual_dir.join(&pkg.package_uri);
+                            if !lib_dir.exists() {
+                                continue;
+                            }
+                            searched_pkgs += 1;
+                            let mut dart_files = Vec::new();
+                            McpServerState::walk_dir(&lib_dir, &mut dart_files, Some("dart"));
+
+                            for df in dart_files {
+                                if results.len() >= max_results {
+                                    break;
+                                }
+                                if let Ok(content) = fs::read_to_string(&df) {
+                                    let rel_in_pkg = df
+                                        .strip_prefix(&lib_dir)
+                                        .unwrap_or(&df)
+                                        .to_string_lossy()
+                                        .replace('\\', "/");
+                                    for (idx, line) in content.lines().enumerate() {
+                                        let matched = match &re_opt {
+                                            Some(re) => re.is_match(line),
+                                            None => {
+                                                if case_sensitive {
+                                                    line.contains(query)
+                                                } else {
+                                                    line.to_lowercase().contains(&q_lower)
+                                                }
+                                            }
+                                        };
+                                        if matched {
+                                            results.push(json!({
+                                                "packageName": pkg.name,
+                                                "file": format!("package:{}/{}", pkg.name, rel_in_pkg),
+                                                "line": idx + 1,
+                                                "content": line.trim().chars().take(200).collect::<String>()
+                                            }));
+                                            if results.len() >= max_results {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if results.len() >= max_results {
+                                break;
+                            }
+                        }
+
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&json!({
+                                    "searchedPackages": searched_pkgs,
+                                    "resultsCount": results.len(),
+                                    "results": results
+                                })).unwrap_or_else(|_| "{}".to_string())
+                            }]
+                        })
+                    }
+                    "flutter_read_package_source" => {
+                        let uri = args.get("uri").and_then(|v| v.as_str()).unwrap_or("").trim();
+                        let start_line = args.get("startLine").and_then(|v| v.as_u64()).unwrap_or(1).max(1) as usize;
+                        let line_count = args.get("lineCount").and_then(|v| v.as_u64()).unwrap_or(100).max(1) as usize;
+
+                        if let Some(rest) = uri.strip_prefix("package:") {
+                            if let Some((pkg_name, sub_path)) = rest.split_once('/') {
+                                let entries = load_package_config(&state.project_root);
+                                if let Some(pkg) = entries.into_iter().find(|e| e.name == pkg_name) {
+                                    let lib_dir = pkg.actual_dir.join(&pkg.package_uri);
+                                    let target_file = lib_dir.join(sub_path);
+                                    match fs::read_to_string(&target_file) {
+                                        Ok(text) => {
+                                            let lines: Vec<&str> = text.lines().collect();
+                                            let total = lines.len();
+                                            let end_line = (start_line + line_count - 1).min(total);
+                                            let slice = if start_line <= end_line {
+                                                lines[(start_line - 1)..end_line].join("\n")
+                                            } else {
+                                                String::new()
+                                            };
+                                            json!({
+                                                "content": [{
+                                                    "type": "text",
+                                                    "text": serde_json::to_string_pretty(&json!({
+                                                        "success": true,
+                                                        "uri": uri,
+                                                        "filePath": target_file.display().to_string(),
+                                                        "totalLines": total,
+                                                        "startLine": start_line,
+                                                        "endLine": end_line,
+                                                        "content": slice
+                                                    })).unwrap_or_else(|_| "{}".to_string())
+                                                }]
+                                            })
+                                        }
+                                        Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": format!("File not found for '{}': {}", uri, e) }] }),
+                                    }
+                                } else {
+                                    json!({ "isError": true, "content": [{ "type": "text", "text": format!("Package '{}' not found in .dart_tool/package_config.json", pkg_name) }] })
+                                }
+                            } else {
+                                json!({ "isError": true, "content": [{ "type": "text", "text": "Invalid package URI format. Expected 'package:<name>/<path>'." }] })
+                            }
+                        } else {
+                            json!({ "isError": true, "content": [{ "type": "text", "text": "URI must start with 'package:'." }] })
+                        }
+                    }
+                    "flutter_pub_dev_search" => {
+                        let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+                        let page = args.get("page").and_then(|v| v.as_u64()).unwrap_or(1);
+                        let url = format!(
+                            "https://pub.dev/api/search?q={}&page={}",
+                            query.replace(' ', "%20"),
+                            page
+                        );
+
+                        let curl_out = Command::new("curl")
+                            .args(["-s", "--max-time", "5", &url])
+                            .output();
+
+                        let mut packages = Vec::new();
+                        if let Ok(out) = curl_out {
+                            if out.status.success() {
+                                if let Ok(val) = serde_json::from_slice::<Value>(&out.stdout) {
+                                    if let Some(arr) = val.get("packages").and_then(|v| v.as_array()) {
+                                        for item in arr.iter().take(15) {
+                                            if let Some(p_name) = item.get("package").and_then(|v| v.as_str()) {
+                                                packages.push(json!({
+                                                    "name": p_name,
+                                                    "url": format!("https://pub.dev/packages/{}", p_name)
+                                                }));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Offline fallback: search installed packages in package_config.json
+                        if packages.is_empty() {
+                            let q_lower = query.to_lowercase();
+                            for entry in load_package_config(&state.project_root) {
+                                if entry.name.to_lowercase().contains(&q_lower) {
+                                    packages.push(json!({
+                                        "name": entry.name,
+                                        "source": "local_pub_cache",
+                                        "url": format!("https://pub.dev/packages/{}", entry.name)
+                                    }));
+                                }
+                            }
+                        }
+
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&json!({
+                                    "query": query,
+                                    "packagesCount": packages.len(),
+                                    "packages": packages
+                                })).unwrap_or_else(|_| "{}".to_string())
+                            }]
+                        })
+                    }
+                    "flutter_get_pub_package_info" => {
+                        let pkg_name = args.get("packageName").and_then(|v| v.as_str()).unwrap_or("");
+                        let url = format!("https://pub.dev/api/packages/{}", pkg_name);
+
+                        let mut result_val: Option<Value> = None;
+                        if let Ok(out) = Command::new("curl").args(["-s", "--max-time", "5", &url]).output() {
+                            if out.status.success() {
+                                if let Ok(info) = serde_json::from_slice::<Value>(&out.stdout) {
+                                    if info.get("name").is_some() {
+                                        let latest = info.get("latest").cloned().unwrap_or(json!({}));
+                                        let pubspec = latest.get("pubspec").cloned().unwrap_or(json!({}));
+                                        result_val = Some(json!({
+                                            "name": info.get("name"),
+                                            "latestVersion": latest.get("version"),
+                                            "published": latest.get("published"),
+                                            "description": pubspec.get("description"),
+                                            "homepage": pubspec.get("homepage"),
+                                            "repository": pubspec.get("repository")
+                                        }));
+                                    }
+                                }
+                            }
+                        }
+
+                        if result_val.is_none() {
+                            if let Some(local_pkg) = load_package_config(&state.project_root)
+                                .into_iter()
+                                .find(|e| e.name == pkg_name)
+                            {
+                                let pubspec_txt = fs::read_to_string(local_pkg.actual_dir.join("pubspec.yaml")).unwrap_or_default();
+                                result_val = Some(json!({
+                                    "name": local_pkg.name,
+                                    "source": "local_pub_cache",
+                                    "localPath": local_pkg.actual_dir.display().to_string(),
+                                    "pubspecPreview": pubspec_txt.lines().take(25).collect::<Vec<_>>().join("\n")
+                                }));
+                            }
+                        }
+
+                        match result_val {
+                            Some(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".to_string()) }] }),
+                            None => json!({ "isError": true, "content": [{ "type": "text", "text": format!("Package '{}' not found on pub.dev or local .pub-cache.", pkg_name) }] }),
+                        }
+                    }
+                    "flutter_run_intl_generate" => {
+                        let bin = if cfg!(windows) { "flutter.bat" } else { "flutter" };
+                        let out_res = Command::new(bin)
+                            .arg("gen-l10n")
+                            .current_dir(&state.project_root)
+                            .output();
+
+                        let arb_files = state.find_arb_files();
+                        match out_res {
+                            Ok(out) if out.status.success() => {
+                                json!({
+                                    "content": [{
+                                        "type": "text",
+                                        "text": format!("Successfully ran `flutter gen-l10n` across {} ARB file(s).", arb_files.len())
+                                    }]
+                                })
+                            }
+                            _ => {
+                                json!({
+                                    "content": [{
+                                        "type": "text",
+                                        "text": format!("Scanned {} ARB file(s) in project.", arb_files.len())
+                                    }]
+                                })
+                            }
+                        }
+                    }
+                    "flutter_validate_icu_translations" => {
+                        let arb_files = state.find_arb_files();
+                        let mut issues = Vec::new();
+                        let mut base_placeholders: HashMap<String, BTreeMap<String, ()>> = HashMap::new();
+
+                        for (file_idx, file) in arb_files.iter().enumerate() {
+                            let rel = state.relative_path_str(file);
+                            if let Ok(content) = fs::read_to_string(file) {
+                                match serde_json::from_str::<Map<String, Value>>(&content) {
+                                    Ok(map) => {
+                                        for (k, v) in map {
+                                            if k.starts_with('@') {
+                                                continue;
+                                            }
+                                            if let Some(text) = v.as_str() {
+                                                let open_cnt = text.chars().filter(|&c| c == '{').count();
+                                                let close_cnt = text.chars().filter(|&c| c == '}').count();
+                                                if open_cnt != close_cnt {
+                                                    issues.push(json!({
+                                                        "file": rel.clone(),
+                                                        "key": k.clone(),
+                                                        "type": "unbalanced_braces",
+                                                        "message": format!("Unbalanced ICU braces: {} '{{' vs {} '}}'", open_cnt, close_cnt)
+                                                    }));
+                                                }
+                                                if (text.contains(", plural,") || text.contains(",plural,") || text.contains(", select,"))
+                                                    && !text.contains("other{")
+                                                    && !text.contains("other {")
+                                                {
+                                                    issues.push(json!({
+                                                        "file": rel.clone(),
+                                                        "key": k.clone(),
+                                                        "type": "missing_other_clause",
+                                                        "message": "ICU plural/select message is missing the mandatory 'other' clause."
+                                                    }));
+                                                }
+
+                                                let phs = extract_icu_placeholders(text);
+                                                if file_idx == 0 {
+                                                    base_placeholders.insert(k.clone(), phs);
+                                                } else if let Some(expected) = base_placeholders.get(&k) {
+                                                    if &phs != expected {
+                                                        issues.push(json!({
+                                                            "file": rel.clone(),
+                                                            "key": k.clone(),
+                                                            "type": "placeholder_mismatch",
+                                                            "expectedPlaceholders": expected.keys().collect::<Vec<_>>(),
+                                                            "actualPlaceholders": phs.keys().collect::<Vec<_>>()
+                                                        }));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        issues.push(json!({
+                                            "file": rel,
+                                            "type": "invalid_json",
+                                            "message": e.to_string()
+                                        }));
+                                    }
+                                }
+                            }
+                        }
+
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&json!({
+                                    "valid": issues.is_empty(),
+                                    "arbFilesChecked": arb_files.len(),
+                                    "issuesCount": issues.len(),
+                                    "issues": issues
+                                })).unwrap_or_else(|_| "{}".to_string())
+                            }]
+                        })
+                    }
+                    "flutter_auto_translate_missing" => {
+                        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("generate_payload");
+                        let source_locale = args.get("sourceLocale").and_then(|v| v.as_str()).unwrap_or("en");
+                        let arb_files = state.find_arb_files();
+
+                        if action == "batch_apply" {
+                            let items = args.get("translationsToApply").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                            let mut updated_files_count = 0usize;
+
+                            for file in &arb_files {
+                                let rel = state.relative_path_str(file);
+                                if let Ok(content) = fs::read_to_string(file) {
+                                    if let Ok(mut map) = serde_json::from_str::<Map<String, Value>>(&content) {
+                                        let mut changed = false;
+                                        for item in &items {
+                                            let key = item.get("key").and_then(|v| v.as_str()).unwrap_or("");
+                                            if key.is_empty() {
+                                                continue;
+                                            }
+                                            if let Some(trans_map) = item.get("translations").and_then(|v| v.as_object()) {
+                                                for (loc, val) in trans_map {
+                                                    if rel.contains(loc) {
+                                                        if let Some(s) = val.as_str() {
+                                                            map.insert(key.to_string(), Value::String(s.to_string()));
+                                                            changed = true;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if changed {
+                                            if let Ok(serialized) = serde_json::to_string_pretty(&map) {
+                                                if atomic_write_file(file, &serialized).is_ok() {
+                                                    updated_files_count += 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": serde_json::to_string_pretty(&json!({
+                                        "action": "batch_apply",
+                                        "updatedArbFiles": updated_files_count
+                                    })).unwrap_or_else(|_| "{}".to_string())
+                                }]
+                            })
+                        } else {
+                            let mut base_map: Map<String, Value> = Map::new();
+                            let mut locale_maps: Vec<(String, Map<String, Value>)> = Vec::new();
+
+                            for file in &arb_files {
+                                let rel = state.relative_path_str(file);
+                                if let Ok(content) = fs::read_to_string(file) {
+                                    if let Ok(map) = serde_json::from_str::<Map<String, Value>>(&content) {
+                                        if rel.contains(source_locale) || base_map.is_empty() {
+                                            base_map = map.clone();
+                                        }
+                                        locale_maps.push((rel, map));
+                                    }
+                                }
+                            }
+
+                            let mut payload = Vec::new();
+                            for (k, v) in &base_map {
+                                if k.starts_with('@') {
+                                    continue;
+                                }
+                                let mut missing_in = Vec::new();
+                                for (rel, lmap) in &locale_maps {
+                                    if !lmap.contains_key(k) {
+                                        missing_in.push(rel.clone());
+                                    }
+                                }
+                                if !missing_in.is_empty() {
+                                    payload.push(json!({
+                                        "key": k,
+                                        "sourceValue": v,
+                                        "missingInFiles": missing_in
+                                    }));
+                                }
+                            }
+
+                            json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": serde_json::to_string_pretty(&json!({
+                                        "action": "generate_payload",
+                                        "sourceLocale": source_locale,
+                                        "missingKeysCount": payload.len(),
+                                        "payload": payload
+                                    })).unwrap_or_else(|_| "{}".to_string())
+                                }]
+                            })
+                        }
+                    }
+                    "flutter_hot_reload" => {
+                        let override_uri = args.get("vmServiceUri").and_then(|v| v.as_str());
+                        match discover_vm_service_uri(&state.project_root, override_uri) {
+                            Some(uri) => match vm_service_find_main_isolate(&uri) {
+                                Ok(iso_id) => match vm_service_http_call(&uri, "ext.flutter.reassemble", &[("isolateId", &iso_id)]) {
+                                    Ok(resp) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "success": true, "uri": uri, "isolateId": iso_id, "response": resp })).unwrap() }] }),
+                                    Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": format!("Hot Reload failed: {}", e) }] }),
+                                },
+                                Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": format!("Could not find running isolate at '{}': {}", uri, e) }] }),
+                            },
+                            None => json!({ "isError": true, "content": [{ "type": "text", "text": "No running Dart VM Service found. Start your app with `flutter run` or pass `vmServiceUri`." }] }),
+                        }
+                    }
+                    "flutter_hot_restart" => {
+                        let override_uri = args.get("vmServiceUri").and_then(|v| v.as_str());
+                        match discover_vm_service_uri(&state.project_root, override_uri) {
+                            Some(uri) => match vm_service_find_main_isolate(&uri) {
+                                Ok(iso_id) => {
+                                    let res = vm_service_http_call(&uri, "hotRestart", &[("isolateId", &iso_id)])
+                                        .or_else(|_| vm_service_http_call(&uri, "ext.flutter.reassemble", &[("isolateId", &iso_id)]));
+                                    match res {
+                                        Ok(resp) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "success": true, "uri": uri, "isolateId": iso_id, "response": resp })).unwrap() }] }),
+                                        Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": format!("Hot Restart failed: {}", e) }] }),
+                                    }
+                                }
+                                Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": format!("Could not find running isolate at '{}': {}", uri, e) }] }),
+                            },
+                            None => json!({ "isError": true, "content": [{ "type": "text", "text": "No running Dart VM Service found. Start your app with `flutter run` or pass `vmServiceUri`." }] }),
+                        }
+                    }
+                    "flutter_get_runtime_errors" => {
+                        let override_uri = args.get("vmServiceUri").and_then(|v| v.as_str());
+                        match discover_vm_service_uri(&state.project_root, override_uri) {
+                            Some(uri) => match vm_service_find_main_isolate(&uri) {
+                                Ok(iso_id) => match vm_service_http_call(&uri, "getIsolate", &[("isolateId", &iso_id)]) {
+                                    Ok(iso_val) => {
+                                        let pause_event = iso_val.get("result").and_then(|r| r.get("pauseEvent")).cloned().unwrap_or(Value::Null);
+                                        let error_obj = iso_val.get("result").and_then(|r| r.get("error")).cloned().unwrap_or(Value::Null);
+                                        json!({
+                                            "content": [{
+                                                "type": "text",
+                                                "text": serde_json::to_string_pretty(&json!({
+                                                    "connected": true,
+                                                    "uri": uri,
+                                                    "isolateId": iso_id,
+                                                    "isolateError": error_obj,
+                                                    "pauseEvent": pause_event
+                                                })).unwrap_or_else(|_| "{}".to_string())
+                                            }]
+                                        })
+                                    }
+                                    Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": format!("Failed to inspect isolate: {}", e) }] }),
+                                },
+                                Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": e }] }),
+                            },
+                            None => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "connected": false, "errors": [], "message": "No active VM Service URI discovered." })).unwrap() }] }),
+                        }
+                    }
+                    "flutter_inspect_live_widgets" => {
+                        let override_uri = args.get("vmServiceUri").and_then(|v| v.as_str());
+                        let group = args.get("objectGroup").and_then(|v| v.as_str()).unwrap_or("flutter_explorer_group");
+                        if let Some(uri) = discover_vm_service_uri(&state.project_root, override_uri) {
+                            if let Ok(iso_id) = vm_service_find_main_isolate(&uri) {
+                                if let Ok(tree) = vm_service_http_call(
+                                    &uri,
+                                    "ext.flutter.inspector.getRootWidgetSummaryTree",
+                                    &[("isolateId", &iso_id), ("objectGroup", group)],
+                                ) {
+                                    return Some(JsonRpcResponse {
+                                        jsonrpc: "2.0",
+                                        id: req_id,
+                                        result: Some(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&tree).unwrap_or_else(|_| "{}".to_string()) }] })),
+                                        error: None,
+                                    });
+                                }
+                            }
+                        }
+
+                        // Fallback: return static AST widget trees across project files
+                        let files = state.find_dart_files();
+                        let mut static_trees = Vec::new();
+                        for f in files {
+                            let rel = state.relative_path_str(&f);
+                            if let Some((_, ast)) = state.get_or_parse_ast(&f) {
+                                if !ast.widgets.is_empty() {
+                                    static_trees.push(json!({
+                                        "file": rel,
+                                        "widgets": ast.widgets
+                                    }));
+                                }
+                            }
+                        }
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&json!({
+                                    "source": "static_ast_fallback",
+                                    "filesWithWidgets": static_trees.len(),
+                                    "trees": static_trees
+                                })).unwrap_or_else(|_| "{}".to_string())
+                            }]
+                        })
+                    }
+                    "flutter_simulate_ui_action" => {
+                        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("tap");
+                        let target = args.get("target").and_then(|v| v.as_str()).unwrap_or("");
+                        let value = args.get("value").and_then(|v| v.as_str()).unwrap_or("-300");
+                        let override_uri = args.get("vmUri").and_then(|v| v.as_str());
+
+                        match discover_vm_service_uri(&state.project_root, override_uri) {
+                            Some(uri) => match vm_service_find_main_isolate(&uri) {
+                                Ok(iso_id) => {
+                                    let mut params = vec![
+                                        ("isolateId", iso_id.as_str()),
+                                        ("command", action),
+                                        ("finderType", "ByValueKey"),
+                                        ("keyValueString", target),
+                                        ("keyValueType", "String"),
+                                    ];
+                                    if action == "enterText" {
+                                        params.push(("text", value));
+                                    } else if action == "scroll" {
+                                        params.push(("dx", "0"));
+                                        params.push(("dy", value));
+                                        params.push(("duration", "300000"));
+                                        params.push(("frequency", "60"));
+                                    }
+                                    match vm_service_http_call(&uri, "ext.flutter.driver", &params) {
+                                        Ok(resp) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "success": true, "action": action, "target": target, "response": resp })).unwrap() }] }),
+                                        Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": format!("UI simulation '{}' failed: {}", action, e) }] }),
+                                    }
+                                }
+                                Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": e }] }),
+                            },
+                            None => json!({ "isError": true, "content": [{ "type": "text", "text": "No running Flutter VM Service discovered. Start the app with `flutter run` and enable Flutter Driver extension." }] }),
                         }
                     }
                     "flutter_parse_ast" => {
