@@ -113,17 +113,33 @@ export async function setupMcpConfig(
         results.push(setupGeminiMd(homedir));
         results.push(writeActiveProject(homedir, workspaceRoot));
 
+        const mcpServerMode = config.get<string>('mcpServerMode', 'node') || 'node';
+        const isWin = process.platform === 'win32';
+        const rustBinCandidates = isWin
+            ? [
+                path.join(extensionPath, 'flutter-explorer-mcp-windows.exe'),
+                path.join(extensionPath, 'rust-core', 'target', 'release', 'flutter-explorer-mcp.exe'),
+              ]
+            : [
+                path.join(extensionPath, 'flutter-explorer-mcp-linux'),
+                path.join(extensionPath, 'rust-core', 'target', 'release', 'flutter-explorer-mcp'),
+              ];
+        const foundRustBin = rustBinCandidates.find(p => fs.existsSync(p));
+        const useRustNative = (mcpServerMode === 'rust-native' || mcpServerMode === 'auto') && !!foundRustBin;
+
         const mcpServerPath = path.join(extensionPath, 'out', 'mcp-server.js').replace(/\\/g, '/');
+        const commandExec = useRustNative ? foundRustBin!.replace(/\\/g, '/') : 'node';
+        const commandArgs = useRustNative ? [] : [mcpServerPath];
 
         const entryDynamic = {
-            command: 'node',
-            args: [mcpServerPath],
+            command: commandExec,
+            args: commandArgs,
             env: { FLUTTER_PROJECT_PATH: '${workspaceFolder}' },
         };
         // Claude Desktop cannot expand ${workspaceFolder}.
         const entryStatic = {
-            command: 'node',
-            args: [mcpServerPath],
+            command: commandExec,
+            args: commandArgs,
             env: { FLUTTER_PROJECT_PATH: workspaceRoot },
         };
 
@@ -141,43 +157,6 @@ export async function setupMcpConfig(
         // 4. Claude Desktop global config
         const appData = process.env.APPDATA || path.join(homedir, 'AppData', 'Roaming');
         results.push(upsertMcpServer(path.join(appData, 'Claude', 'claude_desktop_config.json'), SERVER_NAME, entryStatic, false));
-
-        // 5. Automatic discovery & registration for Standalone Native Rust Server (flutter-explorer-rust)
-        const RUST_SERVER_NAME = 'flutter-explorer-rust';
-        const rustBinName = process.platform === 'win32' ? 'flutter-explorer-mcp-windows.exe' : 'flutter-explorer-mcp-linux';
-        const candidateRustPaths = [
-            path.join(workspaceRoot, 'bin', rustBinName),
-            path.join(extensionPath, 'bin', rustBinName),
-            path.join(homedir, '.flutter-explorer', 'bin', rustBinName),
-            path.join(workspaceRoot, rustBinName),
-        ];
-
-        let foundRustExe = '';
-        for (const candidate of candidateRustPaths) {
-            if (fs.existsSync(candidate)) {
-                foundRustExe = candidate.replace(/\\/g, '/');
-                break;
-            }
-        }
-
-        if (foundRustExe) {
-            const rustDynamic = {
-                command: foundRustExe,
-                args: [] as string[],
-                env: { FLUTTER_PROJECT_PATH: '${workspaceFolder}' },
-            };
-            const rustStatic = {
-                command: foundRustExe,
-                args: [] as string[],
-                env: { FLUTTER_PROJECT_PATH: workspaceRoot },
-            };
-            results.push(upsertMcpServer(path.join(homedir, '.gemini', 'config', 'mcp_config.json'), RUST_SERVER_NAME, rustDynamic, false));
-            results.push(upsertMcpServer(path.join(homedir, '.gemini', 'antigravity', 'mcp_config.json'), RUST_SERVER_NAME, rustDynamic, false));
-            results.push(upsertMcpServer(path.join(homedir, '.gemini', 'antigravity-ide', 'mcp_config.json'), RUST_SERVER_NAME, rustDynamic, false));
-            results.push(upsertMcpServer(path.join(workspaceRoot, '.vscode', 'mcp.json'), RUST_SERVER_NAME, rustDynamic, true));
-            results.push(upsertMcpServer(path.join(workspaceRoot, '.cursor', 'mcp.json'), RUST_SERVER_NAME, rustDynamic, false));
-            results.push(upsertMcpServer(path.join(appData, 'Claude', 'claude_desktop_config.json'), RUST_SERVER_NAME, rustStatic, false));
-        }
 
         for (const r of results) {
             if (r.status === 'error') { console.error(`[FlutterExplorer] ${r.path}: ${r.message}`); }

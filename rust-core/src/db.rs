@@ -23,7 +23,7 @@ impl NativeSqliteCache {
         format!("{:016x}", hash)
     }
 
-    /// Open SQLite database with WAL mode and fast pragmas
+    /// Open SQLite database with WAL mode and fast pragmas matching sqliteCache.ts
     pub fn open(db_path: &Path) -> Result<Connection> {
         if let Some(parent) = db_path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -31,11 +31,10 @@ impl NativeSqliteCache {
 
         let conn = Connection::open(db_path)?;
 
-        // Apply high-performance, concurrency-friendly Pragmas
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
-             PRAGMA busy_timeout = 5000;
+             PRAGMA busy_timeout = 10000;
              PRAGMA cache_size = -64000;",
         )?;
 
@@ -67,13 +66,15 @@ impl NativeSqliteCache {
         Ok(())
     }
 
-    /// Insert or update a parsed Dart file
-    pub fn upsert_dart_file(conn: &Connection, path: &str, hash: &str, data: &str) -> Result<()> {
-        let now = std::time::SystemTime::now()
+    fn now_millis() -> i64 {
+        std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_millis() as i64;
+            .as_millis() as i64
+    }
 
+    /// Insert or update a parsed Dart file
+    pub fn upsert_dart_file(conn: &Connection, path: &str, hash: &str, data: &str) -> Result<()> {
         conn.execute(
             "INSERT INTO dart_files (path, hash, data, updated_at)
              VALUES (?1, ?2, ?3, ?4)
@@ -81,7 +82,7 @@ impl NativeSqliteCache {
                 hash = excluded.hash,
                 data = excluded.data,
                 updated_at = excluded.updated_at;",
-            params![path, hash, data, now],
+            params![path, hash, data, Self::now_millis()],
         )?;
         Ok(())
     }
@@ -92,12 +93,12 @@ impl NativeSqliteCache {
         path: &str,
         expected_hash: &str,
     ) -> Result<Option<String>> {
-        let mut stmt = conn
-            .prepare_cached("SELECT hash, data FROM dart_files WHERE path = ?1 LIMIT 1;")?;
+        let mut stmt =
+            conn.prepare_cached("SELECT hash, data FROM dart_files WHERE path = ?1 LIMIT 1;")?;
         let mut rows = stmt.query(params![path])?;
 
         if let Some(row) = rows.next()? {
-            let stored_hash: String = row.get(0)?;
+            let stored_hash: String = row.get(0).unwrap_or_default();
             if stored_hash == expected_hash {
                 let data: String = row.get(1)?;
                 return Ok(Some(data));
@@ -106,7 +107,7 @@ impl NativeSqliteCache {
         Ok(None)
     }
 
-    /// Read a specific Dart file's cached JSON data regardless of hash
+    /// Read a specific Dart file's cached JSON data regardless of hash (supports VS Code cached rows)
     pub fn get_dart_file(conn: &Connection, path: &str) -> Result<Option<String>> {
         let mut stmt =
             conn.prepare_cached("SELECT data FROM dart_files WHERE path = ?1 LIMIT 1;")?;
@@ -144,7 +145,7 @@ impl NativeSqliteCache {
         Ok(removed)
     }
 
-    /// Fetch all cached files for instant memory indexing
+    /// Fetch all cached Dart files for instant memory indexing
     pub fn get_all_dart_files(conn: &Connection) -> Result<Vec<(String, String)>> {
         let mut stmt = conn.prepare("SELECT path, data FROM dart_files;")?;
         let rows = stmt.query_map([], |row| {
@@ -158,6 +159,60 @@ impl NativeSqliteCache {
             results.push(r);
         }
         Ok(results)
+    }
+
+    /// Fetch all cached ARB localization files (`(path, json_data)`)
+    pub fn get_all_arb_files(conn: &Connection) -> Result<Vec<(String, String)>> {
+        let mut stmt = conn.prepare("SELECT path, data FROM arb_files;")?;
+        let rows = stmt.query_map([], |row| {
+            let path: String = row.get(0)?;
+            let data: String = row.get(1)?;
+            Ok((path, data))
+        })?;
+
+        let mut results = Vec::new();
+        for r in rows.flatten() {
+            results.push(r);
+        }
+        Ok(results)
+    }
+
+    /// Insert or update an ARB localization file in the SQLite cache
+    pub fn upsert_arb_file(conn: &Connection, path: &str, data: &str) -> Result<()> {
+        conn.execute(
+            "INSERT INTO arb_files (path, data, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(path) DO UPDATE SET
+                data = excluded.data,
+                updated_at = excluded.updated_at;",
+            params![path, data, Self::now_millis()],
+        )?;
+        Ok(())
+    }
+
+    /// Read a metadata key (e.g. `diagnostics`, `packages`) stored by the VS Code extension
+    pub fn get_metadata(conn: &Connection, key: &str) -> Result<Option<String>> {
+        let mut stmt = conn.prepare_cached("SELECT data FROM metadata WHERE key = ?1 LIMIT 1;")?;
+        let mut rows = stmt.query(params![key])?;
+        if let Some(row) = rows.next()? {
+            let data: String = row.get(0)?;
+            Ok(Some(data))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Write a metadata key (e.g. `diagnostics`, `packages`)
+    pub fn set_metadata(conn: &Connection, key: &str, data: &str) -> Result<()> {
+        conn.execute(
+            "INSERT INTO metadata (key, data, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET
+                data = excluded.data,
+                updated_at = excluded.updated_at;",
+            params![key, data, Self::now_millis()],
+        )?;
+        Ok(())
     }
 
     /// Safely count rows in an allowed cache table

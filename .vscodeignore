@@ -3,6 +3,7 @@
 .git/**
 .gitignore
 .gitattributes
+.zcode/**
 src/**
 tsconfig.json
 esbuild.js
@@ -35,4 +36,3 @@ cline_docs/**
 *.exe
 *.vsix
 parser_comparison_report.md
-

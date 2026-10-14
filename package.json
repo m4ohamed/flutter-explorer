@@ -163,6 +163,17 @@
         "configuration": {
             "title": "Flutter Explorer",
             "properties": {
+                "flutterExplorer.mcpServerMode": {
+                    "type": "string",
+                    "enum": ["node", "rust-native", "auto"],
+                    "enumDescriptions": [
+                        "Use the full 55-tool Node.js MCP Server (out/mcp-server.js).",
+                        "Use the zero-runtime Native Rust MCP binary (flutter-explorer-mcp) if present.",
+                        "Automatically prefer the Native Rust MCP binary when compiled, falling back to Node.js."
+                    ],
+                    "default": "node",
+                    "description": "MCP Server runtime mode configured by Auto-Setup MCP Config"
+                },
                 "flutterExplorer.engine": {
                     "type": "string",
                     "enum": ["auto", "javascript", "rust"],

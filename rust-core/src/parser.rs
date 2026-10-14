@@ -1,53 +1,85 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DartMethod {
+    #[serde(default)]
     pub name: String,
+    #[serde(default, alias = "returnType")]
     pub return_type: String,
+    #[serde(default)]
     pub params: String,
+    #[serde(default)]
     pub line: usize,
+    #[serde(default, alias = "lineEnd")]
     pub line_end: Option<usize>,
+    #[serde(default, alias = "isPrivate")]
     pub is_private: bool,
+    #[serde(default, alias = "isAsync")]
     pub is_async: bool,
+    #[serde(default, alias = "isStatic")]
     pub is_static: bool,
+    #[serde(default, alias = "parentClass")]
     pub parent_class: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doc_comment: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DartClass {
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub r#type: String,
+    #[serde(default)]
     pub line: usize,
+    #[serde(default, alias = "lineEnd")]
     pub line_end: Option<usize>,
+    #[serde(default, alias = "extendsClass")]
     pub extends_class: Option<String>,
+    #[serde(default)]
     pub mixins: Vec<String>,
+    #[serde(default)]
     pub implements: Vec<String>,
+    #[serde(default, alias = "isAbstract")]
     pub is_abstract: bool,
+    #[serde(default, alias = "isPrivate")]
     pub is_private: bool,
+    #[serde(default)]
     pub methods: Vec<DartMethod>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doc_comment: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DartEnum {
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub values: Vec<String>,
+    #[serde(default)]
     pub line: usize,
+    #[serde(default, alias = "lineEnd")]
     pub line_end: Option<usize>,
+    #[serde(default, alias = "isPrivate")]
     pub is_private: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doc_comment: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DartParsedAst {
+    #[serde(default)]
     pub classes: Vec<DartClass>,
+    #[serde(default)]
     pub functions: Vec<DartMethod>,
+    #[serde(default)]
     pub enums: Vec<DartEnum>,
+    #[serde(default, alias = "linesCount")]
     pub total_lines: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imports: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exports: Vec<String>,
 }
 
 struct ActiveMethodState {
@@ -68,6 +100,8 @@ impl PureDartParser {
         let mut classes = Vec::new();
         let mut functions = Vec::new();
         let mut enums = Vec::new();
+        let mut imports = Vec::new();
+        let mut exports = Vec::new();
 
         let mut current_class: Option<DartClass> = None;
         let mut class_brace_depth: usize = 0;
@@ -100,6 +134,19 @@ impl PureDartParser {
             // Skip standard single-line comments
             if !in_block_comment && trimmed_raw.starts_with("//") {
                 continue;
+            }
+
+            // Extract import/export paths from raw line before string contents are stripped
+            if !in_block_comment && brace_level == 0 {
+                if trimmed_raw.starts_with("import ") {
+                    if let Some(path_str) = Self::extract_quoted_uri(trimmed_raw) {
+                        imports.push(path_str);
+                    }
+                } else if trimmed_raw.starts_with("export ") {
+                    if let Some(path_str) = Self::extract_quoted_uri(trimmed_raw) {
+                        exports.push(path_str);
+                    }
+                }
             }
 
             // Strip strings and comments so braces inside literals or comments don't corrupt nesting
@@ -139,7 +186,6 @@ impl PureDartParser {
                     enum_brace_depth = brace_level;
                     enum_has_opened = open_braces > 0;
                     enum_values_finished = false;
-                    // Parse inline enum values if defined on a single line: `enum Status { idle, loading, done }`
                     if open_braces > 0 {
                         if let Some(open_pos) = line.find('{') {
                             let after_open = &line[open_pos + 1..];
@@ -154,7 +200,6 @@ impl PureDartParser {
                     current_enum = Some(enm);
                 }
             } else if let Some(ref mut enm) = current_enum {
-                // Collect multi-line enum values while at the top level of the enum body
                 if enum_has_opened && !enum_values_finished && brace_level == enum_brace_depth + 1 {
                     let slice = if let Some(close_pos) = line.find('}') {
                         &line[..close_pos]
@@ -205,7 +250,6 @@ impl PureDartParser {
                 }
             }
 
-            // Clear unused doc comments if any non-declaration line was processed
             if !pending_doc_lines.is_empty() {
                 pending_doc_lines.clear();
             }
@@ -305,11 +349,26 @@ impl PureDartParser {
             functions,
             enums,
             total_lines,
+            imports,
+            exports,
         }
     }
 
-    /// Strips string literals (`'...'`, `"..."`) and comments (`//...`, `/*...*/`) from a line,
-    /// replacing string contents with spaces so brace counts and keyword searches remain accurate.
+    fn extract_quoted_uri(line: &str) -> Option<String> {
+        for quote in ['\'', '"'] {
+            if let Some(start) = line.find(quote) {
+                let rest = &line[start + 1..];
+                if let Some(end) = rest.find(quote) {
+                    let uri = rest[..end].trim();
+                    if !uri.is_empty() {
+                        return Some(uri.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn sanitize_line(line: &str, in_block_comment: &mut bool) -> String {
         let chars: Vec<char> = line.chars().collect();
         let mut out = String::with_capacity(line.len());
@@ -357,7 +416,6 @@ impl PureDartParser {
                 continue;
             }
 
-            // Check comment starts outside strings
             if c == '/' && next == Some('/') {
                 break;
             }
@@ -387,7 +445,6 @@ impl PureDartParser {
         out
     }
 
-    /// Removes `<...>` generic type parameters from a type name (e.g. `State<MyWidget>` -> `State`)
     fn strip_generics(s: &str) -> String {
         let mut out = String::new();
         let mut depth = 0usize;
@@ -403,7 +460,6 @@ impl PureDartParser {
         out.trim().to_string()
     }
 
-    /// Splits a comma-separated type list while ignoring commas inside `<...>` generics
     fn split_top_level_commas(s: &str) -> Vec<String> {
         let mut items = Vec::new();
         let mut current = String::new();
@@ -459,7 +515,6 @@ impl PureDartParser {
     }
 
     fn try_parse_class(line: &str, line_num: usize) -> Option<DartClass> {
-        // Support Dart 3 modifiers: abstract, base, interface, final, sealed, mixin class, or standalone mixin
         let is_mixin_decl = line.starts_with("mixin ") || line.starts_with("base mixin ");
         if !line.contains("class ") && !is_mixin_decl {
             return None;
@@ -487,14 +542,13 @@ impl PureDartParser {
         let is_private = class_name.starts_with('_');
         let before_brace = line.split('{').next().unwrap_or(line);
 
-        // Extract extends / on (for mixins)
         let mut extends_class = None;
         for kw in [" extends ", " on "] {
             if let Some(ext_idx) = before_brace.find(kw) {
                 let after_ext = before_brace[ext_idx + kw.len()..].trim();
                 let clause_end = [" with ", " implements "]
                     .iter()
-                    .filter_map(| next_kw| after_ext.find(next_kw))
+                    .filter_map(|next_kw| after_ext.find(next_kw))
                     .min()
                     .unwrap_or(after_ext.len());
                 let raw_ext = after_ext[..clause_end].trim();
@@ -518,7 +572,6 @@ impl PureDartParser {
             "class".to_string()
         };
 
-        // Extract mixins (with ...)
         let mut mixins = Vec::new();
         if let Some(with_idx) = before_brace.find(" with ") {
             let after_with = before_brace[with_idx + 6..].trim();
@@ -526,7 +579,6 @@ impl PureDartParser {
             mixins = Self::split_top_level_commas(&after_with[..with_end]);
         }
 
-        // Extract implements (implements ...)
         let mut implements = Vec::new();
         if let Some(imp_idx) = before_brace.find(" implements ") {
             let after_imp = before_brace[imp_idx + 12..].trim();
@@ -586,7 +638,6 @@ impl PureDartParser {
             if trimmed.is_empty() {
                 continue;
             }
-            // Strip constructor arguments on enhanced enums: `admin('Admin')` -> `admin`
             let val_name = trimmed
                 .split(|c: char| c == '(' || c == '<' || c.is_whitespace())
                 .next()
@@ -602,7 +653,6 @@ impl PureDartParser {
     }
 
     fn try_parse_method(line: &str, line_num: usize, parent_class: Option<&str>) -> Option<DartMethod> {
-        // Reject statements, control flow, and field assignments
         const IGNORED_PREFIXES: &[&str] = &[
             "class ", "enum ", "mixin ", "extension ", "typedef ", "import ", "export ",
             "part ", "library ", "if ", "if(", "else ", "else{", "for ", "for(", "while ",
@@ -616,7 +666,6 @@ impl PureDartParser {
             }
         }
 
-        // Handle getters without parentheses: e.g. `String get fullName => ...` or `int get count {`
         if !line.contains('(') && (line.contains(" get ") || line.starts_with("get ")) {
             if line.contains('{') || line.contains("=>") {
                 let before_body = line
@@ -656,7 +705,6 @@ impl PureDartParser {
             return None;
         }
 
-        // Reject variable assignments like `final x = foo(bar);` where `=` appears before `(`
         let before_paren = line[..paren_idx].trim();
         if before_paren.contains('=') || before_paren.contains(':') {
             return None;
@@ -667,7 +715,6 @@ impl PureDartParser {
             return None;
         }
 
-        // Ensure line looks like a declaration (has `{`, `=>`, or is an abstract/constructor signature)
         let after_paren = line[close_paren_idx + 1..].trim();
         let has_body_marker = after_paren.contains('{')
             || after_paren.contains("=>")
@@ -684,7 +731,6 @@ impl PureDartParser {
         }
 
         let raw_name = *tokens.last()?;
-        // Strip generic type params on generic methods: `T map<T>` -> `map`
         let clean_name = raw_name.split('<').next().unwrap_or(raw_name).trim();
         if clean_name.is_empty()
             || !clean_name
@@ -694,7 +740,6 @@ impl PureDartParser {
             return None;
         }
 
-        // Disallow control keywords as method names
         if matches!(
             clean_name,
             "if" | "for" | "while" | "switch" | "catch" | "assert" | "return" | "super" | "this"

@@ -1,29 +1,36 @@
 /**
  * SQLite Cache - Replaces the monolithic JSON cache.
  *
- * Now uses sqlite3 instead of node-sqlite3-wasm.
- * Works natively in Node.js with asynchronous API wrapped in Promises.
+ * Uses dynamic loading for `sqlite3` to prevent Electron ABI crashes in VS Code,
+ * and configures WAL mode for lock-free concurrent access with the Rust MCP server.
  */
 
 import * as path from 'path';
 import * as fs from 'fs';
 import { DartFileInfo } from './dartParser';
-import { TranslationInfo, DiagnosticInfo } from './indexManager';
-import { PackageInfo } from '../providers/pubspecLockProvider';
-
+import { TranslationInfo } from './indexManager';
 import { ProjectDetector } from '../utils/projectDetector';
+import type sqlite3Type from 'sqlite3';
 
-import sqlite3 from 'sqlite3';
+// Load native `sqlite3` addon dynamically inside a protective try/catch so an Electron
+// NODE_MODULE_VERSION mismatch never crashes extension activation at module load time.
+let sqlite3Lib: typeof sqlite3Type | null = null;
+try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    sqlite3Lib = require('sqlite3');
+} catch (err) {
+    console.warn('[FlutterExplorer] Native sqlite3 addon unavailable; falling back to JSON/memory cache:', err);
+    sqlite3Lib = null;
+}
 
 export class SqliteCache {
-    private db: sqlite3.Database | null = null;
+    private db: sqlite3Type.Database | null = null;
     private available = false;
     private readonlyMode = false;
     private workspaceRoot: string;
     private dbPath: string = '';
     private dbFilename: string = 'flutter-explorer.db';
     private jsonPath: string | null = null;
-    // We still keep the JSON fallback just in case of file system permission issues.
     private jsonCache: {
         dartFiles: Record<string, { hash: string; data: string }>;
         arbFiles: Record<string, { data: string; updated_at: number }>;
@@ -48,7 +55,6 @@ export class SqliteCache {
                 console.log('[FlutterExplorer] Migrating legacy database from .vscode to .flutter-explorer');
                 fs.copyFileSync(legacyDb, dbPath);
 
-                // Clean up or move side files
                 for (const suffix of ['-wal', '-shm', '-journal']) {
                     const sideFile = legacyDb + suffix;
                     const targetSideFile = dbPath + suffix;
@@ -67,17 +73,23 @@ export class SqliteCache {
             const legacyJson = path.join(legacyDir, 'flutter-explorer.json');
             if (fs.existsSync(legacyJson)) {
                 try {
-                    console.log('[FlutterExplorer] Cleaning up legacy JSON cache from .vscode');
                     fs.unlinkSync(legacyJson);
                 } catch (e) {
                     console.warn('[FlutterExplorer] Could not delete legacy JSON cache:', e);
                 }
             }
 
-            // Initialize sqlite3
-            const mode = this.readonlyMode ? sqlite3.OPEN_READONLY : (sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE);
-            this.available = true; // Set available immediately so callers queue queries
-            this.db = new sqlite3.Database(dbPath, mode, (err) => {
+            if (!sqlite3Lib) {
+                this.available = false;
+                this._loadJson();
+                return;
+            }
+
+            const mode = this.readonlyMode
+                ? sqlite3Lib.OPEN_READONLY
+                : (sqlite3Lib.OPEN_READWRITE | sqlite3Lib.OPEN_CREATE);
+            this.available = true;
+            this.db = new sqlite3Lib.Database(dbPath, mode, (err) => {
                 if (err) {
                     console.error(`[FlutterExplorer] Failed to initialize sqlite3 database: ${err.message || String(err)}`);
                     this.db = null;
@@ -88,27 +100,26 @@ export class SqliteCache {
                 }
             });
 
-            this.db.serialize(); // Put database into serialized mode permanently so all queries queue sequentially
+            this.db.serialize();
 
-            this.db.exec('PRAGMA busy_timeout = 10000', () => {});
+            this.db.exec('PRAGMA busy_timeout = 10000;', () => {});
             if (!this.readonlyMode) {
-                this.db.exec('PRAGMA journal_mode = DELETE', () => {});
-                this.db.exec('PRAGMA synchronous = NORMAL', () => {});
+                // Unified WAL mode across both TypeScript and Rust NativeSqliteCache to prevent lock contention
+                this.db.exec('PRAGMA journal_mode = WAL;', () => {});
+                this.db.exec('PRAGMA synchronous = NORMAL;', () => {});
+                this.db.exec('PRAGMA wal_autocheckpoint = 1000;', () => {});
                 this._createTables();
             }
         } catch (e) {
-            console.warn('[FlutterExplorer] Cache init error, using memory only:', e);
+            console.warn('[FlutterExplorer] Cache init error, using memory/JSON fallback:', e);
             this.db = null;
             this.available = false;
+            this._loadJson();
         }
     }
 
-    /**
-     * ✅ إغلاق الـ DB بأمان عند تعطيل الـ extension.
-     * يحتوي على guard ضد double-close.
-     */
     close(): void {
-        if (!this.db) return; // ✅ guard — لو اتنادى تاني مرة مش هيعمل حاجة
+        if (!this.db) return;
         try {
             this.db.close((err) => {
                 if (err) console.error('[FlutterExplorer] Error closing SQLite database:', err);
@@ -126,9 +137,6 @@ export class SqliteCache {
         return this.available;
     }
 
-    /**
-     * Returns granular diagnostic information about the cache status.
-     */
     async getDiagnostics(): Promise<any> {
         const dbPath = this.dbPath || ProjectDetector.getDbPath(this.workspaceRoot);
         const stats = {
@@ -146,7 +154,7 @@ export class SqliteCache {
 
         if (this.available && this.db) {
             try {
-                const getCount = (table: string): Promise<number> => {
+                const getCount = (table: 'dart_files' | 'arb_files' | 'metadata'): Promise<number> => {
                     return new Promise((resolve) => {
                         this.db!.get(`SELECT COUNT(*) as count FROM ${table}`, (err, row: any) => {
                             if (err || !row) resolve(0);
@@ -160,22 +168,20 @@ export class SqliteCache {
             } catch (e: any) {
                 stats.error = e.message || String(e);
             }
-        } else if (stats.exists) {
+        } else if (stats.exists && sqlite3Lib) {
             try {
                 await new Promise<void>((resolve, reject) => {
-                    let tempDb: sqlite3.Database | null = null;
-                    tempDb = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+                    let tempDb: sqlite3Type.Database | null = null;
+                    tempDb = new sqlite3Lib!.Database(dbPath, sqlite3Lib!.OPEN_READONLY, (err) => {
                         if (err) {
                             reject(err);
+                        } else if (tempDb) {
+                            tempDb.close((closeErr) => {
+                                if (closeErr) reject(closeErr);
+                                else resolve();
+                            });
                         } else {
-                            if (tempDb) {
-                                tempDb.close((closeErr) => {
-                                    if (closeErr) reject(closeErr);
-                                    else resolve();
-                                });
-                            } else {
-                                resolve();
-                            }
+                            resolve();
                         }
                     });
                 });
@@ -212,7 +218,9 @@ export class SqliteCache {
     }
 
     checkpoint(): void {
-        // DELETE mode لا يحتاج checkpoint
+        if (this.available && !this.readonlyMode && this.db) {
+            this.db.exec('PRAGMA wal_checkpoint(PASSIVE);', () => {});
+        }
     }
 
     // ── Dart file operations ───────────────────────────────────────────────────
@@ -237,25 +245,50 @@ export class SqliteCache {
     }
 
     async batchUpsertDartFiles(files: Array<{ relPath: string; hash: string | undefined; info: DartFileInfo }>): Promise<void> {
+        if (files.length === 0) return Promise.resolve();
+
         if (this.available && !this.readonlyMode && this.db) {
             return new Promise((resolve) => {
+                let settled = false;
+                const finish = () => {
+                    if (!settled) {
+                        settled = true;
+                        resolve();
+                    }
+                };
+
+                // Safety timeout so an OS/OneDrive file lock never hangs indexing forever
+                const timer = setTimeout(() => {
+                    console.warn('[FlutterExplorer] SQLite batchUpsertDartFiles timed out after 10s; continuing.');
+                    finish();
+                }, 10000);
+
                 this.db!.serialize(() => {
                     this.db!.run('BEGIN TRANSACTION');
                     const stmt = this.db!.prepare(`
                         INSERT OR REPLACE INTO dart_files (path, hash, data, updated_at)
                         VALUES (?, ?, ?, ?)
                     `);
+                    let pending = files.length;
+                    const now = Date.now();
+
                     for (const item of files) {
-                        stmt.run([item.relPath, item.hash ?? null, JSON.stringify(item.info), Date.now()]);
+                        stmt.run([item.relPath, item.hash ?? null, JSON.stringify(item.info), now], () => {
+                            pending--;
+                            if (pending === 0) {
+                                stmt.finalize(() => {
+                                    this.db?.run('COMMIT', (err) => {
+                                        clearTimeout(timer);
+                                        if (err) {
+                                            this.db?.run('ROLLBACK', () => {});
+                                            console.error('[FlutterExplorer] SQLite batchUpsertDartFiles error:', err);
+                                        }
+                                        finish();
+                                    });
+                                });
+                            }
+                        });
                     }
-                    stmt.finalize();
-                    this.db!.run('COMMIT', (err) => {
-                        if (err) {
-                            this.db!.run('ROLLBACK');
-                            console.error('[FlutterExplorer] SQLite batchUpsertDartFiles error:', err);
-                        }
-                        resolve();
-                    });
                 });
             });
         } else {
@@ -322,8 +355,8 @@ export class SqliteCache {
                 });
             });
         } else {
-            return Promise.resolve(Object.entries(this.jsonCache.dartFiles).map(([path, entry]) => ({
-                path, hash: entry.hash, info: JSON.parse(entry.data)
+            return Promise.resolve(Object.entries(this.jsonCache.dartFiles).map(([p, entry]) => ({
+                path: p, hash: entry.hash, info: JSON.parse(entry.data)
             })));
         }
     }
@@ -382,8 +415,8 @@ export class SqliteCache {
                 });
             });
         } else {
-            return Promise.resolve(Object.entries(this.jsonCache.arbFiles).map(([path, entry]) => ({
-                path, translations: JSON.parse(entry.data)
+            return Promise.resolve(Object.entries(this.jsonCache.arbFiles).map(([p, entry]) => ({
+                path: p, translations: JSON.parse(entry.data)
             })));
         }
     }
@@ -448,9 +481,6 @@ export class SqliteCache {
         }
     }
 
-    /**
-     * Finds the innermost node at a cursor position.
-     */
     async getNodeAtCursor(relPath: string, line: number): Promise<any | null> {
         const fileInfo = await this.getDartFile(relPath);
         if (!fileInfo) return null;
@@ -468,8 +498,7 @@ export class SqliteCache {
             }
         };
 
-        // Classes
-        for (const cls of fileInfo.info.classes) {
+        for (const cls of fileInfo.info.classes || []) {
             checkCandidate(cls.line, cls.lineEnd ?? (cls.line + 100), { type: 'class', name: cls.name });
             if (cls.methods) {
                 for (const method of cls.methods) {
@@ -478,7 +507,6 @@ export class SqliteCache {
             }
         }
 
-        // Extensions
         if (fileInfo.info.extensions) {
             for (const ext of fileInfo.info.extensions) {
                 checkCandidate(ext.line, (ext as any).lineEnd ?? (ext.line + 100), { type: 'extension', name: ext.name });
@@ -490,7 +518,6 @@ export class SqliteCache {
             }
         }
 
-        // Extension Types
         if (fileInfo.info.extensionTypes) {
             for (const et of fileInfo.info.extensionTypes) {
                 checkCandidate(et.line, et.lineEnd ?? (et.line + 100), { type: 'extensionType', name: et.name });
@@ -502,26 +529,22 @@ export class SqliteCache {
             }
         }
 
-        // Top-level functions
-        for (const func of fileInfo.info.functions) {
+        for (const func of fileInfo.info.functions || []) {
             checkCandidate(func.line, func.lineEnd ?? (func.line + 80), { type: 'function', name: func.name });
         }
 
-        // Enums
         if (fileInfo.info.enums) {
             for (const en of fileInfo.info.enums) {
-                checkCandidate(en.line, en.line + 30, { type: 'enum', name: en.name });
+                checkCandidate(en.line, (en as any).lineEnd ?? (en.line + 30), { type: 'enum', name: en.name });
             }
         }
 
-        // Mixins
         if (fileInfo.info.mixins) {
             for (const mx of fileInfo.info.mixins) {
                 checkCandidate(mx.line, (mx as any).lineEnd ?? (mx.line + 60), { type: 'mixin', name: mx.name });
             }
         }
 
-        // Typedefs
         if (fileInfo.info.typedefs) {
             for (const td of fileInfo.info.typedefs) {
                 checkCandidate(td.line, td.line + 5, { type: 'typedef', name: td.name });
@@ -531,9 +554,6 @@ export class SqliteCache {
         return bestNode;
     }
 
-    /**
-     * BFS traversal to find impacted nodes within maxDepth.
-     */
     async getImpactRadius(changedFiles: string[], maxDepth: number = 2): Promise<any> {
         const allFiles = await this.getAllDartFiles();
         const seeds = new Set<string>();
@@ -541,8 +561,8 @@ export class SqliteCache {
         for (const relPath of changedFiles) {
             const file = allFiles.find(f => f.path === relPath);
             if (file) {
-                file.info.classes.forEach(c => seeds.add(c.name));
-                file.info.functions.forEach(f => seeds.add(f.name));
+                file.info.classes?.forEach(c => seeds.add(c.name));
+                file.info.functions?.forEach(f => seeds.add(f.name));
                 file.info.mixins?.forEach(m => seeds.add(m.name));
                 file.info.extensionTypes?.forEach(et => seeds.add(et.name));
                 file.info.extensions?.forEach(ext => seeds.add(ext.name));
@@ -558,16 +578,16 @@ export class SqliteCache {
             const nextFrontier = new Set<string>();
             for (const name of frontier) {
                 for (const file of allFiles) {
-                    const calls = file.info.functionCalls.filter(c => c.name === name);
+                    const calls = (file.info.functionCalls || []).filter(c => c.name === name);
                     if (calls.length > 0) {
-                        file.info.classes.forEach(c => {
+                        file.info.classes?.forEach(c => {
                             if (!visited.has(c.name)) {
                                 nextFrontier.add(c.name);
                                 visited.add(c.name);
                                 impacted.add(c.name);
                             }
                         });
-                        file.info.functions.forEach(f => {
+                        file.info.functions?.forEach(f => {
                             if (!visited.has(f.name)) {
                                 nextFrontier.add(f.name);
                                 visited.add(f.name);
@@ -576,7 +596,7 @@ export class SqliteCache {
                         });
                     }
 
-                    file.info.classes.forEach(c => {
+                    file.info.classes?.forEach(c => {
                         const isDerived = c.extendsClass === name ||
                             (c.implements && c.implements.includes(name)) ||
                             (c.mixins && c.mixins.includes(name));

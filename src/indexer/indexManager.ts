@@ -294,7 +294,7 @@ export class IndexManager {
               const fullPath = path.join(this.workspaceRoot, info.filePath);
               const content = await fs.promises.readFile(fullPath, 'utf8');
               info.contentHash = this.computeHash(content);
-              const parsedInfo = this.parser.parse(info.filePath, content);
+              const parsedInfo = RustBridge.getInstance().parseDartToInfo(info.filePath, content);
               info.warnings = parsedInfo.warnings;
               if (!info.imports || info.imports.length === 0) {
                 info.imports = parsedInfo.imports;
@@ -348,7 +348,7 @@ export class IndexManager {
           if (uri.fsPath.endsWith('.dart')) {
             if (!dartFilesAnalyzed) {
               const content = await this.readFile(uri);
-              const info = this.parser.parse(relPath, content);
+              const info = RustBridge.getInstance().parseDartToInfo(relPath, content);
               info.contentHash = this.computeHash(content);
               this.index.set(relPath, info);
               dartFilesToUpsert.push({ relPath, hash: info.contentHash, info });
@@ -678,7 +678,10 @@ export class IndexManager {
     }
     if (this.bm25.isBuilt && query.trim().length > 0) {
       const candidateIds = results.map(r => this._bm25Id(r));
-      const scores = this.bm25.scoreMany(candidateIds, query);
+      const rustHits = RustBridge.getInstance().searchPersistentIndex(query, 500);
+      const scores = rustHits
+        ? new Map<string, number>(rustHits.map(h => [h.id, h.score]))
+        : this.bm25.scoreMany(candidateIds, query);
       results.sort((a, b) => {
         const scoreA = scores.get(this._bm25Id(a)) ?? 0;
         const scoreB = scores.get(this._bm25Id(b)) ?? 0;
@@ -1132,8 +1135,12 @@ export class IndexManager {
           if (importedFile) {
             const addFile = (usages: any[], fp: string) => {
               for (const u of usages ?? []) {
-                if (!u.usedInFiles.includes(fp))
+                if (Array.isArray(u.usedInFiles) && !u.usedInFiles.includes(fp))
                   u.usedInFiles.push(fp);
+                if (Array.isArray(u.calledInFiles) && !u.calledInFiles.includes(fp))
+                  u.calledInFiles.push(fp);
+                if (!u.usedInFiles && !u.calledInFiles)
+                  u.usedInFiles = [fp];
               }
             };
             addFile(importedFile.classUsages, filePath);
@@ -1269,6 +1276,7 @@ export class IndexManager {
       this.fileDocIds.set(filePath, arbIds);
     }
     this.bm25.buildIndex(docs);
+    RustBridge.getInstance().buildPersistentSearchIndex(docs);
     this.bm25Dirty = false;
   }
   private _upsertBM25ForFile(relPath: string, info: DartFileInfo): void {
@@ -1277,6 +1285,7 @@ export class IndexManager {
     const ids: string[] = [];
     for (const doc of docs) {
       this.bm25.upsertDocument(doc);
+      RustBridge.getInstance().upsertPersistentSearchDoc(doc);
       ids.push(doc.id);
     }
     this.fileDocIds.set(relPath, ids);
@@ -1287,6 +1296,7 @@ export class IndexManager {
       return;
     for (const id of ids) {
       this.bm25.removeDocument(id);
+      RustBridge.getInstance().removePersistentSearchDoc(id);
     }
     this.fileDocIds.delete(relPath);
   }
@@ -1579,8 +1589,15 @@ export class IndexManager {
           sdkRan = sdkResults.length > 0;
         }
       } else {
-        const dartFiles = await vscode.workspace.findFiles('lib/**/*.dart', '**/.*', 10000);
+        let dartFiles = await vscode.workspace.findFiles('lib/**/*.dart', '**/.*', 10000);
+        if (dartFiles.length === 0) {
+          dartFiles = await vscode.workspace.findFiles('**/*.dart', '**/{build,.dart_tool,.git,node_modules,out,dist}/**', 10000);
+        }
         const filteredFiles = dartFiles.filter(uri => !this.isFileExcluded(uri.fsPath));
+        if (filteredFiles.length === 0) {
+          vscode.window.showWarningMessage('Flutter Explorer: No Dart (.dart) files found in the current workspace to benchmark.');
+          return;
+        }
         const fileContents: Array<{ relPath: string; content: string }> = [];
 
         if (progress) progress.report({ message: `Reading ${filteredFiles.length} project Dart files...` });
@@ -1601,7 +1618,7 @@ export class IndexManager {
         const rustStart = Date.now();
         for (const item of fileContents) {
           try {
-            const info = rustBridge.parseDartToInfo(item.relPath, item.content);
+            const info = rustBridge.parseDartToInfo(item.relPath, item.content, { pureAstOnly: true });
             info.filePath = item.relPath;
             info.contentHash = this.computeHash(item.content);
             rustResults.push(info);

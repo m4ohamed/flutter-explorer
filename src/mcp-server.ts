@@ -12,6 +12,7 @@ import { DartParser, DartFileInfo, ClassInfo, FunctionInfo } from './indexer/dar
 import { JsTsParser } from './indexer/jsTsParser';
 import { AndroidParser } from './indexer/androidParser';
 import { BM25Search, BM25Document } from './indexer/bm25Search';
+import { RustBridge } from './indexer/rustBridge';
 import { PackageResolver } from './indexer/packageResolver';
 import { VmServiceBridge } from './runtime/vmServiceBridge';
 import { runProjectAnalysis, runBuildRunner } from './utils/analysisRunner';
@@ -371,6 +372,7 @@ function buildMcpBM25(index: any): BM25Search {
   }
 
   bm25.buildIndex(docs);
+  RustBridge.getInstance().buildPersistentSearchIndex(docs);
   return bm25;
 }
 
@@ -505,6 +507,12 @@ function buildDetailedGraph(index: any) {
       if (ancestors.length > 0) {
         classAncestors.set(cls.name, ancestors);
       }
+      for (const meth of cls.methods || []) {
+        if (!classMethods.has(cls.name)) {
+          classMethods.set(cls.name, new Set());
+        }
+        classMethods.get(cls.name)!.add(meth.name);
+      }
     }
     for (const fn of info.functions || []) {
       if (fn.parentClass) {
@@ -581,6 +589,11 @@ function buildDetailedGraph(index: any) {
       }
       for (const mx of cls.mixins || []) {
         edges.push({ source: classId, target: `class:${mx}`, type: 'mixes_in' });
+      }
+      for (const m of cls.methods || []) {
+        const mId = `method:${cls.name}.${m.name}`;
+        addNode(mId, m.name, 'method', filePath, m.line);
+        edges.push({ source: classId, target: mId, type: 'contains' });
       }
     }
 
