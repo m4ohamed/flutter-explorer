@@ -1762,7 +1762,7 @@ impl PureDartParser {
         let mut extensions = Vec::new();
         let mut typedefs = Vec::new();
         let mut variables = Vec::new();
-        let mut constructors = Vec::new();
+        let constructors = Vec::new();
         let mut properties = Vec::new();
         let mut annotations = Vec::new();
         let mut function_calls = Vec::new();
@@ -1982,7 +1982,7 @@ impl PureDartParser {
                             let fn_name = cap.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
                             let params = cap.get(3).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
                             let ret_type = cap.get(4).map(|m| m.as_str().trim().to_string()).unwrap_or_else(|| "Unit".to_string());
-                            let is_Composable = pending_composable || raw_trimmed.contains("@Composable");
+                            let is_composable_fn = pending_composable || raw_trimmed.contains("@Composable");
                             pending_composable = false;
 
                             let dm = DartMethod {
@@ -1990,14 +1990,14 @@ impl PureDartParser {
                                 is_async: trimmed.contains("suspend "),
                                 is_static: false,
                                 name: fn_name,
-                                return_type: if is_Composable { "Composable".to_string() } else { ret_type },
+                                return_type: if is_composable_fn { "Composable".to_string() } else { ret_type },
                                 params,
                                 line: line_num,
                                 line_end: None,
                                 parent_class: active_class.as_ref().map(|c| c.name.clone()),
                                 doc_comment: None,
                             };
-                            matched_method = Some((receiver_ext, dm, is_Composable));
+                            matched_method = Some((receiver_ext, dm, is_composable_fn));
                         }
                     } else if let Some(cap) = re_java_method.captures(trimmed) {
                         let ret_type = cap.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default();

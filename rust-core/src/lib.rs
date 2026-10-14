@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 pub mod bm25;
 pub mod parser;
 pub mod scanner;

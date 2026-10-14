@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -864,12 +865,9 @@ fn main() {
                 result: Some(json!({})),
                 error: None,
             }),
-            "tools/list" => Some(JsonRpcResponse {
-                jsonrpc: "2.0",
-                id: req_id,
-                result: Some(json!({
-                    "tools": [
-                        {
+            "tools/list" => {
+                let tools_list: Vec<Value> = vec![
+                        json!({
                             "name": "flutter_search",
                             "description": "Ultra-fast search for Dart/Flutter classes, widgets, functions, methods, and enums across the project using Rust AST & BM25 ranking",
                             "inputSchema": {
@@ -880,8 +878,8 @@ fn main() {
                                 },
                                 "required": ["query"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_search_text",
                             "description": "Fast regex or plain-text search across all Dart and project files (comments, strings, code)",
                             "inputSchema": {
@@ -893,8 +891,8 @@ fn main() {
                                 },
                                 "required": ["query"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_find_references",
                             "description": "Find all usages, references, and occurrences of a class, function, or symbol across all project files",
                             "inputSchema": {
@@ -904,8 +902,8 @@ fn main() {
                                 },
                                 "required": ["symbol"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_code_block",
                             "description": "Extract full body, signature, and comments of a class, method, function, or enum by name from any file",
                             "inputSchema": {
@@ -916,8 +914,8 @@ fn main() {
                                 },
                                 "required": ["name"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_read_lines",
                             "description": "Read an exact line range from any file with line numbers (cost-effective code reading)",
                             "inputSchema": {
@@ -930,8 +928,8 @@ fn main() {
                                 },
                                 "required": ["filePath"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_file_info",
                             "description": "Get complete parsed AST summary of a Dart file (classes, methods, functions, widgets, enums, imports, line counts)",
                             "inputSchema": {
@@ -941,8 +939,8 @@ fn main() {
                                 },
                                 "required": ["filePath"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_node_at_cursor",
                             "description": "Find the innermost Dart declaration (class, method, function, enum) enclosing a specific 1-based line number",
                             "inputSchema": {
@@ -953,8 +951,8 @@ fn main() {
                                 },
                                 "required": ["filePath", "line"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_edit_file",
                             "description": "Safely replace an exact string in a project file with atomic write verification",
                             "inputSchema": {
@@ -967,8 +965,8 @@ fn main() {
                                 },
                                 "required": ["filePath", "oldText", "newText"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_replace_lines",
                             "description": "Safely replace a 1-based inclusive line range [startLine, endLine] in a file with optional expectedOldText guard",
                             "inputSchema": {
@@ -982,8 +980,8 @@ fn main() {
                                 },
                                 "required": ["filePath", "startLine", "endLine", "newText"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_write_file",
                             "description": "Create or overwrite a file in the project, automatically creating parent directories",
                             "inputSchema": {
@@ -995,8 +993,8 @@ fn main() {
                                 },
                                 "required": ["filePath", "content"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_project_structure",
                             "description": "Render a clean ASCII directory tree of the project (defaults to lib/)",
                             "inputSchema": {
@@ -1006,24 +1004,24 @@ fn main() {
                                     "maxDepth": { "type": "integer", "description": "Maximum traversal depth (default: 4)" }
                                 }
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_pubspec",
                             "description": "Read the contents of the project's pubspec.yaml (or build.gradle) file",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_list_packages",
                             "description": "Extract dependencies and dev_dependencies from pubspec.yaml",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_dependencies",
                             "description": "Get outgoing imports, exports, and resolved local file dependencies of a given Dart file",
                             "inputSchema": {
@@ -1033,8 +1031,8 @@ fn main() {
                                 },
                                 "required": ["filePath"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_reverse_deps",
                             "description": "Find which other files in the project import and depend on a given file",
                             "inputSchema": {
@@ -1044,24 +1042,24 @@ fn main() {
                                 },
                                 "required": ["targetFile"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_detect_circular_dependencies",
                             "description": "Detect circular import chains (cycles) across all project Dart files",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_architectural_layers",
                             "description": "Classify project files into Clean Architecture layers (presentation, domain, data, core), compute Lakos instability metrics, and detect cross-layer violations",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_analyze_widget_depth",
                             "description": "Analyze Flutter Widget tree nesting depth inside build() methods and flag overly deep trees",
                             "inputSchema": {
@@ -1071,16 +1069,16 @@ fn main() {
                                     "path": { "type": "string", "description": "Optional file or folder path" }
                                 }
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_detect_unused_assets",
                             "description": "Find image/font/json assets in the project's assets/ directory that are never referenced in Dart code or pubspec.yaml",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_code_warnings",
                             "description": "Scan project Dart files for hardcoded strings and colors in milliseconds",
                             "inputSchema": {
@@ -1089,8 +1087,8 @@ fn main() {
                                     "path": { "type": "string", "description": "Optional specific file or folder to scan" }
                                 }
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_detect_mockups",
                             "description": "Find placeholder code, TODO/FIXME comments, fake mock data, and empty callbacks",
                             "inputSchema": {
@@ -1099,8 +1097,8 @@ fn main() {
                                     "path": { "type": "string", "description": "Optional folder or file to scan" }
                                 }
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_detect_memory_leaks",
                             "description": "Detect undisposed controllers (AnimationController, TextEditingController, ScrollController, FocusNode, StreamSubscription) in Flutter State classes",
                             "inputSchema": {
@@ -1109,8 +1107,8 @@ fn main() {
                                     "path": { "type": "string", "description": "Optional folder or file to scan" }
                                 }
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_list_translations",
                             "description": "List all localization keys and values across project .arb files",
                             "inputSchema": {
@@ -1119,16 +1117,16 @@ fn main() {
                                     "locale": { "type": "string", "description": "Optional locale filter (e.g. 'en', 'ar')" }
                                 }
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_missing_translations",
                             "description": "Compare all .arb localization files and report keys missing in each locale",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_update_translation",
                             "description": "Add or update a localization key-value pair in an .arb file while preserving JSON structure",
                             "inputSchema": {
@@ -1140,8 +1138,8 @@ fn main() {
                                 },
                                 "required": ["filePath", "key", "value"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_delete_translation",
                             "description": "Delete a translation key (and its @key metadata) from a specific .arb file or all .arb files",
                             "inputSchema": {
@@ -1152,56 +1150,56 @@ fn main() {
                                 },
                                 "required": ["key"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_find_unused_translations",
                             "description": "Find localization keys defined in .arb files that are never referenced in any Dart file",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_diagnostics",
                             "description": "Get cached IDE diagnostics from SQLite metadata along with static code warnings",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_index_status",
                             "description": "Get detailed health and row counts of the SQLite cache and in-memory AST index",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_rebuild_index",
                             "description": "Re-scan and index all Dart and ARB files in the active project into the SQLite cache",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_run_analyze",
                             "description": "Run `dart analyze` / `flutter analyze` on the project and return structured compiler diagnostics",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_run_build_runner",
                             "description": "Run `dart run build_runner build --delete-conflicting-outputs` in the active project",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_detailed_graph",
                             "description": "Get a detailed relationship graph (inheritance, calls, imports, widgets, mixins, extensions) for the project or a specific file",
                             "inputSchema": {
@@ -1211,8 +1209,8 @@ fn main() {
                                     "depth": { "type": "integer", "description": "Traversal depth around focusFile (default: 1)" }
                                 }
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_impact_analysis",
                             "description": "Analyze the blast radius of a file: find all application entry points (UI/main/events) and dependent files affected by changes to this file",
                             "inputSchema": {
@@ -1224,8 +1222,8 @@ fn main() {
                                     "maxDepth": { "type": "integer", "description": "Maximum search depth (default: 25)" }
                                 }
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_git_blast_radius",
                             "description": "Automatically calculate blast radius and affected entry points/execution flows from current Git diff changes",
                             "inputSchema": {
@@ -1234,8 +1232,8 @@ fn main() {
                                     "maxDepth": { "type": "integer", "description": "Max traversal depth (default: 25)" }
                                 }
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_analyze_logic_flow",
                             "description": "Analyze a function or method's logic, Cyclomatic Complexity, and return a step-by-step execution flow",
                             "inputSchema": {
@@ -1249,8 +1247,8 @@ fn main() {
                                 },
                                 "required": ["functionName"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_validate_architecture_rules",
                             "description": "Validate Clean Architecture layer boundary rules (e.g. Domain must not depend on Data/UI, Core must not depend on Features)",
                             "inputSchema": {
@@ -1272,8 +1270,8 @@ fn main() {
                                     }
                                 }
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_detect_duplicate_widgets",
                             "description": "Detect duplicate or near-identical widget subtrees across project files and generate proposals for extracting reusable custom widgets",
                             "inputSchema": {
@@ -1282,8 +1280,8 @@ fn main() {
                                     "minNodeCount": { "type": "integer", "description": "Minimum number of widgets in a subtree to consider for duplication (default: 3)" }
                                 }
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_read_fragment",
                             "description": "Read a code fragment by element name (class, function, method, enum) with surrounding comments and optional context lines",
                             "inputSchema": {
@@ -1300,8 +1298,8 @@ fn main() {
                                 },
                                 "required": ["name"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_hints",
                             "description": "Get context-aware workflow suggestions and smart optimization hints based on recent tool usage and project analysis",
                             "inputSchema": {
@@ -1313,8 +1311,8 @@ fn main() {
                                 },
                                 "required": ["lastToolUsed"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_search_packages",
                             "description": "Search across all cached third-party Dart/Flutter package dependencies in .pub-cache or Flutter SDK",
                             "inputSchema": {
@@ -1328,8 +1326,8 @@ fn main() {
                                 },
                                 "required": ["query"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_read_package_source",
                             "description": "Read the source code of any cached third-party package or Flutter SDK library by package URI (e.g. package:flutter/material.dart)",
                             "inputSchema": {
@@ -1341,8 +1339,8 @@ fn main() {
                                 },
                                 "required": ["uri"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_pub_dev_search",
                             "description": "Search for packages on pub.dev (with automatic local .pub-cache fallback) to discover libraries and latest versions",
                             "inputSchema": {
@@ -1353,8 +1351,8 @@ fn main() {
                                 },
                                 "required": ["query"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_pub_package_info",
                             "description": "Get detailed metrics and metadata for a package from pub.dev (or local cache fallback), including points, likes, version, and dependencies",
                             "inputSchema": {
@@ -1364,24 +1362,24 @@ fn main() {
                                 },
                                 "required": ["packageName"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_run_intl_generate",
                             "description": "Generate Flutter localization Dart files (l10n.dart / gen-l10n) from project ARB files",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_validate_icu_translations",
                             "description": "Validate ICU syntax, placeholder consistency ({name}), and plural/select balance across all ARB translation files",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_auto_translate_missing",
                             "description": "Generate structured translation payload for missing keys across locales, or batch apply translated keys",
                             "inputSchema": {
@@ -1405,8 +1403,8 @@ fn main() {
                                 },
                                 "required": ["action"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_hot_reload",
                             "description": "Trigger Hot Reload (ext.flutter.reassemble / reloadSources) on the running Flutter app via the Dart VM Service",
                             "inputSchema": {
@@ -1415,8 +1413,8 @@ fn main() {
                                     "vmServiceUri": { "type": "string", "description": "Optional VM Service URI. If omitted, automatically discovered." }
                                 }
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_hot_restart",
                             "description": "Trigger a full Hot Restart on the running Flutter application via the Dart VM Service",
                             "inputSchema": {
@@ -1425,8 +1423,8 @@ fn main() {
                                     "vmServiceUri": { "type": "string", "description": "Optional VM Service URI. If omitted, automatically discovered." }
                                 }
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_runtime_errors",
                             "description": "Fetch real-time Flutter runtime errors, isolate exception state, and diagnostics from the running application",
                             "inputSchema": {
@@ -1435,8 +1433,8 @@ fn main() {
                                     "vmServiceUri": { "type": "string", "description": "Optional VM Service URI. If omitted, automatically discovered." }
                                 }
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_inspect_live_widgets",
                             "description": "Inspect the live running widget tree and render objects of the active Flutter application via VM Service (with static AST fallback)",
                             "inputSchema": {
@@ -1446,8 +1444,8 @@ fn main() {
                                     "objectGroup": { "type": "string", "description": "Inspector object group name (default: 'flutter_explorer_group')" }
                                 }
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_simulate_ui_action",
                             "description": "Simulate user UI interactions (tap, enterText, scroll) on the live running Flutter app via VM Service Flutter Driver extension",
                             "inputSchema": {
@@ -1460,8 +1458,8 @@ fn main() {
                                 },
                                 "required": ["action", "target"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_parse_ast",
                             "description": "Parse a Dart file into pure Rust AST structure (classes, inheritance, methods, widgets, enums, imports)",
                             "inputSchema": {
@@ -1471,16 +1469,16 @@ fn main() {
                                 },
                                 "required": ["filePath"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_stats",
                             "description": "Get instant summary metrics of the Flutter project (total files, classes, widgets, functions, enums, lines)",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_set_project_path",
                             "description": "Set the active Flutter project root directory and re-bind SQLite cache and file watcher",
                             "inputSchema": {
@@ -1490,19 +1488,23 @@ fn main() {
                                 },
                                 "required": ["path"]
                             }
-                        },
-                        {
+                        }),
+                        json!({
                             "name": "flutter_get_project_path",
                             "description": "Get the current active Flutter project root directory",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
                             }
-                        }
-                    ]
-                })),
-                error: None,
-            }),
+                        })
+                ];
+                Some(JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id: req_id,
+                    result: Some(json!({ "tools": tools_list })),
+                    error: None,
+                })
+            },
             "tools/call" => {
                 state.process_watcher_events();
 
