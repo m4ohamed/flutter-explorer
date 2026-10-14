@@ -142,6 +142,43 @@ export async function setupMcpConfig(
         const appData = process.env.APPDATA || path.join(homedir, 'AppData', 'Roaming');
         results.push(upsertMcpServer(path.join(appData, 'Claude', 'claude_desktop_config.json'), SERVER_NAME, entryStatic, false));
 
+        // 5. Automatic discovery & registration for Standalone Native Rust Server (flutter-explorer-rust)
+        const RUST_SERVER_NAME = 'flutter-explorer-rust';
+        const rustBinName = process.platform === 'win32' ? 'flutter-explorer-mcp-windows.exe' : 'flutter-explorer-mcp-linux';
+        const candidateRustPaths = [
+            path.join(workspaceRoot, 'bin', rustBinName),
+            path.join(extensionPath, 'bin', rustBinName),
+            path.join(homedir, '.flutter-explorer', 'bin', rustBinName),
+            path.join(workspaceRoot, rustBinName),
+        ];
+
+        let foundRustExe = '';
+        for (const candidate of candidateRustPaths) {
+            if (fs.existsSync(candidate)) {
+                foundRustExe = candidate.replace(/\\/g, '/');
+                break;
+            }
+        }
+
+        if (foundRustExe) {
+            const rustDynamic = {
+                command: foundRustExe,
+                args: [] as string[],
+                env: { FLUTTER_PROJECT_PATH: '${workspaceFolder}' },
+            };
+            const rustStatic = {
+                command: foundRustExe,
+                args: [] as string[],
+                env: { FLUTTER_PROJECT_PATH: workspaceRoot },
+            };
+            results.push(upsertMcpServer(path.join(homedir, '.gemini', 'config', 'mcp_config.json'), RUST_SERVER_NAME, rustDynamic, false));
+            results.push(upsertMcpServer(path.join(homedir, '.gemini', 'antigravity', 'mcp_config.json'), RUST_SERVER_NAME, rustDynamic, false));
+            results.push(upsertMcpServer(path.join(homedir, '.gemini', 'antigravity-ide', 'mcp_config.json'), RUST_SERVER_NAME, rustDynamic, false));
+            results.push(upsertMcpServer(path.join(workspaceRoot, '.vscode', 'mcp.json'), RUST_SERVER_NAME, rustDynamic, true));
+            results.push(upsertMcpServer(path.join(workspaceRoot, '.cursor', 'mcp.json'), RUST_SERVER_NAME, rustDynamic, false));
+            results.push(upsertMcpServer(path.join(appData, 'Claude', 'claude_desktop_config.json'), RUST_SERVER_NAME, rustStatic, false));
+        }
+
         for (const r of results) {
             if (r.status === 'error') { console.error(`[FlutterExplorer] ${r.path}: ${r.message}`); }
         }

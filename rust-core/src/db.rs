@@ -1,6 +1,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 use rusqlite::{params, Connection, Result};
 #[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashSet;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -8,6 +10,19 @@ pub struct NativeSqliteCache;
 
 #[cfg(not(target_arch = "wasm32"))]
 impl NativeSqliteCache {
+    /// Deterministic 64-bit FNV-1a hash for fast content change detection without extra crates
+    pub fn compute_hash(content: &str) -> String {
+        const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+        const FNV_PRIME: u64 = 0x00000100000001b3;
+
+        let mut hash = FNV_OFFSET_BASIS;
+        for byte in content.as_bytes() {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        format!("{:016x}", hash)
+    }
+
     /// Open SQLite database with WAL mode and fast pragmas
     pub fn open(db_path: &Path) -> Result<Connection> {
         if let Some(parent) = db_path.parent() {
@@ -71,9 +86,30 @@ impl NativeSqliteCache {
         Ok(())
     }
 
-    /// Read a specific Dart file's cached JSON data
+    /// Read a specific Dart file's cached JSON data only if its content hash matches
+    pub fn get_dart_file_if_hash_matches(
+        conn: &Connection,
+        path: &str,
+        expected_hash: &str,
+    ) -> Result<Option<String>> {
+        let mut stmt = conn
+            .prepare_cached("SELECT hash, data FROM dart_files WHERE path = ?1 LIMIT 1;")?;
+        let mut rows = stmt.query(params![path])?;
+
+        if let Some(row) = rows.next()? {
+            let stored_hash: String = row.get(0)?;
+            if stored_hash == expected_hash {
+                let data: String = row.get(1)?;
+                return Ok(Some(data));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Read a specific Dart file's cached JSON data regardless of hash
     pub fn get_dart_file(conn: &Connection, path: &str) -> Result<Option<String>> {
-        let mut stmt = conn.prepare("SELECT data FROM dart_files WHERE path = ?1 LIMIT 1;")?;
+        let mut stmt =
+            conn.prepare_cached("SELECT data FROM dart_files WHERE path = ?1 LIMIT 1;")?;
         let mut rows = stmt.query(params![path])?;
 
         if let Some(row) = rows.next()? {
@@ -82,6 +118,30 @@ impl NativeSqliteCache {
         } else {
             Ok(None)
         }
+    }
+
+    /// Delete a removed Dart file from the SQLite cache
+    pub fn delete_dart_file(conn: &Connection, path: &str) -> Result<()> {
+        conn.execute("DELETE FROM dart_files WHERE path = ?1;", params![path])?;
+        Ok(())
+    }
+
+    /// Remove stale entries for files that no longer exist on disk
+    pub fn prune_missing_files(
+        conn: &Connection,
+        existing_paths: &HashSet<String>,
+    ) -> Result<usize> {
+        let mut stmt = conn.prepare("SELECT path FROM dart_files;")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+
+        let mut removed = 0usize;
+        for cached_path in rows.flatten() {
+            if !existing_paths.contains(&cached_path) {
+                let _ = Self::delete_dart_file(conn, &cached_path);
+                removed += 1;
+            }
+        }
+        Ok(removed)
     }
 
     /// Fetch all cached files for instant memory indexing
@@ -100,9 +160,14 @@ impl NativeSqliteCache {
         Ok(results)
     }
 
-    /// Count rows in a table
+    /// Safely count rows in an allowed cache table
     pub fn count_table(conn: &Connection, table: &str) -> usize {
-        let sql = format!("SELECT COUNT(*) FROM {};", table);
-        conn.query_row(&sql, [], |row| row.get(0)).unwrap_or(0)
+        let sql = match table {
+            "dart_files" => "SELECT COUNT(*) FROM dart_files;",
+            "arb_files" => "SELECT COUNT(*) FROM arb_files;",
+            "metadata" => "SELECT COUNT(*) FROM metadata;",
+            _ => return 0,
+        };
+        conn.query_row(sql, [], |row| row.get(0)).unwrap_or(0)
     }
 }
