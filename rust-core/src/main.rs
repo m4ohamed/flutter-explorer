@@ -4100,6 +4100,7 @@ fn main() {
                     "flutter_inspect_live_widgets" => {
                         let override_uri = args.get("vmServiceUri").and_then(|v| v.as_str());
                         let group = args.get("objectGroup").and_then(|v| v.as_str()).unwrap_or("flutter_explorer_group");
+                        let mut live_tree_val: Option<Value> = None;
                         if let Some(uri) = discover_vm_service_uri(&state.project_root, override_uri) {
                             if let Ok(iso_id) = vm_service_find_main_isolate(&uri) {
                                 if let Ok(tree) = vm_service_http_call(
@@ -4107,40 +4108,44 @@ fn main() {
                                     "ext.flutter.inspector.getRootWidgetSummaryTree",
                                     &[("isolateId", &iso_id), ("objectGroup", group)],
                                 ) {
-                                    return Some(JsonRpcResponse {
-                                        jsonrpc: "2.0",
-                                        id: req_id,
-                                        result: Some(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&tree).unwrap_or_else(|_| "{}".to_string()) }] })),
-                                        error: None,
-                                    });
+                                    live_tree_val = Some(tree);
                                 }
                             }
                         }
 
-                        // Fallback: return static AST widget trees across project files
-                        let files = state.find_dart_files();
-                        let mut static_trees = Vec::new();
-                        for f in files {
-                            let rel = state.relative_path_str(&f);
-                            if let Some((_, ast)) = state.get_or_parse_ast(&f) {
-                                if !ast.widgets.is_empty() {
-                                    static_trees.push(json!({
-                                        "file": rel,
-                                        "widgets": ast.widgets
-                                    }));
+                        if let Some(tree) = live_tree_val {
+                            json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": serde_json::to_string_pretty(&tree).unwrap_or_else(|_| "{}".to_string())
+                                }]
+                            })
+                        } else {
+                            // Fallback: return static AST widget trees across project files
+                            let files = state.find_dart_files();
+                            let mut static_trees = Vec::new();
+                            for f in files {
+                                let rel = state.relative_path_str(&f);
+                                if let Some((_, ast)) = state.get_or_parse_ast(&f) {
+                                    if !ast.widgets.is_empty() {
+                                        static_trees.push(json!({
+                                            "file": rel,
+                                            "widgets": ast.widgets
+                                        }));
+                                    }
                                 }
                             }
+                            json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": serde_json::to_string_pretty(&json!({
+                                        "source": "static_ast_fallback",
+                                        "filesWithWidgets": static_trees.len(),
+                                        "trees": static_trees
+                                    })).unwrap_or_else(|_| "{}".to_string())
+                                }]
+                            })
                         }
-                        json!({
-                            "content": [{
-                                "type": "text",
-                                "text": serde_json::to_string_pretty(&json!({
-                                    "source": "static_ast_fallback",
-                                    "filesWithWidgets": static_trees.len(),
-                                    "trees": static_trees
-                                })).unwrap_or_else(|_| "{}".to_string())
-                            }]
-                        })
                     }
                     "flutter_simulate_ui_action" => {
                         let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("tap");
