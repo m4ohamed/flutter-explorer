@@ -72,4 +72,11 @@
   - **Approved Pattern**:
     1. In the target CLI script, reconstruct arguments that may have been split by the shell: `args.join(' ').trim()` and strip enclosing quotes before resolving absolute paths.
     2. In the Node.js wrapper, execute in the tool directory (`cwd: toolsDir`), extend the total timeout to 180s, and implement an activity keep-alive timer that resets upon each file completion message (`PROGRESS:x` / `ANALYZING:`). This terminates truly hanging processes while allowing active, steady analysis to complete.
+- **Full Symbol Parity in Standalone AST Analyzers (Constructors, Properties, Annotations, and Directives)**:
+  - **Anti-pattern**: In external language analyzer wrappers (like `dart_analyzer.dart` or AST scripts), collecting class fields only into the child class `class.properties` without aggregating them into root file-level `file.properties`, ignoring AST constructors (`clazz.constructors`), skipping directives (`unit.directives`), and leaving metadata annotations unextracted. This creates massive false discrepancies in symbol benchmarks (reporting 0 constructors, 0 properties, and 0 annotations) even when the underlying compiler possesses full AST data.
+  - **Approved Pattern**: Always align the CLI analyzer's JSON output 1:1 with the host system's data model (`DartFileInfo`):
+    1. Iterate over AST constructors (`clazz.constructors`), filter out compiler synthetic constructors (`!ctor.isSynthetic`), and populate both class-level and root `fileInfo['constructors']`.
+    2. Populate both `class.properties` and root `fileInfo['properties']`, assigning `className: clazz.name` to class members and `className: null` to top-level variables.
+    3. Traverse `unit.directives` to extract `ImportDirective` (with prefixes, `show`, and `hide`) and `ExportDirective` paths.
+    4. Implement a universal `_extractMetadata` visitor to harvest annotations (`@override`, `@freezed`, etc.) across classes, methods, fields, constructors, functions, and enums.
 

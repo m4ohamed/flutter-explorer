@@ -378,3 +378,22 @@
   2. في `src/indexer/dartAnalyzerWrapper.ts`: تشغيل السكربت عبر `dart run` مع تعيين `cwd: toolsDir`، ورفع المهلة المبدئية إلى 180 ثانية مع إضافة مؤقت نبض (Activity Keep-alive Timer) يُعاد ضبطه عند كل رسالة تقدم (`ANALYZING:` أو `PROGRESS:`).
   3. في `src/indexer/indexManager.ts`: تمرير دالة متابعة التقدم `onProgress` لتحديث شريط التقدم في VS Code لحظياً، وتوسيع جدول المقارنة ليشمل جميع تفاصيل شارات الواجهة الجانبية الـ 14 بدقة تامة.
 
+## 57. ظهور أصفار (0) في فئات Constructors و Properties و Annotations لمحلل Dart SDK Analyzer في البنشمارك
+- **الخطأ (The Bug):** عند تشغيل مقارنة المحركات الثلاثية (3-Way Engine Benchmark)، يُرجع محرك Dart SDK Analyzer أصفاراً كاملة لـ:
+  - `Constructors: 0` (مقارنة بـ 72 في TS و 66 في Rust).
+  - `Properties: 0` (مقارنة بـ 1795 في TS و 1803 في Rust).
+  - `Annotations: 0` (مقارنة بـ 1152 في TS و Rust).
+  - غياب التوجيهات `imports` و `exports` وأنواع Dart 3 `extensionTypes`.
+- **السبب الجذري (Root Cause):**
+  1. المشيدات (`Constructors`): لم يكن سكربت `tools/dart_analyzer.dart` يفحص `clazz.constructors` إطلاقاً، ولم يكن كائن `fileInfo` يحتوي أصلاً على مفتاح `'constructors'`.
+  2. الخصائص (`Properties`): كان السكربت يجمع حقول الكلاسات ويضيفها إلى كائن الكلاس `class['properties']` فقط، بينما كان يترك مصفوفة `fileInfo['properties']` العامة فارغة (`[]`) دون ملء، فتسجل دالة الإحصائيات صفراً على مستوى الملف.
+  3. الوسوم (`Annotations`): لم يكن السكربت يستخرج أي بيانات metadata من عناصر الـ AST بالرغم من توفرها الكامل في `package:analyzer`.
+  4. التوجيهات (`Imports/Exports`): كان السكربت يتجاهل تماماً كائنات `unit.directives`.
+- **الحل الفعلي (The Fix):**
+  1. ترقية `tools/dart_analyzer.dart` لاستخراج المشيدات `clazz.constructors` مع تحديد حالتها (`isFactory`, `isConst`, `params`, `line`) وإضافتها إلى `fileInfo['constructors']`.
+  2. إضافة حقول الكلاسات والـ Accessors والمتغيرات العامة إلى `fileInfo['properties']` مع تحديد `className` لتحقيق التكافؤ مع `DartFileInfo`.
+  3. إضافة دالة `_extractMetadata` لاستخراج كافة الوسوم التوضيحية (`@override`, `@freezed`, إلخ) من الكلاسات والميثودات والحقول والدوال والتعدادات والتوجيهات.
+  4. استخراج كافة استيرادات وتصديرات الملف من `unit.directives` (`ImportDirective` و `ExportDirective`).
+  5. إضافة دعم كلاسات `ExtensionTypeDeclaration` وخصائص `lineEnd` لتحديد النطاقات.
+  6. توسيع اختبارات التكامل في `tools/test_dart_analyzer.dart` بإضافة 4 أجنحة اختبار جديدة (Suites 14-17) للتحقق الدائم من التكافؤ.
+

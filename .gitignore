@@ -5,6 +5,7 @@ dist
 .vscode-test
 .vscode/flutter-explorer-index.json
 .flutter-explorer
+.test-out/
 .DS_Store
 .history
 code-review-graph-source/
@@ -13,5 +14,11 @@ rust-core/target/
 *.zip
 src/wasm_pkg/
 *.exe
+*.bak
 scratch/
-
+out.json
+analyzer_output.json
+.dart_tool/
+**/.dart_tool/
+.agents/
+.zcode/
