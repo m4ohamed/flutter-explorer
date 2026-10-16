@@ -67,14 +67,47 @@ void main(List<String> args) async {
               'enums': <Map<String, dynamic>>[],
               'mixins': <Map<String, dynamic>>[],
               'extensions': <Map<String, dynamic>>[],
+              'extensionTypes': <Map<String, dynamic>>[],
               'typedefs': <Map<String, dynamic>>[],
               'variables': <Map<String, dynamic>>[],
               'properties': <Map<String, dynamic>>[],
+              'constructors': <Map<String, dynamic>>[],
+              'annotations': <Map<String, dynamic>>[],
+              'imports': <Map<String, dynamic>>[],
+              'exports': <String>[],
               'widgets': <Map<String, dynamic>>[],
               'functionCalls': <Map<String, dynamic>>[],
             };
 
-            // 1. Elements Analysis (Classes, Methods, etc.)
+            final allAnnotations = fileInfo['annotations'] as List<Map<String, dynamic>>;
+            final fileProps = fileInfo['properties'] as List<Map<String, dynamic>>;
+            final fileCtors = fileInfo['constructors'] as List<Map<String, dynamic>>;
+
+            // 1. Directives Analysis (Imports & Exports)
+            for (final directive in unit.directives) {
+              if (directive is ImportDirective) {
+                final showNames = <String>[];
+                final hideNames = <String>[];
+                for (final combinator in directive.combinators) {
+                  if (combinator is ShowCombinator) {
+                    showNames.addAll(combinator.shownNames.map((id) => id.name));
+                  } else if (combinator is HideCombinator) {
+                    hideNames.addAll(combinator.hiddenNames.map((id) => id.name));
+                  }
+                }
+                (fileInfo['imports'] as List).add({
+                  'path': directive.uri.stringValue ?? '',
+                  'alias': directive.prefix?.name,
+                  'showNames': showNames,
+                  'hideNames': hideNames,
+                  'line': lineInfo.getLocation(directive.offset).lineNumber,
+                });
+              } else if (directive is ExportDirective) {
+                (fileInfo['exports'] as List).add(directive.uri.stringValue ?? '');
+              }
+            }
+
+            // 2. Elements Analysis (Classes, Methods, Constructors, Properties, Annotations, etc.)
             for (final declaration in unit.declarations) {
               if (declaration is ClassDeclaration) {
                 final clazz = declaration.declaredElement;
@@ -82,7 +115,12 @@ void main(List<String> args) async {
                 final methods = <Map<String, dynamic>>[];
                 final props = <Map<String, dynamic>>[];
 
+                // Class annotations
+                _extractMetadata(declaration.metadata, 'class', clazz.name, lineInfo, allAnnotations);
+
+                // Methods
                 for (final method in clazz.methods) {
+                  final mLine = lineInfo.getLocation(method.nameOffset).lineNumber;
                   methods.add({
                     'name': method.name,
                     'returnType': method.returnType.getDisplayString(withNullability: true),
@@ -90,38 +128,85 @@ void main(List<String> args) async {
                     'isPrivate': method.isPrivate,
                     'isStatic': method.isStatic,
                     'isAsync': method.isAsynchronous,
-                    'line': lineInfo.getLocation(method.nameOffset).lineNumber,
+                    'line': mLine,
                   });
                 }
 
+                // Method annotations
+                for (final member in declaration.members) {
+                  if (member is MethodDeclaration) {
+                    _extractMetadata(member.metadata, 'method', member.name.lexeme, lineInfo, allAnnotations);
+                  } else if (member is FieldDeclaration) {
+                    for (final variable in member.fields.variables) {
+                      _extractMetadata(member.metadata, 'field', variable.name.lexeme, lineInfo, allAnnotations);
+                    }
+                  } else if (member is ConstructorDeclaration) {
+                    final ctorName = member.name != null
+                        ? '${declaration.name.lexeme}.${member.name!.lexeme}'
+                        : declaration.name.lexeme;
+                    _extractMetadata(member.metadata, 'constructor', ctorName, lineInfo, allAnnotations);
+                  }
+                }
+
+                // Fields -> Properties (added to both class properties and file-level properties)
                 for (final field in clazz.fields) {
-                  props.add({
+                  final fLine = lineInfo.getLocation(field.nameOffset).lineNumber;
+                  final propData = {
                     'name': field.name,
                     'type': field.type.getDisplayString(withNullability: true),
+                    'className': clazz.name,
                     'isFinal': field.isFinal,
                     'isConst': field.isConst,
                     'isStatic': field.isStatic,
                     'isPrivate': field.isPrivate,
                     'isGetter': false,
                     'isSetter': false,
-                    'line': lineInfo.getLocation(field.nameOffset).lineNumber,
-                  });
+                    'line': fLine,
+                  };
+                  props.add(propData);
+                  fileProps.add(propData);
                 }
 
+                // Accessors (Getters / Setters)
                 for (final accessor in clazz.accessors) {
                   if (accessor.isSynthetic) continue;
-                  props.add({
+                  final aLine = lineInfo.getLocation(accessor.nameOffset).lineNumber;
+                  final propData = {
                     'name': accessor.name.replaceAll('=', ''),
                     'type': accessor.returnType.getDisplayString(withNullability: true),
+                    'className': clazz.name,
                     'isFinal': false,
                     'isConst': false,
                     'isStatic': accessor.isStatic,
                     'isPrivate': accessor.isPrivate,
                     'isGetter': accessor.isGetter,
                     'isSetter': accessor.isSetter,
-                    'line': lineInfo.getLocation(accessor.nameOffset).lineNumber,
+                    'line': aLine,
+                  };
+                  props.add(propData);
+                  fileProps.add(propData);
+                }
+
+                // Constructors
+                for (final ctor in clazz.constructors) {
+                  if (ctor.isSynthetic) continue;
+                  final ctorName = ctor.name.isEmpty ? clazz.name : '${clazz.name}.${ctor.name}';
+                  int offset = ctor.nameOffset;
+                  if (offset < 0) offset = declaration.offset;
+                  final ctorLine = lineInfo.getLocation(offset).lineNumber;
+
+                  fileCtors.add({
+                    'name': ctorName,
+                    'className': clazz.name,
+                    'isFactory': ctor.isFactory,
+                    'isConst': ctor.isConst,
+                    'params': ctor.parameters.map((p) => p.getDisplayString(withNullability: true)).join(', '),
+                    'line': ctorLine,
                   });
                 }
+
+                final clsLine = lineInfo.getLocation(clazz.nameOffset).lineNumber;
+                final clsLineEnd = lineInfo.getLocation(declaration.endToken.offset).lineNumber;
 
                 (fileInfo['classes'] as List).add({
                   'name': clazz.name,
@@ -132,39 +217,54 @@ void main(List<String> args) async {
                   'isPrivate': clazz.isPrivate,
                   'methods': methods,
                   'properties': props,
-                  'line': lineInfo.getLocation(clazz.nameOffset).lineNumber,
+                  'line': clsLine,
+                  'lineEnd': clsLineEnd,
                 });
               } else if (declaration is FunctionDeclaration) {
                 final function = declaration.declaredElement;
                 if (function == null) continue;
+                _extractMetadata(declaration.metadata, 'function', function.name, lineInfo, allAnnotations);
+
+                final fnLine = lineInfo.getLocation(function.nameOffset).lineNumber;
+                final fnLineEnd = lineInfo.getLocation(declaration.endToken.offset).lineNumber;
+
                 (fileInfo['functions'] as List).add({
                   'name': function.name,
                   'returnType': function.returnType.getDisplayString(withNullability: true),
                   'params': function.parameters.map((p) => p.getDisplayString(withNullability: true)).join(', '),
                   'isPrivate': function.isPrivate,
                   'isAsync': function.isAsynchronous,
-                  'line': lineInfo.getLocation(function.nameOffset).lineNumber,
+                  'line': fnLine,
+                  'lineEnd': fnLineEnd,
                 });
               } else if (declaration is EnumDeclaration) {
                 final enm = declaration.declaredElement;
                 if (enm == null) continue;
+                _extractMetadata(declaration.metadata, 'enum', enm.name, lineInfo, allAnnotations);
+
                 (fileInfo['enums'] as List).add({
                   'name': enm.name,
                   'values': enm.fields.where((f) => f.isEnumConstant).map((f) => f.name).toList(),
                   'isPrivate': enm.isPrivate,
                   'line': lineInfo.getLocation(enm.nameOffset).lineNumber,
+                  'lineEnd': lineInfo.getLocation(declaration.endToken.offset).lineNumber,
                 });
               } else if (declaration is MixinDeclaration) {
                 final mixin = declaration.declaredElement;
                 if (mixin == null) continue;
+                _extractMetadata(declaration.metadata, 'mixin', mixin.name, lineInfo, allAnnotations);
+
                 (fileInfo['mixins'] as List).add({
                   'name': mixin.name,
                   'isPrivate': mixin.isPrivate,
                   'line': lineInfo.getLocation(mixin.nameOffset).lineNumber,
+                  'lineEnd': lineInfo.getLocation(declaration.endToken.offset).lineNumber,
                 });
               } else if (declaration is ExtensionDeclaration) {
                 final ext = declaration.declaredElement;
                 if (ext == null) continue;
+                _extractMetadata(declaration.metadata, 'extension', ext.name ?? '', lineInfo, allAnnotations);
+
                 final methods = <Map<String, dynamic>>[];
                 for (final method in ext.methods) {
                   methods.add({
@@ -183,46 +283,106 @@ void main(List<String> args) async {
                   'isPrivate': ext.isPrivate,
                   'methods': methods,
                   'line': lineInfo.getLocation(ext.nameOffset != -1 ? ext.nameOffset : declaration.offset).lineNumber,
+                  'lineEnd': lineInfo.getLocation(declaration.endToken.offset).lineNumber,
+                });
+              // ignore: experimental_member_use
+              } else if (declaration is ExtensionTypeDeclaration) {
+                final extType = declaration.declaredElement;
+                final name = declaration.name.lexeme;
+                _extractMetadata(declaration.metadata, 'extensionType', name, lineInfo, allAnnotations);
+
+                final methods = <Map<String, dynamic>>[];
+                final props = <Map<String, dynamic>>[];
+
+                if (extType != null) {
+                  for (final method in extType.methods) {
+                    methods.add({
+                      'name': method.name,
+                      'returnType': method.returnType.getDisplayString(withNullability: true),
+                      'params': method.parameters.map((p) => p.getDisplayString(withNullability: true)).join(', '),
+                      'isPrivate': method.isPrivate,
+                      'isStatic': method.isStatic,
+                      'isAsync': method.isAsynchronous,
+                      'line': lineInfo.getLocation(method.nameOffset).lineNumber,
+                    });
+                  }
+                }
+
+                (fileInfo['extensionTypes'] as List).add({
+                  'name': name,
+                  'representationType': declaration.representation.fieldType.toSource(),
+                  'implements': declaration.implementsClause?.interfaces.map((i) => i.toSource()).toList() ?? <String>[],
+                  'isConst': declaration.constKeyword != null,
+                  'isPrivate': name.startsWith('_'),
+                  'methods': methods,
+                  'properties': props,
+                  'line': lineInfo.getLocation(declaration.name.offset).lineNumber,
+                  'lineEnd': lineInfo.getLocation(declaration.endToken.offset).lineNumber,
                 });
               } else if (declaration is GenericTypeAlias) {
                 final typedef_ = declaration.declaredElement;
                 if (typedef_ == null) continue;
+                final tName = typedef_.name ?? declaration.name.lexeme;
+                _extractMetadata(declaration.metadata, 'typedef', tName, lineInfo, allAnnotations);
+
                 (fileInfo['typedefs'] as List).add({
-                  'name': typedef_.name,
+                  'name': tName,
                   'isPrivate': typedef_.isPrivate,
-                  'line': lineInfo.getLocation(typedef_.nameOffset).lineNumber,
+                  'line': lineInfo.getLocation(typedef_.nameOffset != -1 ? typedef_.nameOffset : declaration.offset).lineNumber,
                 });
               } else if (declaration is FunctionTypeAlias) {
                 final typedef_ = declaration.declaredElement;
                 if (typedef_ == null) continue;
-                (fileInfo['typedefs'] as List).add({
-                  'name': typedef_.name,
-                  'isPrivate': typedef_.isPrivate,
-                  'line': lineInfo.getLocation(typedef_.nameOffset).lineNumber,
-                });
+                final tName = typedef_.name;
+                _extractMetadata(declaration.metadata, 'typedef', tName, lineInfo, allAnnotations);
 
+                (fileInfo['typedefs'] as List).add({
+                  'name': tName,
+                  'isPrivate': typedef_.isPrivate,
+                  'line': lineInfo.getLocation(typedef_.nameOffset != -1 ? typedef_.nameOffset : declaration.offset).lineNumber,
+                });
               } else if (declaration is TopLevelVariableDeclaration) {
+                final firstVar = declaration.variables.variables.isNotEmpty ? declaration.variables.variables.first.name.lexeme : '';
+                _extractMetadata(declaration.metadata, 'variable', firstVar, lineInfo, allAnnotations);
+
                 for (final variable in declaration.variables.variables) {
                   final element = variable.declaredElement;
                   if (element == null) continue;
+                  final vLine = lineInfo.getLocation(element.nameOffset).lineNumber;
+
                   (fileInfo['variables'] as List).add({
                     'name': element.name,
                     'type': element.type.getDisplayString(withNullability: true),
                     'isFinal': element.isFinal,
                     'isConst': element.isConst,
                     'isPrivate': element.isPrivate,
-                    'line': lineInfo.getLocation(element.nameOffset).lineNumber,
+                    'isTopLevel': true,
+                    'line': vLine,
+                  });
+
+                  // Also append top-level variable to file properties
+                  fileProps.add({
+                    'name': element.name,
+                    'type': element.type.getDisplayString(withNullability: true),
+                    'className': null,
+                    'isFinal': element.isFinal,
+                    'isConst': element.isConst,
+                    'isStatic': false,
+                    'isPrivate': element.isPrivate,
+                    'isGetter': false,
+                    'isSetter': false,
+                    'line': vLine,
                   });
                 }
               }
             }
 
-            // 2. Widget Tree Analysis (AST Traversal)
+            // 3. Widget Tree Analysis (AST Traversal)
             final widgetVisitor = WidgetTreeVisitor(lineInfo);
             unit.accept(widgetVisitor);
             fileInfo['widgets'] = widgetVisitor.widgets;
 
-            // 3. Function Calls Analysis (AST Traversal)
+            // 4. Function Calls Analysis (AST Traversal)
             final callVisitor = FunctionCallVisitor(lineInfo);
             unit.accept(callVisitor);
             fileInfo['functionCalls'] = callVisitor.calls;
@@ -244,6 +404,24 @@ void main(List<String> args) async {
     stderr.writeln('Analysis failed: $e');
     stderr.writeln(stack);
     exit(1);
+  }
+}
+
+void _extractMetadata(
+  NodeList<Annotation>? metadata,
+  String target,
+  String? targetName,
+  LineInfo lineInfo,
+  List<Map<String, dynamic>> targetList,
+) {
+  if (metadata == null) return;
+  for (final ann in metadata) {
+    targetList.add({
+      'name': ann.name.toSource(),
+      'target': target,
+      'targetName': targetName ?? '',
+      'line': lineInfo.getLocation(ann.offset).lineNumber,
+    });
   }
 }
 
@@ -276,7 +454,6 @@ class WidgetTreeVisitor extends RecursiveAstVisitor<void> {
       return;
     }
 
-    
     // Heuristic for Widgets: Starts with UpperCase, not common non-widget types
     if (name.isNotEmpty && name[0] == name[0].toUpperCase() && 
         !['String', 'int', 'double', 'bool', 'List', 'Map', 'Set', 'Future', 'Stream', 'Duration', 'DateTime', 'TextEditingController', 'GlobalKey', 'AnimationController', 'ScrollController'].contains(name)) {
@@ -304,7 +481,6 @@ class WidgetTreeVisitor extends RecursiveAstVisitor<void> {
         (_stack.last['children'] as List).add(widget);
       } else {
         // Only add top-level widgets (usually inside build methods)
-        // To be more precise, we could check if we are inside a method named 'build'
         if (_isInsideBuildMethod(node)) {
           widgets.add(widget);
         }
@@ -324,7 +500,6 @@ class WidgetTreeVisitor extends RecursiveAstVisitor<void> {
       if (parent is MethodDeclaration) {
         if (parent.name.lexeme == 'build') return true;
       }
-
       parent = parent.parent;
     }
     return false;

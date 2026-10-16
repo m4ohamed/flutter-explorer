@@ -292,9 +292,15 @@ environment:
           'enums',
           'mixins',
           'extensions',
+          'extensionTypes',
           'typedefs',
           'variables',
-          'widgets'
+          'widgets',
+          'properties',
+          'constructors',
+          'annotations',
+          'imports',
+          'exports'
         ];
         for (final key in keys) {
           check(r.containsKey(key), '$file: output contains "$key" field');
@@ -573,6 +579,61 @@ environment:
           wClasses.firstWhere((c) => c['name'] == '_CounterPageState');
       check(counterState['isPrivate'] == true,
           '_CounterPageState.isPrivate = true');
+    });
+
+    // ── SUITE 14: Constructor extraction ─────────────────────────────────────
+
+    group('Constructor extraction', () {
+      final mf = byFile['model_file.dart']!;
+      final mCtors = (mf['constructors'] as List).cast<Map<String, dynamic>>();
+      check(mCtors.isNotEmpty, 'model_file has constructors (got ${mCtors.length})');
+      check(mCtors.any((c) => c['name'] == 'UserModel'), 'UserModel default constructor found');
+      check(mCtors.any((c) => c['name'] == 'UserModel.fromJson'), 'UserModel.fromJson constructor found');
+
+      final fromJson = mCtors.firstWhere((c) => c['name'] == 'UserModel.fromJson');
+      check(fromJson['isFactory'] == true, 'UserModel.fromJson.isFactory = true');
+
+      final ef = byFile['edge_cases.dart']!;
+      final eCtors = (ef['constructors'] as List).cast<Map<String, dynamic>>();
+      check(eCtors.any((c) => c['name'] == '_PrivateClass'), '_PrivateClass constructor found');
+      final privCtor = eCtors.firstWhere((c) => c['name'] == '_PrivateClass');
+      check(privCtor['isConst'] == true, '_PrivateClass constructor isConst = true');
+      check(eCtors.any((c) => c['name'] == 'Singleton'), 'Singleton factory constructor found');
+      check(eCtors.any((c) => c['name'] == 'Singleton._internal'), 'Singleton._internal constructor found');
+    });
+
+    // ── SUITE 15: File-level properties ──────────────────────────────────────
+
+    group('File-level properties', () {
+      final mf = byFile['model_file.dart']!;
+      final mProps = (mf['properties'] as List).cast<Map<String, dynamic>>();
+      check(mProps.isNotEmpty, 'model_file.dart properties > 0 (got ${mProps.length})');
+      check(mProps.any((p) => p['name'] == 'id' && p['className'] == 'UserModel'),
+          'model_file.properties has UserModel.id with className');
+
+      final ef = byFile['edge_cases.dart']!;
+      final eProps = (ef['properties'] as List).cast<Map<String, dynamic>>();
+      check(eProps.any((p) => p['name'] == 'globalConst' && p['className'] == null),
+          'edge_cases.properties has top-level globalConst with className=null');
+    });
+
+    // ── SUITE 16: Annotation extraction ──────────────────────────────────────
+
+    group('Annotation extraction', () {
+      final wf = byFile['widget_file.dart']!;
+      final wAnnos = (wf['annotations'] as List).cast<Map<String, dynamic>>();
+      check(wAnnos.isNotEmpty, 'widget_file has annotations (got ${wAnnos.length})');
+      check(wAnnos.any((a) => a['name'] == 'override'), '@override annotation found');
+    });
+
+    // ── SUITE 17: Import/Export directives ───────────────────────────────────
+
+    group('Import/Export directives', () {
+      final wf = byFile['widget_file.dart']!;
+      final imports = (wf['imports'] as List).cast<Map<String, dynamic>>();
+      check(imports.isNotEmpty, 'widget_file has imports (got ${imports.length})');
+      check(imports.any((i) => i['path'] == 'flutter_mock.dart'),
+          'import flutter_mock.dart found');
     });
   } finally {
     tempDir.deleteSync(recursive: true);
