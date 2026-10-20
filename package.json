@@ -165,7 +165,11 @@
             "properties": {
                 "flutterExplorer.mcpServerMode": {
                     "type": "string",
-                    "enum": ["node", "rust-native", "auto"],
+                    "enum": [
+                        "node",
+                        "rust-native",
+                        "auto"
+                    ],
                     "enumDescriptions": [
                         "Use the full 55-tool Node.js MCP Server (out/mcp-server.js).",
                         "Use the zero-runtime Native Rust MCP binary (flutter-explorer-mcp) if present.",
@@ -176,7 +180,11 @@
                 },
                 "flutterExplorer.engine": {
                     "type": "string",
-                    "enum": ["auto", "javascript", "rust"],
+                    "enum": [
+                        "auto",
+                        "javascript",
+                        "rust"
+                    ],
                     "enumDescriptions": [
                         "Automatically use Rust WASM core if available, falling back to TypeScript/JavaScript on any error.",
                         "Force pure TypeScript/JavaScript engine (legacy fallback mode).",
@@ -253,6 +261,7 @@
         "zod": "^4.4.3"
     },
     "dependencies": {
-        "sqlite3": "^5.1.7"
+        "sqlite3": "^5.1.7",
+        "vis-network": "^10.1.2"
     }
 }

@@ -1,0 +1,32 @@
+# Dependencies and build outputs
+node_modules/
+out/
+dist/
+build/
+*.vsix
+
+# Temporary test outputs and scratch scripts
+.test-out/
+scratch/
+.vscode-test/
+.history/
+.DS_Store
+
+# Internal tool caches and packages
+rust-core/target/
+src/wasm_pkg/
+.flutter-explorer/
+.dart_tool/
+**/.dart_tool/
+
+# Test bundles & temp files
+*.test.js
+*.bak
+*.exe
+out.json
+analyzer_output.json
+
+# Graphify & agent internals
+graphify-out/
+.agents/
+.zcode/

@@ -1,5 +1,6 @@
 /// <reference lib="dom" />
-import * as d3 from "d3";
+import { Network, Options } from "vis-network";
+import { DataSet } from "vis-data";
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: unknown): void;
@@ -7,652 +8,501 @@ declare function acquireVsCodeApi(): {
   setState(state: unknown): void;
 };
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+const vscodeApi = acquireVsCodeApi();
 
-type NodeKind = "File" | "Class" | "Function" | "Widget" | "Enum" | "Mixin" | "Method" | "Extension" | "Typedef" | "Variable" | "Constructor";
-
-interface GraphNode {
+interface RawNode {
   id: string;
   name: string;
-  kind: NodeKind;
+  kind: string;
   filePath: string;
-  line?: number;
-  group?: string;
-  layer?: string;
+  line: number;
+  layer: string;
+  inDegree: number;
+  outDegree: number;
+  degree: number;
+  inNeighbors: string[];
+  outNeighbors: string[];
 }
 
-interface GraphEdge {
+interface RawEdge {
   source: string;
   target: string;
   kind: string;
 }
 
-interface SimNode extends d3.SimulationNodeDatum, GraphNode {
-  x?: number;
-  y?: number;
-  fx?: number | null;
-  fy?: number | null;
+interface LayerCount {
+  name: string;
+  count: number;
 }
 
-interface SimLink extends d3.SimulationLinkDatum<SimNode> {
-  source: SimNode;
-  target: SimNode;
-  kind: string;
-}
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const NODE_COLOR: Record<NodeKind, string> = {
-  File: "#58a6ff",
-  Class: "#f0883e",
-  Function: "#3fb950",
-  Widget: "#d2a8ff",
-  Enum: "#f9e2af",
-  Mixin: "#f38ba8",
-  Method: "#888888",
-  Extension: "#a371f7",
-  Typedef: "#56b6c2",
-  Variable: "#e5c07b",
-  Constructor: "#da70d6",
+const LAYER_PALETTE: Record<string, { background: string; border: string; highlight: { background: string; border: string } }> = {
+  Presentation: { background: "#4E79A7", border: "#2E4763", highlight: { background: "#729ECE", border: "#4E79A7" } },
+  Domain: { background: "#F28E2B", border: "#A85B10", highlight: { background: "#FFBE7D", border: "#F28E2B" } },
+  Data: { background: "#59A14F", border: "#35682D", highlight: { background: "#8CD17D", border: "#59A14F" } },
+  Core: { background: "#E15759", border: "#9A3234", highlight: { background: "#FF9D9A", border: "#E15759" } },
+  Utils: { background: "#76B7B2", border: "#497A76", highlight: { background: "#A0D5D1", border: "#76B7B2" } },
 };
 
-const NODE_RADIUS: Record<NodeKind, number> = {
-  File: 14,
-  Class: 10,
-  Function: 7,
-  Widget: 12,
-  Enum: 8,
-  Mixin: 8,
-  Method: 6,
-  Extension: 10,
-  Typedef: 7,
-  Variable: 6,
-  Constructor: 6,
-};
+const DEFAULT_LAYER_COLOR = { background: "#BAB0AC", border: "#7E7672", highlight: { background: "#D3CECB", border: "#BAB0AC" } };
 
-// ---------------------------------------------------------------------------
-// Global state
-// ---------------------------------------------------------------------------
+let network: Network | null = null;
+let nodesDataSet: DataSet<any> | null = null;
+let edgesDataSet: DataSet<any> | null = null;
 
-const vscodeApi = acquireVsCodeApi();
+let allNodes: Map<string, RawNode> = new Map();
+let allEdges: RawEdge[] = [];
+let enabledLayers: Set<string> = new Set();
+let selectedNodeId: string | null = null;
 
-let rawNodes: GraphNode[] = [];
-let rawEdges: GraphEdge[] = [];
-
-let filteredNodes: SimNode[] = [];
-let filteredEdges: SimLink[] = [];
-
-let simulation: d3.Simulation<SimNode, SimLink> | null = null;
-let svg: d3.Selection<SVGSVGElement, unknown, null, undefined>;
-let container: d3.Selection<SVGGElement, unknown, null, undefined>;
-let linkGroup: d3.Selection<SVGGElement, unknown, null, undefined>;
-let nodeGroup: d3.Selection<SVGGElement, unknown, null, undefined>;
-let labelGroup: d3.Selection<SVGGElement, unknown, null, undefined>;
-let zoomBehavior: d3.ZoomBehavior<SVGSVGElement, unknown>;
-
-let selectedNode: SimNode | null = null;
-let hoveredNode: SimNode | null = null;
-let searchPattern: string = "";
-
-// ---------------------------------------------------------------------------
-// Init
-// ---------------------------------------------------------------------------
-
-function init(): void {
-  const graphEl = document.getElementById("graph-area")!;
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-
-  svg = d3.select(graphEl as any)
-    .append("svg")
-    .attr("width", "100%")
-    .attr("height", "100%")
-    .attr("viewBox", `0 0 ${width} ${height}`);
-
-  // Setup markers/arrows defs
-  const defs = svg.append("defs");
-  const relations = [
-    "imports", "extends", "with", "mixes_in", "implements", "calls", "contains", "uses_class", "uses_variable", "default"
-  ];
-  relations.forEach(rel => {
-    defs.append("marker")
-      .attr("id", `arrow-${rel}`)
-      .attr("viewBox", "0 -5 10 10")
-      .attr("refX", 20)
-      .attr("refY", 0)
-      .attr("markerWidth", 6)
-      .attr("markerHeight", 6)
-      .attr("orient", "auto")
-      .append("path")
-      .attr("d", "M0,-5L10,0L0,5")
-      .attr("fill", getRelationColor(rel));
-  });
-
-  container = svg.append("g").attr("class", "graph-container");
-  linkGroup = container.append("g").attr("class", "links");
-  nodeGroup = container.append("g").attr("class", "nodes");
-  labelGroup = container.append("g").attr("class", "labels");
-
-  zoomBehavior = d3.zoom<SVGSVGElement, unknown>()
-    .scaleExtent([0.05, 10])
-    .on("zoom", (event: d3.D3ZoomEvent<SVGSVGElement, any>) => {
-      container.attr("transform", event.transform.toString());
-    });
-
-  svg.call(zoomBehavior);
-
-  // Setup UI control listeners
-  setupControlListeners();
-
-  window.addEventListener("message", (event) => {
-    const message = event.data;
-    switch (message.command) {
-      case "setData":
-        setData(message.nodes, message.edges);
-        break;
-      case "setTheme":
-        updateTheme(message.theme);
-        break;
-    }
-  });
-
+// Initialize Webview
+window.addEventListener("DOMContentLoaded", () => {
+  setupUIEventListeners();
   vscodeApi.postMessage({ command: "ready" });
-}
+});
 
-function getRelationColor(rel: string): string {
-  switch (rel.toLowerCase()) {
-    case "imports": return "#58a6ff";
-    case "extends": return "#f0883e";
-    case "with":
-    case "mixes_in": return "#f38ba8";
-    case "implements": return "#e2b714";
-    case "uses_class": return "#a371f7";
-    case "uses_variable": return "#ff79c6";
-    case "calls": return "#3fb950";
-    case "contains": return "rgba(120, 120, 120, 0.3)";
-    default: return "#888888";
+// Handle incoming messages from VS Code
+window.addEventListener("message", (event) => {
+  const msg = event.data;
+  switch (msg.command) {
+    case "setData":
+      loadGraphData(msg.nodes || [], msg.edges || [], msg.layers || []);
+      break;
   }
-}
+});
 
-function setupControlListeners(): void {
-  // Checkboxes for filtering
-  const checkboxes = [
-    "filter-file", "filter-class", "filter-widget", "filter-mixin", "filter-enum", "filter-function", "filter-method",
-    "filter-extension", "filter-typedef", "filter-variable", "filter-constructor",
-    "rel-imports", "rel-extends", "rel-mixes_in", "rel-implements", "rel-calls", "rel-contains", "rel-uses_class", "rel-uses_variable"
-  ];
-  checkboxes.forEach(id => {
-    document.getElementById(id)?.addEventListener("change", () => {
-      applyFilters();
-    });
-  });
+function setupUIEventListeners(): void {
+  // Search input
+  const searchInput = document.getElementById("search") as HTMLInputElement;
+  const searchResults = document.getElementById("search-results") as HTMLDivElement;
 
-  // Search box listener
-  const searchInput = document.getElementById("node-search") as HTMLInputElement;
-  if (searchInput) {
+  if (searchInput && searchResults) {
     searchInput.addEventListener("input", () => {
-      searchPattern = searchInput.value.trim();
-      applyFilters();
+      const q = searchInput.value.trim().toLowerCase();
+      if (!q) {
+        searchResults.style.display = "none";
+        searchResults.innerHTML = "";
+        return;
+      }
+
+      const matches: RawNode[] = [];
+      for (const node of allNodes.values()) {
+        if (!enabledLayers.has(node.layer)) continue;
+        if (node.name.toLowerCase().includes(q) || node.filePath.toLowerCase().includes(q)) {
+          matches.push(node);
+          if (matches.length >= 10) break;
+        }
+      }
+
+      if (matches.length === 0) {
+        searchResults.innerHTML = `<div style="padding: 8px 12px; color: var(--text-muted); font-size: 11px;">No matching symbols found</div>`;
+        searchResults.style.display = "block";
+        return;
+      }
+
+      searchResults.innerHTML = matches
+        .map(
+          (m) => `
+        <div class="search-item" data-id="${m.id}">
+          <span class="sym-name">${escapeHtml(m.name)}</span>
+          <span class="sym-kind">${escapeHtml(m.kind)}</span>
+        </div>
+      `
+        )
+        .join("");
+      searchResults.style.display = "block";
+
+      searchResults.querySelectorAll(".search-item").forEach((el) => {
+        el.addEventListener("click", () => {
+          const id = el.getAttribute("data-id");
+          if (id) {
+            selectAndFocusNode(id);
+            searchResults.style.display = "none";
+            searchInput.value = "";
+          }
+        });
+      });
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!searchInput.contains(e.target as Node) && !searchResults.contains(e.target as Node)) {
+        searchResults.style.display = "none";
+      }
     });
   }
 
-  // Zoom controls
-  document.getElementById("zoom-in")?.addEventListener("click", () => {
-    svg.transition().duration(300).call(zoomBehavior.scaleBy as any, 1.3);
-  });
-  document.getElementById("zoom-out")?.addEventListener("click", () => {
-    svg.transition().duration(300).call(zoomBehavior.scaleBy as any, 1 / 1.3);
-  });
-  document.getElementById("zoom-fit")?.addEventListener("click", () => {
-    zoomFit();
+  // Canvas buttons
+  document.getElementById("btn-fit")?.addEventListener("click", () => {
+    network?.fit({ animation: { duration: 600, easingFunction: "easeInOutQuad" } });
   });
 
-  // Open file button in inspector
-  document.getElementById("inspect-open-btn")?.addEventListener("click", () => {
-    if (selectedNode) {
-      vscodeApi.postMessage({
-        command: "nodeClicked",
-        filePath: selectedNode.filePath,
-        line: selectedNode.line || 1
-      });
-    }
+  document.getElementById("btn-stabilize")?.addEventListener("click", () => {
+    network?.stabilize(100);
   });
+
+  document.getElementById("btn-reset")?.addEventListener("click", () => {
+    clearSelection();
+    network?.fit({ animation: { duration: 500, easingFunction: "easeInOutQuad" } });
+  });
+
+  // Select all checkbox
+  const selectAllCb = document.getElementById("select-all-cb") as HTMLInputElement;
+  if (selectAllCb) {
+    selectAllCb.addEventListener("change", () => {
+      const checked = selectAllCb.checked;
+      document.querySelectorAll<HTMLInputElement>(".layer-cb").forEach((cb) => {
+        cb.checked = checked;
+        const layer = cb.getAttribute("data-layer");
+        if (layer) {
+          if (checked) enabledLayers.add(layer);
+          else enabledLayers.delete(layer);
+        }
+      });
+      refreshGraphFiltering();
+    });
+  }
 }
 
-function getFilters() {
-  return {
-    kinds: {
-      File: (document.getElementById("filter-file") as HTMLInputElement)?.checked ?? true,
-      Class: (document.getElementById("filter-class") as HTMLInputElement)?.checked ?? true,
-      Widget: (document.getElementById("filter-widget") as HTMLInputElement)?.checked ?? true,
-      Mixin: (document.getElementById("filter-mixin") as HTMLInputElement)?.checked ?? true,
-      Enum: (document.getElementById("filter-enum") as HTMLInputElement)?.checked ?? true,
-      Function: (document.getElementById("filter-function") as HTMLInputElement)?.checked ?? true,
-      Method: (document.getElementById("filter-method") as HTMLInputElement)?.checked ?? true,
-      Extension: (document.getElementById("filter-extension") as HTMLInputElement)?.checked ?? true,
-      Typedef: (document.getElementById("filter-typedef") as HTMLInputElement)?.checked ?? true,
-      Variable: (document.getElementById("filter-variable") as HTMLInputElement)?.checked ?? true,
-      Constructor: (document.getElementById("filter-constructor") as HTMLInputElement)?.checked ?? true,
+function loadGraphData(nodes: RawNode[], edges: RawEdge[], layers: LayerCount[]): void {
+  allNodes.clear();
+  nodes.forEach((n) => allNodes.set(n.id, n));
+  allEdges = edges;
+
+  // Initialize enabled layers
+  enabledLayers = new Set(layers.map((l) => l.name));
+
+  // Render Legend
+  renderLegend(layers);
+
+  // Update Stats
+  const totalBadge = document.getElementById("total-badge");
+  const statsNodes = document.getElementById("stats-nodes");
+  const statsEdges = document.getElementById("stats-edges");
+  if (totalBadge) totalBadge.textContent = `${nodes.length}`;
+  if (statsNodes) statsNodes.textContent = `${nodes.length} symbols`;
+  if (statsEdges) statsEdges.textContent = `${edges.length} connections`;
+
+  // Prepare Vis Data
+  const visNodes = nodes.map((n) => createVisNode(n));
+  const visEdges = edges.map((e, idx) => ({
+    id: `e_${idx}`,
+    from: e.source,
+    to: e.target,
+    title: e.kind,
+    arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+    color: { color: "rgba(120, 135, 160, 0.28)", highlight: "#4E79A7", opacity: 0.8 },
+  }));
+
+  nodesDataSet = new DataSet(visNodes);
+  edgesDataSet = new DataSet(visEdges);
+
+  const container = document.getElementById("network");
+  if (!container) return;
+
+  const options: Options = {
+    nodes: {
+      shape: "dot",
+      scaling: { min: 10, max: 36 },
+      shadow: { enabled: true, color: "rgba(0,0,0,0.45)", size: 7, x: 2, y: 2 },
     },
     edges: {
-      imports: (document.getElementById("rel-imports") as HTMLInputElement)?.checked ?? true,
-      extends: (document.getElementById("rel-extends") as HTMLInputElement)?.checked ?? true,
-      with: (document.getElementById("rel-mixes_in") as HTMLInputElement)?.checked ?? true,
-      mixes_in: (document.getElementById("rel-mixes_in") as HTMLInputElement)?.checked ?? true,
-      implements: (document.getElementById("rel-implements") as HTMLInputElement)?.checked ?? true,
-      calls: (document.getElementById("rel-calls") as HTMLInputElement)?.checked ?? true,
-      contains: (document.getElementById("rel-contains") as HTMLInputElement)?.checked ?? true,
-      uses_class: (document.getElementById("rel-uses_class") as HTMLInputElement)?.checked ?? true,
-      uses_variable: (document.getElementById("rel-uses_variable") as HTMLInputElement)?.checked ?? true,
+      width: 1.2,
+      smooth: { enabled: true, type: "continuous", roundness: 0.2 },
+    },
+    physics: {
+      solver: "forceAtlas2Based",
+      forceAtlas2Based: {
+        gravitationalConstant: -45,
+        centralGravity: 0.009,
+        springLength: 95,
+        springConstant: 0.05,
+        damping: 0.45,
+      },
+      stabilization: { iterations: 140, updateInterval: 25 },
+    },
+    interaction: {
+      hover: true,
+      tooltipDelay: 150,
+      zoomView: true,
+      dragView: true,
+      hideEdgesOnDrag: false,
+    },
+  };
+
+  if (network) {
+    network.destroy();
+  }
+
+  network = new Network(container, { nodes: nodesDataSet, edges: edgesDataSet }, options);
+
+  // Network Events
+  network.on("selectNode", (params) => {
+    if (params.nodes && params.nodes.length > 0) {
+      const id = String(params.nodes[0]);
+      highlightNodeNeighborhood(id);
     }
+  });
+
+  network.on("deselectNode", () => {
+    clearSelection();
+  });
+
+  network.on("doubleClick", (params) => {
+    if (params.nodes && params.nodes.length > 0) {
+      const node = allNodes.get(String(params.nodes[0]));
+      if (node) {
+        vscodeApi.postMessage({
+          command: "nodeClicked",
+          filePath: node.filePath,
+          line: node.line,
+        });
+      }
+    }
+  });
+}
+
+function createVisNode(n: RawNode) {
+  const col = LAYER_PALETTE[n.layer] || DEFAULT_LAYER_COLOR;
+  const radius = Math.min(35, Math.max(12, 10 + Math.sqrt(n.degree) * 3.5));
+
+  return {
+    id: n.id,
+    label: n.name,
+    title: `${n.name} (${n.kind})\n${n.filePath}:${n.line}\nConnections: ${n.degree}`,
+    size: radius,
+    color: {
+      background: col.background,
+      border: col.border,
+      highlight: col.highlight,
+    },
+    font: {
+      size: Math.min(14, Math.max(10, 9 + Math.sqrt(n.degree))),
+      color: "#ffffff",
+      face: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif",
+      strokeWidth: 2,
+      strokeColor: "#0f0f1a",
+    },
   };
 }
 
-function setData(nodes: GraphNode[], edges: GraphEdge[]): void {
-  rawNodes = nodes;
-  rawEdges = edges;
-  applyFilters();
+function renderLegend(layers: LayerCount[]): void {
+  const legend = document.getElementById("legend");
+  if (!legend) return;
+
+  legend.innerHTML = layers
+    .map((l) => {
+      const col = LAYER_PALETTE[l.name] || DEFAULT_LAYER_COLOR;
+      return `
+      <div class="legend-item">
+        <div class="legend-left">
+          <input type="checkbox" class="layer-cb" data-layer="${escapeHtml(l.name)}" checked>
+          <div class="legend-dot" style="background: ${col.background};"></div>
+          <span>${escapeHtml(l.name)}</span>
+        </div>
+        <span class="legend-count">${l.count}</span>
+      </div>
+    `;
+    })
+    .join("");
+
+  legend.querySelectorAll<HTMLInputElement>(".layer-cb").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const layer = cb.getAttribute("data-layer");
+      if (layer) {
+        if (cb.checked) enabledLayers.add(layer);
+        else enabledLayers.delete(layer);
+        refreshGraphFiltering();
+      }
+    });
+  });
 }
 
-function applyFilters(): void {
-  const filters = getFilters();
-  
-  const nodeMap = new Map<string, SimNode>();
-  const nodesToUse: SimNode[] = [];
-  
-  // Persist existing layout positions to prevent layout resetting completely
-  const existingNodePos = new Map<string, {x: number, y: number, fx: number|null, fy: number|null}>();
-  filteredNodes.forEach(n => {
-    if (n.x !== undefined && n.y !== undefined) {
-      existingNodePos.set(n.id, { x: n.x, y: n.y, fx: n.fx || null, fy: n.fy || null });
-    }
-  });
+function refreshGraphFiltering(): void {
+  if (!nodesDataSet || !edgesDataSet) return;
 
-  rawNodes.forEach(node => {
-    const isKindAllowed = filters.kinds[node.kind];
-    
-    const isSearchMatch = searchPattern === "" || 
-                          node.name.toLowerCase().includes(searchPattern.toLowerCase());
-
-    if (isKindAllowed && isSearchMatch) {
-      const simNode = { ...node } as SimNode;
-      const pos = existingNodePos.get(node.id);
-      if (pos) {
-        simNode.x = pos.x;
-        simNode.y = pos.y;
-        simNode.fx = pos.fx;
-        simNode.fy = pos.fy;
-      }
-      nodesToUse.push(simNode);
-      nodeMap.set(node.id, simNode);
-    }
-  });
-
-  filteredNodes = nodesToUse;
-
-  // Build parentMap from contains relationships to support bubbling up dependencies when detailed nodes are hidden
-  const parentMap = new Map<string, string>();
-  rawEdges.forEach(edge => {
-    if (edge.kind.toLowerCase() === "contains") {
-      parentMap.set(edge.target, edge.source);
-    }
-  });
-
-  // Helper to find the nearest visible ancestor of a node (including itself)
-  function getVisibleAncestor(nodeId: string): SimNode | null {
-    let currentId = nodeId;
-    while (currentId) {
-      const node = nodeMap.get(currentId);
-      if (node) return node;
-      currentId = parentMap.get(currentId) || "";
-    }
-    return null;
+  const updatedNodes: any[] = [];
+  for (const n of allNodes.values()) {
+    const isVisible = enabledLayers.has(n.layer);
+    updatedNodes.push({
+      id: n.id,
+      hidden: !isVisible,
+    });
   }
+  nodesDataSet.update(updatedNodes);
 
-  filteredEdges = [];
-  const seenEdges = new Set<string>();
-
-  rawEdges.forEach(edge => {
-    const relType = edge.kind.toLowerCase();
-
-    // Contains relations represent physical nesting and should only be drawn if both parent and child are directly visible
-    if (relType === "contains") {
-      const isRelAllowed = (filters.edges as any)[relType] ?? true;
-      if (isRelAllowed) {
-        const src = nodeMap.get(edge.source);
-        const tgt = nodeMap.get(edge.target);
-        if (src && tgt) {
-          filteredEdges.push({
-            source: src,
-            target: tgt,
-            kind: edge.kind
-          } as SimLink);
-        }
-      }
-      return;
-    }
-
-    // Other relations (calls, extends, with, imports) bubble up to the nearest visible ancestor
-    const src = getVisibleAncestor(edge.source);
-    const tgt = getVisibleAncestor(edge.target);
-    if (src && tgt && src.id !== tgt.id) {
-      const isRelAllowed = (filters.edges as any)[relType] ?? true;
-      if (isRelAllowed) {
-        const edgeKey = `${src.id}->${tgt.id}:${edge.kind}`;
-        if (!seenEdges.has(edgeKey)) {
-          seenEdges.add(edgeKey);
-          filteredEdges.push({
-            source: src,
-            target: tgt,
-            kind: edge.kind
-          } as SimLink);
-        }
-      }
-    }
+  // Auto-hide orphan edges
+  const updatedEdges: any[] = [];
+  allEdges.forEach((e, idx) => {
+    const s = allNodes.get(e.source);
+    const t = allNodes.get(e.target);
+    const hidden = !s || !t || !enabledLayers.has(s.layer) || !enabledLayers.has(t.layer);
+    updatedEdges.push({
+      id: `e_${idx}`,
+      hidden,
+    });
   });
-
-  // Update statistics
-  const statsEl = document.getElementById("graph-stats");
-  if (statsEl) {
-    statsEl.textContent = `${filteredNodes.length} nodes · ${filteredEdges.length} links`;
-  }
-
-  // Update inspector if selectedNode was filtered out
-  if (selectedNode && !nodeMap.has(selectedNode.id)) {
-    selectedNode = null;
-    document.getElementById("inspector")!.style.display = "none";
-  }
-
-  buildGraph();
+  edgesDataSet.update(updatedEdges);
 }
 
-function buildGraph(): void {
-  if (simulation) simulation.stop();
+function highlightNodeNeighborhood(nodeId: string): void {
+  selectedNodeId = nodeId;
+  const node = allNodes.get(nodeId);
+  if (!node || !nodesDataSet || !edgesDataSet) return;
 
-  const width = window.innerWidth;
-  const height = window.innerHeight;
+  const neighborIds = new Set<string>([...node.inNeighbors, ...node.outNeighbors, nodeId]);
 
-  const links = linkGroup.selectAll<SVGLineElement, SimLink>("line")
-    .data(filteredEdges)
-    .join("line")
-    .attr("stroke", (d: SimLink) => getRelationColor(d.kind))
-    .attr("stroke-opacity", 0.5)
-    .attr("stroke-width", 1)
-    .attr("marker-end", (d: SimLink) => `url(#arrow-${d.kind.toLowerCase()})`);
+  // Dim unrelated nodes
+  const nodeUpdates: any[] = [];
+  for (const n of allNodes.values()) {
+    if (!enabledLayers.has(n.layer)) continue;
+    const isNeighbor = neighborIds.has(n.id);
+    const col = LAYER_PALETTE[n.layer] || DEFAULT_LAYER_COLOR;
 
-  const nodes = nodeGroup.selectAll<SVGCircleElement, SimNode>("circle")
-    .data(filteredNodes, (d: any) => d.id)
-    .join("circle")
-    .attr("r", (d: SimNode) => NODE_RADIUS[d.kind] || 8)
-    .attr("fill", (d: SimNode) => NODE_COLOR[d.kind] || "#ccc")
-    .attr("cursor", "pointer")
-    .on("click", (event, d: SimNode) => {
-      event.stopPropagation();
-      focusOnNode(d);
-    })
-    .on("mouseover", (event, d: SimNode) => {
-      hoveredNode = d;
-      if (!selectedNode) {
-        highlightNode(d);
-      }
-    })
-    .on("mouseout", () => {
-      hoveredNode = null;
-      if (!selectedNode) {
-        highlightNode(null);
-      }
-    })
-    .call(d3.drag<SVGCircleElement, SimNode>()
-      .on("start", dragstarted)
-      .on("drag", dragged)
-      .on("end", dragended));
+    nodeUpdates.push({
+      id: n.id,
+      opacity: isNeighbor ? 1.0 : 0.15,
+      color: isNeighbor
+        ? { background: col.background, border: col.border, highlight: col.highlight }
+        : { background: "rgba(90, 90, 110, 0.2)", border: "rgba(90, 90, 110, 0.3)" },
+    });
+  }
+  nodesDataSet.update(nodeUpdates);
 
-  const labels = labelGroup.selectAll<SVGTextElement, SimNode>("text")
-    .data(filteredNodes, (d: any) => d.id)
-    .join("text")
-    .text((d: SimNode) => d.name)
-    .attr("font-size", "10px")
-    .attr("font-weight", "500")
-    .attr("dx", (d: SimNode) => (NODE_RADIUS[d.kind] || 8) + 4)
-    .attr("dy", 4)
-    .attr("fill", "var(--vscode-editor-foreground, #ccc)")
-    .attr("pointer-events", "none");
-
-  // Clicking SVG resets selection
-  svg.on("click", () => {
-    selectedNode = null;
-    document.getElementById("inspector")!.style.display = "none";
-    highlightNode(null);
+  // Update edges
+  const edgeUpdates: any[] = [];
+  allEdges.forEach((e, idx) => {
+    const isConnected = e.source === nodeId || e.target === nodeId;
+    edgeUpdates.push({
+      id: `e_${idx}`,
+      color: isConnected
+        ? { color: "#4E79A7", highlight: "#FFBE7D", opacity: 1.0 }
+        : { color: "rgba(80, 80, 100, 0.08)", opacity: 0.1 },
+      width: isConnected ? 2.5 : 0.8,
+    });
   });
+  edgesDataSet.update(edgeUpdates);
 
-  simulation = d3.forceSimulation<SimNode>(filteredNodes)
-    .force("link", d3.forceLink<SimNode, SimLink>(filteredEdges).id((d: any) => d.id).distance(d => {
-      if (d.kind === "contains") return 40;
-      return 100;
-    }))
-    .force("charge", d3.forceManyBody().strength(-150))
-    .force("collide", d3.forceCollide<SimNode>().radius(d => (NODE_RADIUS[d.kind] || 8) + 20).iterations(2))
-    .force("center", d3.forceCenter(width / 2, height / 2))
-    .on("tick", () => {
-      links
-        .attr("x1", (d: SimLink) => d.source.x!)
-        .attr("y1", (d: SimLink) => d.source.y!)
-        .attr("x2", (d: SimLink) => {
-          const targetRadius = NODE_RADIUS[d.target.kind] || 8;
-          const dx = d.target.x! - d.source.x!;
-          const dy = d.target.y! - d.source.y!;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist === 0) return d.target.x!;
-          // Stop line at node radius boundary
-          return d.target.x! - (dx / dist) * (targetRadius + 6);
+  // Populate Inspector Card
+  populateInspector(node);
+}
+
+function clearSelection(): void {
+  selectedNodeId = null;
+  if (!nodesDataSet || !edgesDataSet) return;
+
+  const nodeUpdates: any[] = [];
+  for (const n of allNodes.values()) {
+    if (!enabledLayers.has(n.layer)) continue;
+    const col = LAYER_PALETTE[n.layer] || DEFAULT_LAYER_COLOR;
+    nodeUpdates.push({
+      id: n.id,
+      opacity: 1.0,
+      color: { background: col.background, border: col.border, highlight: col.highlight },
+    });
+  }
+  nodesDataSet.update(nodeUpdates);
+
+  const edgeUpdates: any[] = [];
+  allEdges.forEach((e, idx) => {
+    edgeUpdates.push({
+      id: `e_${idx}`,
+      color: { color: "rgba(120, 135, 160, 0.28)", opacity: 0.8 },
+      width: 1.2,
+    });
+  });
+  edgesDataSet.update(edgeUpdates);
+
+  // Reset Info Panel
+  const infoContent = document.getElementById("info-content");
+  const neighborsSection = document.getElementById("neighbors-section");
+  const layerPill = document.getElementById("selected-layer-pill");
+  if (infoContent) infoContent.innerHTML = `<div class="empty">Click on any node to view architecture details</div>`;
+  if (neighborsSection) neighborsSection.style.display = "none";
+  if (layerPill) layerPill.innerHTML = "";
+}
+
+function selectAndFocusNode(nodeId: string): void {
+  if (!network) return;
+  network.selectNodes([nodeId]);
+  network.focus(nodeId, {
+    scale: 1.2,
+    animation: { duration: 750, easingFunction: "easeInOutQuad" },
+  });
+  highlightNodeNeighborhood(nodeId);
+}
+
+function populateInspector(node: RawNode): void {
+  const infoContent = document.getElementById("info-content");
+  const neighborsSection = document.getElementById("neighbors-section");
+  const neighborsList = document.getElementById("neighbors-list");
+  const layerPill = document.getElementById("selected-layer-pill");
+
+  const col = LAYER_PALETTE[node.layer] || DEFAULT_LAYER_COLOR;
+  if (layerPill) {
+    layerPill.innerHTML = `<span style="font-size: 10px; color: ${col.background}; font-weight: 600;">● ${escapeHtml(node.layer)}</span>`;
+  }
+
+  if (infoContent) {
+    infoContent.innerHTML = `
+      <div class="node-header">
+        <div class="node-name">${escapeHtml(node.name)}</div>
+        <div class="node-kind-badge">${escapeHtml(node.kind)}</div>
+      </div>
+      <div class="node-field"><b>File:</b> <span>${escapeHtml(node.filePath || "Unknown")}</span></div>
+      <div class="node-field"><b>Line:</b> <span>${node.line}</span></div>
+      <div class="node-field"><b>Connections:</b> <span>${node.degree} (In: ${node.inDegree}, Out: ${node.outDegree})</span></div>
+      
+      <button class="open-file-btn" id="btn-open-file">
+        <span>↗</span> Open in VS Code Editor
+      </button>
+    `;
+
+    document.getElementById("btn-open-file")?.addEventListener("click", () => {
+      vscodeApi.postMessage({
+        command: "nodeClicked",
+        filePath: node.filePath,
+        line: node.line,
+      });
+    });
+  }
+
+  // Populate Neighbors
+  if (neighborsSection && neighborsList) {
+    const allNeighborIds = [
+      ...node.inNeighbors.map((id) => ({ id, dir: "← Caller" })),
+      ...node.outNeighbors.map((id) => ({ id, dir: "→ Calls" })),
+    ];
+
+    if (allNeighborIds.length > 0) {
+      neighborsSection.style.display = "block";
+      neighborsList.innerHTML = allNeighborIds
+        .map((item) => {
+          const n = allNodes.get(item.id);
+          const name = n ? n.name : item.id;
+          const kind = n ? n.kind : "";
+          return `
+          <div class="neighbor-item" data-id="${item.id}">
+            <div>
+              <b>${escapeHtml(name)}</b> <span style="font-size: 10px; color: var(--text-muted);">(${escapeHtml(kind)})</span>
+            </div>
+            <span class="rel-direction">${item.dir}</span>
+          </div>
+        `;
         })
-        .attr("y2", (d: SimLink) => {
-          const targetRadius = NODE_RADIUS[d.target.kind] || 8;
-          const dx = d.target.x! - d.source.x!;
-          const dy = d.target.y! - d.source.y!;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist === 0) return d.target.y!;
-          return d.target.y! - (dy / dist) * (targetRadius + 6);
+        .join("");
+
+      neighborsList.querySelectorAll(".neighbor-item").forEach((el) => {
+        el.addEventListener("click", () => {
+          const id = el.getAttribute("data-id");
+          if (id) selectAndFocusNode(id);
         });
-
-      nodes
-        .attr("cx", (d: SimNode) => d.x!)
-        .attr("cy", (d: SimNode) => d.y!);
-
-      labels
-        .attr("x", (d: SimNode) => d.x!)
-        .attr("y", (d: SimNode) => d.y!);
-    });
-
-  // Keep highlighted state if we have a selected node
-  if (selectedNode) {
-    highlightNode(selectedNode);
-  }
-}
-
-function dragstarted(event: d3.D3DragEvent<SVGCircleElement, SimNode, SimNode>, d: SimNode) {
-  if (!event.active) simulation?.alphaTarget(0.3).restart();
-  d.fx = d.x;
-  d.fy = d.y;
-}
-
-function dragged(event: d3.D3DragEvent<SVGCircleElement, SimNode, SimNode>, d: SimNode) {
-  d.fx = event.x;
-  d.fy = event.y;
-}
-
-function dragended(event: d3.D3DragEvent<SVGCircleElement, SimNode, SimNode>, d: SimNode) {
-  if (!event.active) simulation?.alphaTarget(0);
-  d.fx = null;
-  d.fy = null;
-}
-
-function highlightNode(node: SimNode | null): void {
-  if (!node) {
-    nodeGroup.selectAll("circle").attr("stroke", null).attr("stroke-width", null).style("opacity", 1);
-    linkGroup.selectAll("line").style("opacity", 0.5).attr("stroke-width", 1);
-    labelGroup.selectAll("text").style("opacity", 1);
-    return;
-  }
-
-  const connectedIds = new Set<string>([node.id]);
-  filteredEdges.forEach(e => {
-    if (e.source.id === node.id) connectedIds.add(e.target.id);
-    if (e.target.id === node.id) connectedIds.add(e.source.id);
-  });
-
-  nodeGroup.selectAll<SVGCircleElement, SimNode>("circle")
-    .style("opacity", d => connectedIds.has(d.id) ? 1 : 0.15)
-    .attr("stroke", d => d.id === node.id ? "#ffffff" : null)
-    .attr("stroke-width", d => d.id === node.id ? 2 : null);
-    
-  linkGroup.selectAll<SVGLineElement, SimLink>("line")
-    .style("opacity", e => (e.source.id === node.id || e.target.id === node.id) ? 1 : 0.05)
-    .attr("stroke-width", e => (e.source.id === node.id || e.target.id === node.id) ? 1.8 : 1);
-    
-  labelGroup.selectAll<SVGTextElement, SimNode>("text")
-    .style("opacity", d => connectedIds.has(d.id) ? 1 : 0.15);
-}
-
-function showInspector(node: SimNode): void {
-  selectedNode = node;
-  const card = document.getElementById("inspector")!;
-  card.style.display = "flex";
-  
-  const nameEl = document.getElementById("inspect-name")!;
-  const typeEl = document.getElementById("inspect-type")!;
-  const pathEl = document.getElementById("inspect-path")!;
-  const incomingEl = document.getElementById("inspect-incoming")!;
-  const outgoingEl = document.getElementById("inspect-outgoing")!;
-  
-  nameEl.textContent = node.name;
-  typeEl.textContent = node.kind.toUpperCase();
-  typeEl.style.backgroundColor = NODE_COLOR[node.kind] || "#999";
-
-  const layerEl = document.getElementById("inspect-layer");
-  if (layerEl) {
-    if (node.layer) {
-      layerEl.style.display = "inline-block";
-      layerEl.textContent = node.layer.toUpperCase();
-      const layerColors: Record<string, string> = {
-        presentation: "#d2a8ff",
-        domain: "#3fb950",
-        data: "#f0883e",
-        core: "#58a6ff"
-      };
-      layerEl.style.backgroundColor = layerColors[node.layer.toLowerCase()] || "#666";
+      });
     } else {
-      layerEl.style.display = "none";
+      neighborsSection.style.display = "none";
     }
   }
-  
-  pathEl.textContent = `${node.filePath}:${node.line || 1}`;
-  
-  // Find incoming and outgoing links
-  const incoming: { node: SimNode; rel: string }[] = [];
-  const outgoing: { node: SimNode; rel: string }[] = [];
-  
-  filteredEdges.forEach(e => {
-    const srcNode = e.source;
-    const tgtNode = e.target;
-    if (srcNode.id === node.id) {
-      outgoing.push({ node: tgtNode, rel: e.kind });
-    }
-    if (tgtNode.id === node.id) {
-      incoming.push({ node: srcNode, rel: e.kind });
-    }
-  });
-  
-  // Render incoming list
-  if (incoming.length === 0) {
-    incomingEl.innerHTML = `<div style="font-size:11px;opacity:0.5;padding:4px 0;">No incoming links</div>`;
-  } else {
-    incomingEl.innerHTML = incoming.map(inc => {
-      return `<div class="inspector-link-item" data-id="${inc.node.id}">
-        <span style="font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px;">${escapeHtml(inc.node.name)}</span>
-        <span class="link-rel-type" style="color: ${getRelationColor(inc.rel)};">${inc.rel}</span>
-      </div>`;
-    }).join("");
-  }
-  
-  // Render outgoing list
-  if (outgoing.length === 0) {
-    outgoingEl.innerHTML = `<div style="font-size:11px;opacity:0.5;padding:4px 0;">No outgoing links</div>`;
-  } else {
-    outgoingEl.innerHTML = outgoing.map(out => {
-      return `<div class="inspector-link-item" data-id="${out.node.id}">
-        <span style="font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px;">${escapeHtml(out.node.name)}</span>
-        <span class="link-rel-type" style="color: ${getRelationColor(out.rel)};">${out.rel}</span>
-      </div>`;
-    }).join("");
-  }
-  
-  // Register click handlers for connected items in inspector
-  card.querySelectorAll(".inspector-link-item").forEach(item => {
-    item.addEventListener("click", () => {
-      const targetId = item.getAttribute("data-id");
-      const targetNode = filteredNodes.find(n => n.id === targetId);
-      if (targetNode) {
-        focusOnNode(targetNode);
-      }
-    });
-  });
-}
-
-function focusOnNode(node: SimNode): void {
-  showInspector(node);
-  highlightNode(node);
-  
-  // Pan and Zoom to node position
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-  const currentTransform = d3.zoomTransform(svg.node()!);
-  const scale = Math.max(currentTransform.k, 1.4);
-  
-  svg.transition().duration(750).call(
-    zoomBehavior.transform as any,
-    d3.zoomIdentity.translate(width / 2 - scale * node.x!, height / 2 - scale * node.y!).scale(scale)
-  );
-}
-
-function zoomFit(): void {
-  if (filteredNodes.length === 0) return;
-  
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-  
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  filteredNodes.forEach(d => {
-    const r = NODE_RADIUS[d.kind] || 8;
-    if (d.x! - r < minX) minX = d.x! - r;
-    if (d.x! + r > maxX) maxX = d.x! + r;
-    if (d.y! - r < minY) minY = d.y! - r;
-    if (d.y! + r > maxY) maxY = d.y! + r;
-  });
-  
-  const dx = maxX - minX;
-  const dy = maxY - minY;
-  const x = (minX + maxX) / 2;
-  const y = (minY + maxY) / 2;
-  
-  const scale = Math.max(0.1, Math.min(3, 0.8 / Math.max(dx / width, dy / height)));
-  
-  svg.transition().duration(750).call(
-    zoomBehavior.transform as any,
-    d3.zoomIdentity.translate(width / 2 - scale * x, height / 2 - scale * y).scale(scale)
-  );
-}
-
-function updateTheme(theme: string) {
-  document.body.className = theme;
 }
 
 function escapeHtml(str: string): string {
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  if (!str) return "";
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
-
-window.addEventListener("DOMContentLoaded", init);

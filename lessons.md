@@ -79,4 +79,7 @@
     2. Populate both `class.properties` and root `fileInfo['properties']`, assigning `className: clazz.name` to class members and `className: null` to top-level variables.
     3. Traverse `unit.directives` to extract `ImportDirective` (with prefixes, `show`, and `hide`) and `ExportDirective` paths.
     4. Implement a universal `_extractMetadata` visitor to harvest annotations (`@override`, `@freezed`, etc.) across classes, methods, fields, constructors, functions, and enums.
+- **Graphify Indexing Hygiene & Test Artifact Exclusion**:
+  - **Anti-pattern**: Relying only on `.gitignore` without a dedicated `.graphifyignore` when analyzing repos that generate bundled test outputs (e.g. `.test-out/` or `scratch/`). Bundled JavaScript test runners package whole libraries (`ajv`, `zod`, formats), dumping thousands of synthetic external symbols (`_cidrv4`, `_creditCard`, `isValidIBAN`) into the AST extraction. This inflates community counts and masks real domain God Nodes under false external dependencies.
+  - **Approved Pattern**: Always enforce a project-level `.graphifyignore` explicitly excluding `.test-out/`, `scratch/`, `out/`, `dist/`, `rust-core/target/`, and `*.test.js`. Re-run graphify with `--force --code-only` followed by `graphify cluster-only .` to produce a 100% clean domain graph accurately representing workspace architecture.
 
